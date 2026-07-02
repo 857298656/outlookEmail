@@ -12,7 +12,7 @@ This version is intentionally local-first:
 
 ## Current implementation
 
-The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag management, local retained-mail workspace, message search/filter/pagination, batch read/unread/delete actions, local mail/account/project exports, settings storage, Microsoft Graph OAuth, Graph mailbox sync, Graph attachment metadata/download, basic TLS IMAP sync, GPTMail/DuckMail/Cloudflare temp-mail management, SMTP/Telegram/WeCom forwarding, WebDAV backup, in-app scheduling, desktop project account pools, and Windows desktop bundling.
+The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag management, local retained-mail workspace, message search/filter/pagination, batch read/unread/delete actions, local mail/account/project exports, settings storage, Microsoft Graph OAuth, Graph mailbox sync, Graph attachment metadata/download, basic TLS IMAP sync, GPTMail/DuckMail/Cloudflare temp-mail management, SMTP/Telegram/WeCom forwarding, WebDAV backup, in-app scheduling with unified task history, desktop project account pools, and Windows desktop bundling.
 
 See [`docs/requirements-milestones.md`](docs/requirements-milestones.md) for the full requirement record, completed scope, unfinished scope, and milestone plan.
 
@@ -73,7 +73,7 @@ The app can export selected cached messages as a local read-only HTML file. It a
 
 Forwarding is enabled per account in the account authorization panel. The Settings view configures SMTP, Telegram, and WeCom channels, WebDAV backup credentials, and local scheduler intervals.
 
-The scheduler runs inside the desktop process after the workspace is unlocked. It can periodically refresh mail, forward cached messages, and upload a consistent SQLite snapshot created with `VACUUM INTO`.
+The scheduler runs inside the desktop process after the workspace is unlocked. It can periodically refresh mail, forward cached messages, and upload a consistent SQLite snapshot created with `VACUUM INTO`. Manual and scheduled refresh/forwarding/backup jobs are recorded in a unified automation history table shown in Settings.
 
 ## Temp mail
 

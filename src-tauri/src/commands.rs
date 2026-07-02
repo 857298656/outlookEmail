@@ -276,6 +276,12 @@ pub fn scheduler_status(state: State<'_, AppState>) -> AppResult<SchedulerStatus
 }
 
 #[tauri::command]
+pub fn list_automation_runs(state: State<'_, AppState>, limit: Option<i64>) -> AppResult<Vec<AutomationRun>> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.list_automation_runs(limit)
+}
+
+#[tauri::command]
 pub fn list_temp_emails(state: State<'_, AppState>) -> AppResult<Vec<TempEmail>> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.list_temp_emails()

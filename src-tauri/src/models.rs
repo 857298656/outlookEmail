@@ -202,6 +202,20 @@ pub struct SchedulerStatus {
     pub last_backup_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct AutomationRun {
+    pub id: i64,
+    pub job_type: String,
+    pub trigger_type: String,
+    pub status: String,
+    pub message: String,
+    pub refreshed: i64,
+    pub failed: i64,
+    pub duration_ms: i64,
+    pub started_at: String,
+    pub finished_at: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ForwardingInput {
     pub account_id: Option<i64>,

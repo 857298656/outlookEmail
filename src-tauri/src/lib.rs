@@ -70,6 +70,7 @@ pub fn run() {
             list_forwarding_logs,
             list_backup_logs,
             scheduler_status,
+            list_automation_runs,
             list_temp_emails,
             import_temp_emails,
             generate_temp_email,

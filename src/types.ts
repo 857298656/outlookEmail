@@ -162,6 +162,19 @@ export type SchedulerStatus = {
   last_backup_at: string | null;
 };
 
+export type AutomationRun = {
+  id: number;
+  job_type: string;
+  trigger_type: string;
+  status: string;
+  message: string;
+  refreshed: number;
+  failed: number;
+  duration_ms: number;
+  started_at: string;
+  finished_at: string;
+};
+
 export type TempEmail = {
   id: number;
   email: string;

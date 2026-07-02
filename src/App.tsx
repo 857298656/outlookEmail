@@ -26,6 +26,7 @@ import { parseAccountRows } from "./lib/importParser";
 import type {
   Account,
   AppStatus,
+  AutomationRun,
   BackupLog,
   ExportResult,
   ForwardingLog,
@@ -66,6 +67,7 @@ function App() {
   const [cloudflareChannels, setCloudflareChannels] = useState<CloudflareChannel[]>([]);
   const [forwardingLogs, setForwardingLogs] = useState<ForwardingLog[]>([]);
   const [backupLogs, setBackupLogs] = useState<BackupLog[]>([]);
+  const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
   const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<number | "all">("all");
   const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>();
@@ -142,15 +144,17 @@ function App() {
   }
 
   async function loadAutomation() {
-    const [nextSettings, nextForwardingLogs, nextBackupLogs, nextSchedulerStatus] = await Promise.all([
+    const [nextSettings, nextForwardingLogs, nextBackupLogs, nextAutomationRuns, nextSchedulerStatus] = await Promise.all([
       api.getSettings(),
       api.listForwardingLogs(80),
       api.listBackupLogs(40),
+      api.listAutomationRuns(80),
       api.schedulerStatus()
     ]);
     setSettings(nextSettings);
     setForwardingLogs(nextForwardingLogs);
     setBackupLogs(nextBackupLogs);
+    setAutomationRuns(nextAutomationRuns);
     setSchedulerStatus(nextSchedulerStatus);
   }
 
@@ -547,6 +551,7 @@ function App() {
             settings={settings}
             forwardingLogs={forwardingLogs}
             backupLogs={backupLogs}
+            automationRuns={automationRuns}
             schedulerStatus={schedulerStatus}
             busy={busy}
             onSave={(nextSettings) =>
@@ -1798,6 +1803,7 @@ function SettingsView({
   settings,
   forwardingLogs,
   backupLogs,
+  automationRuns,
   schedulerStatus,
   busy,
   onSave,
@@ -1808,6 +1814,7 @@ function SettingsView({
   settings: Settings;
   forwardingLogs: ForwardingLog[];
   backupLogs: BackupLog[];
+  automationRuns: AutomationRun[];
   schedulerStatus: SchedulerStatus | null;
   busy: boolean;
   onSave: (settings: Settings) => void;
@@ -1976,6 +1983,36 @@ function SettingsView({
 
       <div className="panel widePanel">
         <div className="panelHeader">
+          <h2>Automation history</h2>
+          <RefreshCw size={18} />
+        </div>
+        <div className="logTable automationLogTable">
+          <div className="logHeader">
+            <span>Time</span>
+            <span>Job</span>
+            <span>Trigger</span>
+            <span>Status</span>
+            <span>Counts</span>
+            <span>Duration</span>
+            <span>Detail</span>
+          </div>
+          {automationRuns.map((run) => (
+            <div className="logRow" key={run.id}>
+              <span>{formatDate(run.finished_at)}</span>
+              <span>{run.job_type}</span>
+              <span>{run.trigger_type}</span>
+              <StatusPill status={run.status} />
+              <span>{run.refreshed} ok / {run.failed} failed</span>
+              <span>{formatDuration(run.duration_ms)}</span>
+              <span>{run.message}</span>
+            </div>
+          ))}
+        </div>
+        {automationRuns.length === 0 && <EmptyState icon={<RefreshCw size={24} />} text="No automation runs yet." />}
+      </div>
+
+      <div className="panel widePanel">
+        <div className="panelHeader">
           <h2>Forwarding logs</h2>
           <Mail size={18} />
         </div>
@@ -2133,6 +2170,12 @@ function formatBytes(value: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatDuration(value: number) {
+  if (!value) return "0 ms";
+  if (value < 1000) return `${value} ms`;
+  return `${(value / 1000).toFixed(1)} s`;
 }
 
 function exportNotice(result: ExportResult) {

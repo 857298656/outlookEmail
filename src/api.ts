@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Account,
   AppStatus,
+  AutomationRun,
   BackupLog,
   BackupResult,
   CloudflareChannel,
@@ -85,6 +86,7 @@ let mockSchedulerStatus: SchedulerStatus = {
   last_forwarding_at: null,
   last_backup_at: null
 };
+let mockAutomationRuns: AutomationRun[] = [];
 
 function isTauriRuntime() {
   return "__TAURI_INTERNALS__" in window;
@@ -239,7 +241,12 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       return mockSettings as T;
     case "run_refresh_job":
       mockSchedulerStatus.last_refresh_at = new Date().toISOString();
-      return { success: true, message: "Refresh job accepted. Provider adapters are available in the Tauri runtime.", refreshed: 1, failed: 0 } as T;
+      return recordMockAutomationRun("refresh", "manual", {
+        success: true,
+        message: "Refresh job accepted. Provider adapters are available in the Tauri runtime.",
+        refreshed: 1,
+        failed: 0
+      }) as T;
     case "run_forwarding_job": {
       const now = new Date().toISOString();
       mockSchedulerStatus.last_forwarding_at = now;
@@ -255,7 +262,12 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         created_at: now
       } satisfies ForwardingLog));
       mockForwardingLogs = [...rows, ...mockForwardingLogs];
-      return { success: true, message: `Forwarded ${rows.length} preview item(s)`, refreshed: rows.length, failed: 0 } as T;
+      return recordMockAutomationRun("forwarding", "manual", {
+        success: true,
+        message: `Forwarded ${rows.length} preview item(s)`,
+        refreshed: rows.length,
+        failed: 0
+      }) as T;
     }
     case "run_backup_job": {
       const now = new Date().toISOString();
@@ -270,7 +282,14 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         created_at: now
       };
       mockBackupLogs = [log, ...mockBackupLogs];
-      return { success: true, message: "Backup preview completed", path: "browser-preview.sqlite", remote_url: log.target, size: log.size } as T;
+      const result = { success: true, message: "Backup preview completed", path: "browser-preview.sqlite", remote_url: log.target, size: log.size };
+      recordMockAutomationRun("backup", "manual", {
+        success: result.success,
+        message: result.message,
+        refreshed: 1,
+        failed: 0
+      });
+      return result as T;
     }
     case "list_forwarding_logs":
       return mockForwardingLogs.slice(0, (args?.limit as number | undefined) ?? 100) as T;
@@ -278,6 +297,8 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       return mockBackupLogs.slice(0, (args?.limit as number | undefined) ?? 100) as T;
     case "scheduler_status":
       return mockSchedulerStatus as T;
+    case "list_automation_runs":
+      return mockAutomationRuns.slice(0, (args?.limit as number | undefined) ?? 100) as T;
     case "list_temp_emails":
       return mockTempEmails as T;
     case "import_temp_emails": {
@@ -508,6 +529,26 @@ function mockExport(fileName: string, itemCount: number): ExportResult {
   };
 }
 
+function recordMockAutomationRun(jobType: string, triggerType: string, result: JobResult): JobResult {
+  const finished = new Date().toISOString();
+  mockAutomationRuns = [
+    {
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      job_type: jobType,
+      trigger_type: triggerType,
+      status: result.success ? "success" : "failed",
+      message: result.message,
+      refreshed: result.refreshed,
+      failed: result.failed,
+      duration_ms: Math.floor(Math.random() * 900) + 80,
+      started_at: finished,
+      finished_at: finished
+    },
+    ...mockAutomationRuns
+  ];
+  return result;
+}
+
 function filterMockMessages(args?: Record<string, unknown>) {
   const query = (args?.query ?? {}) as MailMessageQuery;
   const accountId = query.account_id ?? (args?.accountId as number | undefined);
@@ -628,6 +669,7 @@ export const api = {
   listForwardingLogs: (limit = 100) => call<ForwardingLog[]>("list_forwarding_logs", { limit }),
   listBackupLogs: (limit = 100) => call<BackupLog[]>("list_backup_logs", { limit }),
   schedulerStatus: () => call<SchedulerStatus>("scheduler_status"),
+  listAutomationRuns: (limit = 100) => call<AutomationRun[]>("list_automation_runs", { limit }),
   listTempEmails: () => call<TempEmail[]>("list_temp_emails"),
   importTempEmails: (input: { raw: string; provider: string; channel_id?: number | null }) =>
     call<ImportAccountsResult>("import_temp_emails", { input }),

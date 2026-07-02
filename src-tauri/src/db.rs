@@ -974,6 +974,17 @@ impl Database {
     }
 
     pub fn refresh_accounts(&self, input: RefreshInput) -> AppResult<JobResult> {
+        self.refresh_accounts_with_trigger(input, "manual")
+    }
+
+    fn refresh_accounts_with_trigger(&self, input: RefreshInput, trigger_type: &str) -> AppResult<JobResult> {
+        let started_at = Utc::now();
+        let result = self.refresh_accounts_inner(input);
+        let _ = self.record_job_result("refresh", trigger_type, started_at, &result);
+        result
+    }
+
+    fn refresh_accounts_inner(&self, input: RefreshInput) -> AppResult<JobResult> {
         self.require_unlocked()?;
         let credentials = self.account_credentials(input.account_id)?;
         if credentials.is_empty() {
@@ -1187,6 +1198,17 @@ impl Database {
     }
 
     pub fn run_forwarding_job(&self, input: Option<ForwardingInput>) -> AppResult<JobResult> {
+        self.run_forwarding_job_with_trigger(input, "manual")
+    }
+
+    fn run_forwarding_job_with_trigger(&self, input: Option<ForwardingInput>, trigger_type: &str) -> AppResult<JobResult> {
+        let started_at = Utc::now();
+        let result = self.run_forwarding_job_inner(input);
+        let _ = self.record_job_result("forwarding", trigger_type, started_at, &result);
+        result
+    }
+
+    fn run_forwarding_job_inner(&self, input: Option<ForwardingInput>) -> AppResult<JobResult> {
         self.require_unlocked()?;
         let settings = self.get_settings()?;
         let channels = automation::configured_forward_channels(&settings);
@@ -1277,6 +1299,17 @@ impl Database {
     }
 
     pub fn run_backup_job(&self) -> AppResult<BackupResult> {
+        self.run_backup_job_with_trigger("manual")
+    }
+
+    fn run_backup_job_with_trigger(&self, trigger_type: &str) -> AppResult<BackupResult> {
+        let started_at = Utc::now();
+        let result = self.run_backup_job_inner();
+        let _ = self.record_backup_result(trigger_type, started_at, &result);
+        result
+    }
+
+    fn run_backup_job_inner(&self) -> AppResult<BackupResult> {
         self.require_unlocked()?;
         let settings = self.get_settings()?;
         if settings.webdav_url.trim().is_empty() {
@@ -1367,6 +1400,22 @@ impl Database {
         collect_rows(rows)
     }
 
+    pub fn list_automation_runs(&self, limit: Option<i64>) -> AppResult<Vec<AutomationRun>> {
+        self.require_unlocked()?;
+        let limit = limit.unwrap_or(100).clamp(1, 500);
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT id, job_type, trigger_type, status, message, refreshed, failed,
+                   duration_ms, started_at, finished_at
+            FROM automation_runs
+            ORDER BY id DESC
+            LIMIT ?
+            ",
+        )?;
+        let rows = stmt.query_map([limit], automation_run_from_row)?;
+        collect_rows(rows)
+    }
+
     pub fn scheduler_status(&self) -> AppResult<SchedulerStatus> {
         self.require_unlocked()?;
         Ok(SchedulerStatus {
@@ -1386,11 +1435,11 @@ impl Database {
         if settings.scheduler_refresh_enabled
             && self.scheduler_due("scheduler_last_refresh_at", settings.scheduler_refresh_interval_minutes, now)?
         {
-            match self.refresh_accounts(RefreshInput {
+            match self.refresh_accounts_with_trigger(RefreshInput {
                 account_id: None,
                 folder: Some("all".to_string()),
                 top: Some(settings.scheduler_refresh_top.clamp(1, 50) as usize),
-            }) {
+            }, "schedule") {
                 Ok(result) => self.audit("scheduler.refresh", "scheduler", None, &result.message)?,
                 Err(err) => self.audit("scheduler.refresh_failed", "scheduler", None, &err.to_string())?,
             }
@@ -1400,10 +1449,10 @@ impl Database {
         if settings.forwarding_enabled
             && self.scheduler_due("scheduler_last_forwarding_at", settings.forwarding_interval_minutes, now)?
         {
-            match self.run_forwarding_job(Some(ForwardingInput {
+            match self.run_forwarding_job_with_trigger(Some(ForwardingInput {
                 account_id: None,
                 limit: Some(50),
-            })) {
+            }), "schedule") {
                 Ok(result) => self.audit("scheduler.forwarding", "scheduler", None, &result.message)?,
                 Err(err) => self.audit("scheduler.forwarding_failed", "scheduler", None, &err.to_string())?,
             }
@@ -1413,7 +1462,7 @@ impl Database {
         if settings.backup_enabled
             && self.scheduler_due("scheduler_last_backup_at", settings.backup_interval_minutes, now)?
         {
-            match self.run_backup_job() {
+            match self.run_backup_job_with_trigger("schedule") {
                 Ok(result) => self.audit("scheduler.backup", "scheduler", None, &result.message)?,
                 Err(err) => self.audit("scheduler.backup_failed", "scheduler", None, &err.to_string())?,
             }
@@ -1918,6 +1967,20 @@ impl Database {
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS automation_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_type TEXT NOT NULL,
+                trigger_type TEXT NOT NULL DEFAULT 'manual',
+                status TEXT NOT NULL,
+                message TEXT NOT NULL DEFAULT '',
+                refreshed INTEGER NOT NULL DEFAULT 0,
+                failed INTEGER NOT NULL DEFAULT 0,
+                duration_ms INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT NOT NULL,
+                finished_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS projects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -2002,6 +2065,7 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_project_events_project_created ON project_account_events(project_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_forwarding_logs_message ON forwarding_logs(account_id, message_id, channel, status);
             CREATE INDEX IF NOT EXISTS idx_backup_logs_created ON backup_logs(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_automation_runs_created ON automation_runs(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);
             ",
         )?;
@@ -2639,6 +2703,99 @@ impl Database {
             VALUES (?, ?, ?, ?, ?)
             ",
             params![target, status, file_name, size, error],
+        )?;
+        Ok(())
+    }
+
+    fn record_job_result(
+        &self,
+        job_type: &str,
+        trigger_type: &str,
+        started_at: DateTime<Utc>,
+        result: &AppResult<JobResult>,
+    ) -> AppResult<()> {
+        match result {
+            Ok(result) => self.insert_automation_run(
+                job_type,
+                trigger_type,
+                if result.success { "success" } else { "failed" },
+                &result.message,
+                result.refreshed as i64,
+                result.failed as i64,
+                started_at,
+            ),
+            Err(err) => self.insert_automation_run(
+                job_type,
+                trigger_type,
+                "failed",
+                &err.to_string(),
+                0,
+                1,
+                started_at,
+            ),
+        }
+    }
+
+    fn record_backup_result(
+        &self,
+        trigger_type: &str,
+        started_at: DateTime<Utc>,
+        result: &AppResult<BackupResult>,
+    ) -> AppResult<()> {
+        match result {
+            Ok(result) => self.insert_automation_run(
+                "backup",
+                trigger_type,
+                if result.success { "success" } else { "failed" },
+                &result.message,
+                1,
+                0,
+                started_at,
+            ),
+            Err(err) => self.insert_automation_run(
+                "backup",
+                trigger_type,
+                "failed",
+                &err.to_string(),
+                0,
+                1,
+                started_at,
+            ),
+        }
+    }
+
+    fn insert_automation_run(
+        &self,
+        job_type: &str,
+        trigger_type: &str,
+        status: &str,
+        message: &str,
+        refreshed: i64,
+        failed: i64,
+        started_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let finished_at = Utc::now();
+        let duration_ms = finished_at
+            .signed_duration_since(started_at)
+            .num_milliseconds()
+            .max(0);
+        self.conn.execute(
+            "
+            INSERT INTO automation_runs
+            (job_type, trigger_type, status, message, refreshed, failed, duration_ms, started_at, finished_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ",
+            params![
+                job_type,
+                trigger_type,
+                status,
+                message,
+                refreshed.max(0),
+                failed.max(0),
+                duration_ms,
+                started_at.to_rfc3339(),
+                finished_at.to_rfc3339()
+            ],
         )?;
         Ok(())
     }
@@ -3339,13 +3496,28 @@ fn project_account_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project
     })
 }
 
+fn automation_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AutomationRun> {
+    Ok(AutomationRun {
+        id: row.get(0)?,
+        job_type: row.get(1)?,
+        trigger_type: row.get(2)?,
+        status: row.get(3)?,
+        message: row.get(4)?,
+        refreshed: row.get(5)?,
+        failed: row.get(6)?,
+        duration_ms: row.get(7)?,
+        started_at: row.get(8)?,
+        finished_at: row.get(9)?,
+    })
+}
+
 #[cfg(test)]
 mod project_tests {
     use super::{normalize_project_key, Database};
     use crate::models::{
         ClaimProjectAccountInput, CreateProjectInput, DeleteMailMessagesInput,
         ExportAccountsInput, ExportMailMessagesInput, MarkMailMessagesInput,
-        ProjectAccountActionInput,
+        ProjectAccountActionInput, RefreshInput,
     };
     use rusqlite::Connection;
     use std::path::PathBuf;
@@ -3499,5 +3671,30 @@ mod project_tests {
         assert_eq!(accounts_export.item_count, 1);
         let csv = std::fs::read_to_string(&accounts_export.path).expect("read csv export");
         assert!(csv.contains("one@example.com"));
+    }
+
+    #[test]
+    fn records_automation_run_for_failed_refresh() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+
+        let result = db.refresh_accounts(RefreshInput {
+            account_id: None,
+            folder: Some("all".to_string()),
+            top: Some(10),
+        });
+        assert!(result.is_err());
+
+        let runs = db.list_automation_runs(Some(10)).expect("runs");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].job_type, "refresh");
+        assert_eq!(runs[0].trigger_type, "manual");
+        assert_eq!(runs[0].status, "failed");
+        assert_eq!(runs[0].failed, 1);
     }
 }

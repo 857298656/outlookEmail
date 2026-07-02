@@ -24,6 +24,24 @@ struct MailMessageRef {
     provider_message_id: String,
 }
 
+#[derive(Debug, Clone)]
+struct ExportMailMessageRow {
+    id: i64,
+    account_email: String,
+    folder: String,
+    provider_message_id: String,
+    subject: String,
+    sender: String,
+    recipients: String,
+    cc: String,
+    received_at: String,
+    is_read: bool,
+    body_preview: String,
+    body: Option<String>,
+    body_type: String,
+    attachments: Vec<AttachmentInfo>,
+}
+
 impl Database {
     pub fn open() -> AppResult<Self> {
         let db_path = resolve_db_path();
@@ -1038,6 +1056,133 @@ impl Database {
             path: path.to_string_lossy().to_string(),
             file_name,
             size: attachment.bytes.len() as i64,
+        })
+    }
+
+    pub fn export_mail_messages(&self, input: ExportMailMessagesInput) -> AppResult<ExportResult> {
+        self.require_unlocked()?;
+        let ids = normalize_message_ids(&input.message_ids)?;
+        let rows = self.export_mail_message_rows(&ids)?;
+        if rows.is_empty() {
+            return Err(AppError::InvalidInput("no matching messages found".to_string()));
+        }
+        let title = input
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("OutlookEmail message export");
+        let content = render_mail_export_html(title, &rows);
+        let file_name = timestamped_file_name("mail-export", "html");
+        let (path, size) = self.write_export_file("mail", &file_name, content.as_bytes())?;
+        self.audit("mail.exported", "message", None, &format!("{} message(s)", rows.len()))?;
+        Ok(ExportResult {
+            path,
+            file_name,
+            size,
+            item_count: rows.len(),
+        })
+    }
+
+    pub fn export_accounts(&self, input: ExportAccountsInput) -> AppResult<ExportResult> {
+        self.require_unlocked()?;
+        let mut accounts = self.list_accounts()?;
+        if let Some(group_id) = input.group_id {
+            accounts.retain(|account| account.group_id == Some(group_id));
+        }
+        let mut csv = String::new();
+        csv.push_str(&csv_row(&[
+            "id",
+            "email",
+            "group",
+            "remark",
+            "status",
+            "provider",
+            "account_type",
+            "forward_enabled",
+            "message_count",
+            "last_refresh_status",
+            "created_at",
+            "updated_at",
+        ]));
+        for account in &accounts {
+            csv.push_str(&csv_row(&[
+                account.id.to_string(),
+                account.email.clone(),
+                account.group_name.clone().unwrap_or_default(),
+                account.remark.clone(),
+                account.status.clone(),
+                account.provider.clone(),
+                account.account_type.clone(),
+                account.forward_enabled.to_string(),
+                account.message_count.to_string(),
+                account.last_refresh_status.clone(),
+                account.created_at.clone(),
+                account.updated_at.clone(),
+            ]));
+        }
+        let file_name = timestamped_file_name("accounts-export", "csv");
+        let (path, size) = self.write_export_file("accounts", &file_name, csv.as_bytes())?;
+        self.audit("accounts.exported", "account", None, &format!("{} account(s)", accounts.len()))?;
+        Ok(ExportResult {
+            path,
+            file_name,
+            size,
+            item_count: accounts.len(),
+        })
+    }
+
+    pub fn export_project_accounts(&self, input: ExportProjectAccountsInput) -> AppResult<ExportResult> {
+        self.require_unlocked()?;
+        let project = self.get_project(input.project_id)?;
+        let accounts = self.list_project_accounts(input.project_id)?;
+        let mut csv = String::new();
+        csv.push_str(&csv_row(&[
+            "id",
+            "project_id",
+            "project_key",
+            "email",
+            "normalized_email",
+            "status",
+            "claim_count",
+            "claimed_at",
+            "lease_expires_at",
+            "last_result",
+            "last_result_detail",
+            "created_at",
+            "updated_at",
+        ]));
+        for account in &accounts {
+            csv.push_str(&csv_row(&[
+                account.id.to_string(),
+                account.project_id.to_string(),
+                project.project_key.clone(),
+                account.email.clone(),
+                account.normalized_email.clone(),
+                account.status.clone(),
+                account.claim_count.to_string(),
+                account.claimed_at.clone().unwrap_or_default(),
+                account.lease_expires_at.clone().unwrap_or_default(),
+                account.last_result.clone(),
+                account.last_result_detail.clone(),
+                account.created_at.clone(),
+                account.updated_at.clone(),
+            ]));
+        }
+        let prefix = safe_file_name(&format!("project-{}-accounts", project.project_key));
+        let file_name = timestamped_file_name(&prefix, "csv");
+        let (path, size) = self.write_export_file("projects", &file_name, csv.as_bytes())?;
+        self.audit(
+            "project_accounts.exported",
+            "project",
+            Some(project.id),
+            &format!("{} account(s)", accounts.len()),
+        )?;
+        Ok(ExportResult {
+            path,
+            file_name,
+            size,
+            item_count: accounts.len(),
         })
     }
 
@@ -2716,6 +2861,55 @@ impl Database {
         collect_rows(rows)
     }
 
+    fn export_mail_message_rows(&self, ids: &[i64]) -> AppResult<Vec<ExportMailMessageRow>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "
+            SELECT m.id, a.email, m.folder, m.provider_message_id, m.subject,
+                   m.sender, m.recipients, m.cc, m.received_at, m.is_read,
+                   m.body_preview, m.body, m.body_type, m.attachments_json
+            FROM retained_mail_messages m
+            JOIN accounts a ON a.id = m.account_id
+            WHERE m.id IN ({placeholders})
+            ORDER BY m.received_at_sort DESC, m.id DESC
+            "
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(ids.iter()), |row| {
+            Ok(ExportMailMessageRow {
+                id: row.get(0)?,
+                account_email: row.get(1)?,
+                folder: row.get(2)?,
+                provider_message_id: row.get(3)?,
+                subject: row.get(4)?,
+                sender: row.get(5)?,
+                recipients: row.get(6)?,
+                cc: row.get(7)?,
+                received_at: row.get(8)?,
+                is_read: row.get::<_, i64>(9)? == 1,
+                body_preview: row.get(10)?,
+                body: row.get(11)?,
+                body_type: row.get(12)?,
+                attachments: parse_attachments_json(row.get::<_, String>(13)?.as_str()),
+            })
+        })?;
+        collect_rows(rows)
+    }
+
+    fn write_export_file(&self, category: &str, file_name: &str, bytes: &[u8]) -> AppResult<(String, i64)> {
+        let dir = exports_dir(&self.db_path)?.join(safe_file_name(category));
+        std::fs::create_dir_all(&dir).map_err(|err| AppError::Internal(err.to_string()))?;
+        let path = unique_path(&dir, &safe_file_name(file_name));
+        std::fs::write(&path, bytes).map_err(|err| AppError::Internal(err.to_string()))?;
+        Ok((path.to_string_lossy().to_string(), bytes.len() as i64))
+    }
+
     fn sync_remote_mark_message(&self, target: &MailMessageRef, is_read: bool) -> AppResult<()> {
         let account = self
             .account_credentials(Some(target.account_id))?
@@ -2831,6 +3025,112 @@ fn mail_action_message(action: &str, changed: usize, failed: usize, errors: &[St
     }
 }
 
+fn timestamped_file_name(prefix: &str, extension: &str) -> String {
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
+    let prefix = safe_file_name(prefix);
+    let extension = extension.trim_start_matches('.');
+    format!("{prefix}-{timestamp}.{extension}")
+}
+
+fn csv_row<T: AsRef<str>>(fields: &[T]) -> String {
+    let mut row = fields
+        .iter()
+        .map(|field| csv_escape(field.as_ref()))
+        .collect::<Vec<_>>()
+        .join(",");
+    row.push('\n');
+    row
+}
+
+fn csv_escape(value: &str) -> String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+fn html_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn render_mail_export_html(title: &str, rows: &[ExportMailMessageRow]) -> String {
+    let mut html = String::new();
+    html.push_str("<!doctype html><html><head><meta charset=\"utf-8\"><title>");
+    html.push_str(&html_escape(title));
+    html.push_str("</title><style>");
+    html.push_str(
+        "body{font-family:Segoe UI,Arial,sans-serif;margin:24px;background:#f8fafc;color:#17202a}\
+         h1{font-size:24px;margin:0 0 8px}\
+         .summary{color:#64748b;margin-bottom:18px}\
+         article{background:#fff;border:1px solid #e2e8f0;border-radius:8px;margin:14px 0;padding:18px}\
+         h2{font-size:18px;margin:0 0 10px}\
+         .meta{display:grid;grid-template-columns:120px 1fr;gap:6px 12px;color:#64748b;font-size:13px;margin-bottom:14px}\
+         .meta strong{color:#17202a}\
+         pre{white-space:pre-wrap;line-height:1.55;font-family:inherit}\
+         ul{margin:8px 0 0 18px;padding:0}",
+    );
+    html.push_str("</style></head><body><h1>");
+    html.push_str(&html_escape(title));
+    html.push_str("</h1><div class=\"summary\">Exported ");
+    html.push_str(&rows.len().to_string());
+    html.push_str(" message(s) at ");
+    html.push_str(&html_escape(&Utc::now().to_rfc3339()));
+    html.push_str("</div>");
+    for row in rows {
+        html.push_str("<article><h2>");
+        html.push_str(&html_escape(if row.subject.is_empty() { "(no subject)" } else { &row.subject }));
+        html.push_str("</h2><div class=\"meta\">");
+        for (label, value) in [
+            ("Local ID", row.id.to_string()),
+            ("Account", row.account_email.clone()),
+            ("Folder", row.folder.clone()),
+            ("Provider ID", row.provider_message_id.clone()),
+            ("From", row.sender.clone()),
+            ("To", row.recipients.clone()),
+            ("Cc", row.cc.clone()),
+            ("Received", row.received_at.clone()),
+            ("Status", if row.is_read { "Read" } else { "Unread" }.to_string()),
+            ("Body type", row.body_type.clone()),
+        ] {
+            html.push_str("<span>");
+            html.push_str(&html_escape(label));
+            html.push_str("</span><strong>");
+            html.push_str(&html_escape(&value));
+            html.push_str("</strong>");
+        }
+        html.push_str("</div><pre>");
+        html.push_str(&html_escape(row.body.as_deref().unwrap_or(&row.body_preview)));
+        html.push_str("</pre>");
+        if !row.attachments.is_empty() {
+            html.push_str("<h3>Attachments</h3><ul>");
+            for attachment in &row.attachments {
+                html.push_str("<li>");
+                html.push_str(&html_escape(&format!(
+                    "{} ({}, {} bytes)",
+                    attachment.name, attachment.content_type, attachment.size
+                )));
+                html.push_str("</li>");
+            }
+            html.push_str("</ul>");
+        }
+        html.push_str("</article>");
+    }
+    html.push_str("</body></html>");
+    html
+}
+
 fn normalize_email(value: &str) -> AppResult<String> {
     let email = value.trim().to_ascii_lowercase();
     if !email.contains('@') {
@@ -2941,6 +3241,13 @@ fn backup_dir(db_path: &Path) -> AppResult<PathBuf> {
         .join("backups"))
 }
 
+fn exports_dir(db_path: &Path) -> AppResult<PathBuf> {
+    Ok(db_path
+        .parent()
+        .ok_or_else(|| AppError::Internal("database path has no parent directory".to_string()))?
+        .join("exports"))
+}
+
 fn parse_scheduler_timestamp(value: &str) -> Option<DateTime<Utc>> {
     if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
         return Some(parsed.with_timezone(&Utc));
@@ -3037,7 +3344,8 @@ mod project_tests {
     use super::{normalize_project_key, Database};
     use crate::models::{
         ClaimProjectAccountInput, CreateProjectInput, DeleteMailMessagesInput,
-        MarkMailMessagesInput, ProjectAccountActionInput,
+        ExportAccountsInput, ExportMailMessagesInput, MarkMailMessagesInput,
+        ProjectAccountActionInput,
     };
     use rusqlite::Connection;
     use std::path::PathBuf;
@@ -3145,5 +3453,51 @@ mod project_tests {
             .list_messages(Some(1), Some("all".to_string()))
             .expect("messages")
             .is_empty());
+    }
+
+    #[test]
+    fn exports_mail_html_and_accounts_csv() {
+        let root = std::env::temp_dir().join(format!("outlook-email-export-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: root.join("test.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "INSERT INTO accounts (id, email, status, group_id, remark) VALUES (1, 'one@example.com', 'active', 1, 'main')",
+                [],
+            )
+            .expect("insert account");
+        db.conn
+            .execute(
+                "
+                INSERT INTO retained_mail_messages
+                (id, account_id, folder, provider_message_id, subject, sender, recipients, received_at, received_at_sort, body_preview, body)
+                VALUES (10, 1, 'inbox', 'local-demo-test', 'Hello <b>', 'sender@example.com', 'one@example.com', '2026-01-01T00:00:00Z', 1, 'preview', '<b>body</b>')
+                ",
+                [],
+            )
+            .expect("insert message");
+
+        let mail_export = db
+            .export_mail_messages(ExportMailMessagesInput {
+                message_ids: vec![10],
+                title: Some("Mail export".to_string()),
+            })
+            .expect("export mail");
+        assert_eq!(mail_export.item_count, 1);
+        let html = std::fs::read_to_string(&mail_export.path).expect("read html export");
+        assert!(html.contains("&lt;b&gt;body&lt;/b&gt;"));
+
+        let accounts_export = db
+            .export_accounts(ExportAccountsInput { group_id: None })
+            .expect("export accounts");
+        assert_eq!(accounts_export.item_count, 1);
+        let csv = std::fs::read_to_string(&accounts_export.path).expect("read csv export");
+        assert!(csv.contains("one@example.com"));
     }
 }

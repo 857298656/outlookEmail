@@ -149,6 +149,13 @@ export type BackupResult = {
   size: number;
 };
 
+export type ExportResult = {
+  path: string;
+  file_name: string;
+  size: number;
+  item_count: number;
+};
+
 export type SchedulerStatus = {
   last_refresh_at: string | null;
   last_forwarding_at: string | null;

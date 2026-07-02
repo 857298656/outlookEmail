@@ -483,6 +483,30 @@ pub struct DownloadAttachmentResult {
     pub size: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ExportResult {
+    pub path: String,
+    pub file_name: String,
+    pub size: i64,
+    pub item_count: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExportMailMessagesInput {
+    pub message_ids: Vec<i64>,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExportAccountsInput {
+    pub group_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExportProjectAccountsInput {
+    pub project_id: i64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RefreshInput {
     pub account_id: Option<i64>,

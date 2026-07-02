@@ -27,6 +27,7 @@ import type {
   Account,
   AppStatus,
   BackupLog,
+  ExportResult,
   ForwardingLog,
   Group,
   MailMessage,
@@ -343,6 +344,12 @@ function App() {
                 await loadStatus();
               })
             }
+            onExportMessages={(messageIds) =>
+              runAction(async () => {
+                const result = await api.exportMailMessages(messageIds, "OutlookEmail message export");
+                setNotice(exportNotice(result));
+              })
+            }
             onCreateDemo={() =>
               selectedAccountId
                 ? runAction(async () => {
@@ -397,6 +404,12 @@ function App() {
                 await loadWorkspace(undefined, folder);
                 await loadStatus();
               }, "Account deleted")
+            }
+            onExportAccounts={(groupId) =>
+              runAction(async () => {
+                const result = await api.exportAccounts(groupId);
+                setNotice(exportNotice(result));
+              })
             }
             onUpdateAccount={(input) =>
               runAction(async () => {
@@ -507,6 +520,12 @@ function App() {
                 const claimed = await api.claimProjectAccount({ project_id: projectId, lease_minutes: 30 });
                 await loadProjects(projectId);
                 setNotice(claimed ? `Claimed ${claimed.email}` : "No claimable accounts");
+              })
+            }
+            onExport={(projectId) =>
+              runAction(async () => {
+                const result = await api.exportProjectAccounts(projectId);
+                setNotice(exportNotice(result));
               })
             }
             onAction={(projectId, action, projectAccountId) =>
@@ -628,6 +647,7 @@ function MailWorkspace({
   onPageChange,
   onMarkMessages,
   onDeleteMessages,
+  onExportMessages,
   onCreateDemo,
   onDownloadAttachment
 }: {
@@ -653,6 +673,7 @@ function MailWorkspace({
   onPageChange: (page: number) => void;
   onMarkMessages: (messageIds: number[], isRead: boolean) => void;
   onDeleteMessages: (messageIds: number[]) => void;
+  onExportMessages: (messageIds: number[]) => void;
   onCreateDemo: () => void;
   onDownloadAttachment: (message: MailMessage, attachmentId: string) => void;
 }) {
@@ -776,6 +797,10 @@ function MailWorkspace({
               <Trash2 size={14} />
               Delete
             </button>
+            <button className="button compact secondary" onClick={() => onExportMessages(selectedMessageIds)}>
+              <Download size={14} />
+              Export
+            </button>
             <button className="button compact ghost" onClick={onClearSelection}>
               Clear
             </button>
@@ -833,6 +858,10 @@ function MailWorkspace({
                   <Trash2 size={14} />
                   Delete
                 </button>
+                <button className="button compact secondary" onClick={() => onExportMessages([selectedMessage.id])}>
+                  <Download size={14} />
+                  Export
+                </button>
               </div>
             </div>
             <div className="metaGrid">
@@ -879,6 +908,7 @@ function AccountsView({
   onCreateGroup,
   onCreateTag,
   onDeleteAccount,
+  onExportAccounts,
   onUpdateAccount,
   onGenerateOAuthUrl,
   onExchangeOAuthToken
@@ -892,6 +922,7 @@ function AccountsView({
   onCreateGroup: (name: string, color: string) => void;
   onCreateTag: (name: string, color: string) => void;
   onDeleteAccount: (accountId: number) => void;
+  onExportAccounts: (groupId?: number | null) => void;
   onUpdateAccount: (input: Parameters<typeof api.updateAccount>[0]) => void;
   onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string }) => Promise<string>;
   onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string }) => void;
@@ -1007,7 +1038,12 @@ function AccountsView({
       <div className="panel widePanel">
         <div className="panelHeader">
           <h2>Mailbox inventory</h2>
-          <span>{accounts.length} accounts</span>
+          <div className="rowActions">
+            <span>{accounts.length} accounts</span>
+            <button className="iconMini" title="Export accounts" disabled={accounts.length === 0 || busy} onClick={() => onExportAccounts()}>
+              <Download size={15} />
+            </button>
+          </div>
         </div>
         <div className="table">
           <div className="tableHeader">
@@ -1345,6 +1381,7 @@ function ProjectsView({
   onSelect,
   onSync,
   onClaim,
+  onExport,
   onAction
 }: {
   projects: Project[];
@@ -1355,6 +1392,7 @@ function ProjectsView({
   onSelect: (projectId: number) => void;
   onSync: (projectId: number) => void;
   onClaim: (projectId: number) => void;
+  onExport: (projectId: number) => void;
   onAction: (projectId: number, action: "success" | "failed" | "release" | "remove" | "restore", projectAccountId: number) => void;
 }) {
   const [selectedProjectId, setSelectedProjectId] = useState<number | undefined>(projects[0]?.id);
@@ -1462,6 +1500,10 @@ function ProjectsView({
                 <button className="button secondary" disabled={busy} onClick={() => onSync(selectedProject.id)}>
                   <RefreshCw size={16} />
                   Sync
+                </button>
+                <button className="button secondary" disabled={busy || accounts.length === 0} onClick={() => onExport(selectedProject.id)}>
+                  <Download size={16} />
+                  Export
                 </button>
                 <button className="button primary" disabled={busy} onClick={() => onClaim(selectedProject.id)}>
                   <Archive size={16} />
@@ -2091,6 +2133,11 @@ function formatBytes(value: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function exportNotice(result: ExportResult) {
+  const size = formatBytes(result.size);
+  return `Exported ${result.item_count} item(s) to ${result.path}${size ? ` (${size})` : ""}`;
 }
 
 function readError(err: unknown) {

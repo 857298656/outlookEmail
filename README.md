@@ -12,7 +12,7 @@ This version is intentionally local-first:
 
 ## Current implementation
 
-The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag management, local retained-mail workspace, message search/filter/pagination, batch read/unread/delete actions, settings storage, Microsoft Graph OAuth, Graph mailbox sync, Graph attachment metadata/download, basic TLS IMAP sync, GPTMail/DuckMail/Cloudflare temp-mail management, SMTP/Telegram/WeCom forwarding, WebDAV backup, in-app scheduling, desktop project account pools, and Windows desktop bundling.
+The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag management, local retained-mail workspace, message search/filter/pagination, batch read/unread/delete actions, local mail/account/project exports, settings storage, Microsoft Graph OAuth, Graph mailbox sync, Graph attachment metadata/download, basic TLS IMAP sync, GPTMail/DuckMail/Cloudflare temp-mail management, SMTP/Telegram/WeCom forwarding, WebDAV backup, in-app scheduling, desktop project account pools, and Windows desktop bundling.
 
 See [`docs/requirements-milestones.md`](docs/requirements-milestones.md) for the full requirement record, completed scope, unfinished scope, and milestone plan.
 
@@ -64,6 +64,10 @@ Graph accounts need a Microsoft client ID and OAuth callback URL. Generate the a
 IMAP accounts need host, port, and password fields. The first IMAP implementation supports TLS password login and caches recent messages in SQLite. IMAP attachment metadata is parsed from MIME messages; direct IMAP attachment extraction is still pending.
 
 The Mailbox view supports cached-message search, read/unread filtering, attachment filtering, pagination, single-message actions, and batch read/unread/delete actions. Graph and IMAP message actions update the local SQLite cache and attempt remote synchronization.
+
+## Local exports
+
+The app can export selected cached messages as a local read-only HTML file. It also exports account inventory and project account pools as CSV files. Exported files are written under the platform app data `exports` directory.
 
 ## Forwarding, backup, and scheduling
 

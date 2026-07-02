@@ -144,6 +144,24 @@ pub fn download_attachment(state: State<'_, AppState>, input: DownloadAttachment
 }
 
 #[tauri::command]
+pub fn export_mail_messages(state: State<'_, AppState>, input: ExportMailMessagesInput) -> AppResult<ExportResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.export_mail_messages(input)
+}
+
+#[tauri::command]
+pub fn export_accounts(state: State<'_, AppState>, input: Option<ExportAccountsInput>) -> AppResult<ExportResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.export_accounts(input.unwrap_or(ExportAccountsInput { group_id: None }))
+}
+
+#[tauri::command]
+pub fn export_project_accounts(state: State<'_, AppState>, input: ExportProjectAccountsInput) -> AppResult<ExportResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.export_project_accounts(input)
+}
+
+#[tauri::command]
 pub fn list_projects(state: State<'_, AppState>) -> AppResult<Vec<Project>> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.list_projects()

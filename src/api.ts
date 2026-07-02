@@ -5,6 +5,7 @@ import type {
   BackupLog,
   BackupResult,
   CloudflareChannel,
+  ExportResult,
   ForwardingLog,
   Group,
   ImportAccountsResult,
@@ -359,6 +360,21 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       const input = args?.input as { attachment_id: string };
       return { path: `browser-preview/${input.attachment_id}`, file_name: input.attachment_id, size: 0 } as T;
     }
+    case "export_mail_messages": {
+      const input = args?.input as { message_ids: number[] };
+      const count = mockMessages.filter((message) => input.message_ids.includes(message.id)).length;
+      return mockExport("mail-export.html", count) as T;
+    }
+    case "export_accounts": {
+      const input = args?.input as { group_id?: number | null } | undefined;
+      const count = mockAccounts.filter((account) => !input?.group_id || account.group_id === input.group_id).length;
+      return mockExport("accounts-export.csv", count) as T;
+    }
+    case "export_project_accounts": {
+      const input = args?.input as { project_id: number };
+      const count = mockProjectAccounts.filter((account) => account.project_id === input.project_id).length;
+      return mockExport("project-accounts-export.csv", count) as T;
+    }
     case "list_projects":
       return mockProjects as T;
     case "create_project": {
@@ -483,6 +499,15 @@ function status(): AppStatus {
   };
 }
 
+function mockExport(fileName: string, itemCount: number): ExportResult {
+  return {
+    path: `browser-preview/exports/${fileName}`,
+    file_name: fileName,
+    size: Math.max(128, itemCount * 96),
+    item_count: itemCount
+  };
+}
+
 function filterMockMessages(args?: Record<string, unknown>) {
   const query = (args?.query ?? {}) as MailMessageQuery;
   const accountId = query.account_id ?? (args?.accountId as number | undefined);
@@ -589,6 +614,12 @@ export const api = {
     call<JobResult>("mark_mail_messages", { input: { message_ids: messageIds, is_read: isRead, sync_remote: syncRemote } }),
   deleteMessages: (messageIds: number[], syncRemote = true) =>
     call<JobResult>("delete_mail_messages", { input: { message_ids: messageIds, sync_remote: syncRemote } }),
+  exportMailMessages: (messageIds: number[], title?: string) =>
+    call<ExportResult>("export_mail_messages", { input: { message_ids: messageIds, title } }),
+  exportAccounts: (groupId?: number | null) =>
+    call<ExportResult>("export_accounts", { input: { group_id: groupId ?? null } }),
+  exportProjectAccounts: (projectId: number) =>
+    call<ExportResult>("export_project_accounts", { input: { project_id: projectId } }),
   getSettings: () => call<Settings>("get_settings"),
   updateSettings: (settings: Settings) => call<Settings>("update_settings", { settings }),
   runForwardingJob: (input?: { account_id?: number; limit?: number }) =>

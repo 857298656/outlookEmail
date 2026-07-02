@@ -24,6 +24,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Microsoft Graph OAuth and mailbox refresh
 - Basic TLS IMAP mailbox refresh
 - Cached message search, filters, pagination, and batch read/unread/delete actions
+- Local HTML/CSV exports for cached mail, account inventory, and project account pools
 - GPTMail, DuckMail, and Cloudflare temp-mail management
 - SMTP, Telegram, and WeCom forwarding for cached messages
 - WebDAV backup from a consistent SQLite snapshot
@@ -46,6 +47,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Backups are created with SQLite `VACUUM INTO`, stored locally under the app data backup directory, then uploaded with WebDAV `PUT`.
 - Scheduled jobs only run while the local workspace is unlocked.
 - Projects synchronize account scope into `project_accounts` and record claim/result events in `project_account_events`.
+- Exports are generated from local SQLite data under the app data `exports` directory. Mail HTML export escapes message content rather than executing raw message HTML.
 
 ## Next provider work
 
@@ -53,5 +55,5 @@ The application is a single-user local desktop app. It does not expose a public 
 - IMAP XOAUTH2 login
 - More provider-specific folder discovery
 - Safer HTML body rendering policy for cached messages
+- Revocable share-link workflow and optional local HTTP API
 - Cloudflare AI username generation and advanced batch generation
-- Local HTTP API only if external scripts need project-pool access later

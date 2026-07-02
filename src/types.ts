@@ -175,6 +175,14 @@ export type AutomationRun = {
   finished_at: string;
 };
 
+export type AutomationRunQuery = {
+  job_type?: string;
+  trigger_type?: string;
+  status?: string;
+  search?: string;
+  limit?: number;
+};
+
 export type TempEmail = {
   id: number;
   email: string;

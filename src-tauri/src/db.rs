@@ -42,6 +42,36 @@ struct ExportMailMessageRow {
     attachments: Vec<AttachmentInfo>,
 }
 
+struct AutomationRunFilter {
+    job_type: String,
+    trigger_type: String,
+    status: String,
+    search: String,
+    limit: i64,
+}
+
+impl AutomationRunFilter {
+    fn from_query(query: AutomationRunQuery) -> AppResult<Self> {
+        Ok(Self {
+            job_type: normalize_automation_value(query.job_type.as_deref(), &["refresh", "forwarding", "backup"], "job_type")?,
+            trigger_type: normalize_automation_value(query.trigger_type.as_deref(), &["manual", "schedule"], "trigger_type")?,
+            status: normalize_automation_value(query.status.as_deref(), &["success", "failed"], "status")?,
+            search: query.search.unwrap_or_default().trim().to_string(),
+            limit: query.limit.unwrap_or(100).clamp(1, 500),
+        })
+    }
+
+    fn from_clear_input(input: &ClearAutomationRunsInput) -> AppResult<Self> {
+        Ok(Self {
+            job_type: normalize_automation_value(input.job_type.as_deref(), &["refresh", "forwarding", "backup"], "job_type")?,
+            trigger_type: normalize_automation_value(input.trigger_type.as_deref(), &["manual", "schedule"], "trigger_type")?,
+            status: normalize_automation_value(input.status.as_deref(), &["success", "failed"], "status")?,
+            search: input.search.clone().unwrap_or_default().trim().to_string(),
+            limit: 500,
+        })
+    }
+}
+
 impl Database {
     pub fn open() -> AppResult<Self> {
         let db_path = resolve_db_path();
@@ -1401,19 +1431,88 @@ impl Database {
     }
 
     pub fn list_automation_runs(&self, limit: Option<i64>) -> AppResult<Vec<AutomationRun>> {
+        self.list_automation_runs_query(AutomationRunQuery {
+            limit,
+            ..AutomationRunQuery::default()
+        })
+    }
+
+    pub fn list_automation_runs_query(&self, query: AutomationRunQuery) -> AppResult<Vec<AutomationRun>> {
         self.require_unlocked()?;
-        let limit = limit.unwrap_or(100).clamp(1, 500);
+        let filter = AutomationRunFilter::from_query(query)?;
+        let search_like = format!("%{}%", filter.search);
         let mut stmt = self.conn.prepare(
             "
             SELECT id, job_type, trigger_type, status, message, refreshed, failed,
                    duration_ms, started_at, finished_at
             FROM automation_runs
+            WHERE (?1 = '' OR job_type = ?1)
+              AND (?2 = '' OR trigger_type = ?2)
+              AND (?3 = '' OR status = ?3)
+              AND (?4 = '' OR message LIKE ?5 OR job_type LIKE ?5 OR trigger_type LIKE ?5 OR status LIKE ?5)
             ORDER BY id DESC
-            LIMIT ?
+            LIMIT ?6
             ",
         )?;
-        let rows = stmt.query_map([limit], automation_run_from_row)?;
+        let rows = stmt.query_map(
+            params![
+                filter.job_type,
+                filter.trigger_type,
+                filter.status,
+                filter.search,
+                search_like,
+                filter.limit
+            ],
+            automation_run_from_row,
+        )?;
         collect_rows(rows)
+    }
+
+    pub fn clear_automation_runs(&self, input: ClearAutomationRunsInput) -> AppResult<JobResult> {
+        self.require_unlocked()?;
+        let filter = AutomationRunFilter::from_clear_input(&input)?;
+        if !input.clear_all.unwrap_or(false)
+            && filter.job_type.is_empty()
+            && filter.trigger_type.is_empty()
+            && filter.status.is_empty()
+            && filter.search.is_empty()
+            && input.older_than_days.is_none()
+        {
+            return Err(AppError::InvalidInput(
+                "choose a filter or enable clear_all before clearing automation history".to_string(),
+            ));
+        }
+        let search_like = format!("%{}%", filter.search);
+        let older_than_days = input.older_than_days.filter(|value| *value > 0);
+        let older_interval = older_than_days
+            .map(|days| format!("-{days} days"))
+            .unwrap_or_default();
+        let deleted = self.conn.execute(
+            "
+            DELETE FROM automation_runs
+            WHERE (?1 = '' OR job_type = ?1)
+              AND (?2 = '' OR trigger_type = ?2)
+              AND (?3 = '' OR status = ?3)
+              AND (?4 = '' OR message LIKE ?5 OR job_type LIKE ?5 OR trigger_type LIKE ?5 OR status LIKE ?5)
+              AND (?6 IS NULL OR datetime(created_at) <= datetime('now', ?7))
+            ",
+            params![
+                filter.job_type,
+                filter.trigger_type,
+                filter.status,
+                filter.search,
+                search_like,
+                older_than_days,
+                older_interval
+            ],
+        )?;
+        self.audit("automation_runs.cleared", "automation", None, &format!("{} run(s)", deleted))?;
+        Ok(JobResult {
+            success: true,
+            message: format!("Cleared {} automation run(s)", deleted),
+            refreshed: deleted,
+            failed: 0,
+        })
     }
 
     pub fn scheduler_status(&self) -> AppResult<SchedulerStatus> {
@@ -3170,6 +3269,20 @@ fn normalize_read_state(value: Option<&str>) -> AppResult<String> {
     }
 }
 
+fn normalize_automation_value(value: Option<&str>, allowed: &[&str], field: &str) -> AppResult<String> {
+    let normalized = value.unwrap_or("all").trim().to_ascii_lowercase();
+    if normalized.is_empty() || normalized == "all" {
+        return Ok(String::new());
+    }
+    if allowed.iter().any(|item| *item == normalized) {
+        return Ok(normalized);
+    }
+    Err(AppError::InvalidInput(format!(
+        "{field} must be one of: all, {}",
+        allowed.join(", ")
+    )))
+}
+
 fn mail_action_message(action: &str, changed: usize, failed: usize, errors: &[String]) -> String {
     if failed == 0 {
         return format!("{action} {changed} message(s)");
@@ -3516,7 +3629,8 @@ mod project_tests {
     use super::{normalize_project_key, Database};
     use crate::models::{
         ClaimProjectAccountInput, CreateProjectInput, DeleteMailMessagesInput,
-        ExportAccountsInput, ExportMailMessagesInput, MarkMailMessagesInput,
+        AutomationRunQuery, ClearAutomationRunsInput, ExportAccountsInput,
+        ExportMailMessagesInput, MarkMailMessagesInput,
         ProjectAccountActionInput, RefreshInput,
     };
     use rusqlite::Connection;
@@ -3696,5 +3810,51 @@ mod project_tests {
         assert_eq!(runs[0].trigger_type, "manual");
         assert_eq!(runs[0].status, "failed");
         assert_eq!(runs[0].failed, 1);
+    }
+
+    #[test]
+    fn filters_and_clears_automation_runs() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "
+                INSERT INTO automation_runs
+                (job_type, trigger_type, status, message, refreshed, failed, duration_ms, started_at, finished_at)
+                VALUES
+                ('refresh', 'manual', 'failed', 'token expired', 0, 1, 10, '2026-01-01T00:00:00Z', '2026-01-01T00:00:01Z'),
+                ('backup', 'schedule', 'success', 'uploaded', 1, 0, 20, '2026-01-02T00:00:00Z', '2026-01-02T00:00:01Z')
+                ",
+                [],
+            )
+            .expect("insert runs");
+
+        let failed = db
+            .list_automation_runs_query(AutomationRunQuery {
+                status: Some("failed".to_string()),
+                limit: Some(10),
+                ..AutomationRunQuery::default()
+            })
+            .expect("filter failed");
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].job_type, "refresh");
+
+        let cleared = db
+            .clear_automation_runs(ClearAutomationRunsInput {
+                job_type: None,
+                trigger_type: None,
+                status: Some("failed".to_string()),
+                search: None,
+                older_than_days: None,
+                clear_all: None,
+            })
+            .expect("clear failed");
+        assert_eq!(cleared.refreshed, 1);
+        assert_eq!(db.list_automation_runs(Some(10)).expect("remaining").len(), 1);
     }
 }

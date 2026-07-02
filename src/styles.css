@@ -979,6 +979,17 @@ button:disabled {
   font-size: 13px;
 }
 
+.automationFilters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.automationFilters .select {
+  min-width: 130px;
+}
+
 .logTable {
   display: grid;
   border: 1px solid #e5e7eb;

@@ -3,6 +3,7 @@ import type {
   Account,
   AppStatus,
   AutomationRun,
+  AutomationRunQuery,
   BackupLog,
   BackupResult,
   CloudflareChannel,
@@ -298,7 +299,17 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     case "scheduler_status":
       return mockSchedulerStatus as T;
     case "list_automation_runs":
-      return mockAutomationRuns.slice(0, (args?.limit as number | undefined) ?? 100) as T;
+      return filterMockAutomationRuns(args) as T;
+    case "clear_automation_runs": {
+      const input = args?.input as AutomationRunQuery & { clear_all?: boolean };
+      if (!input.clear_all && !input.job_type && !input.trigger_type && !input.status && !input.search) {
+        throw new Error("choose a filter or enable clear_all before clearing automation history");
+      }
+      const before = mockAutomationRuns.length;
+      mockAutomationRuns = mockAutomationRuns.filter((run) => !matchesAutomationRun(run, input));
+      const deleted = before - mockAutomationRuns.length;
+      return { success: true, message: `Cleared ${deleted} automation run(s)`, refreshed: deleted, failed: 0 } as T;
+    }
     case "list_temp_emails":
       return mockTempEmails as T;
     case "import_temp_emails": {
@@ -549,6 +560,23 @@ function recordMockAutomationRun(jobType: string, triggerType: string, result: J
   return result;
 }
 
+function filterMockAutomationRuns(args?: Record<string, unknown>) {
+  const query = ((args?.query ?? {}) as AutomationRunQuery) || {};
+  const limit = query.limit ?? (args?.limit as number | undefined) ?? 100;
+  return mockAutomationRuns.filter((run) => matchesAutomationRun(run, query)).slice(0, limit);
+}
+
+function matchesAutomationRun(run: AutomationRun, query: AutomationRunQuery) {
+  const search = query.search?.trim().toLowerCase() ?? "";
+  const text = [run.job_type, run.trigger_type, run.status, run.message].join(" ").toLowerCase();
+  return (
+    (!query.job_type || query.job_type === "all" || run.job_type === query.job_type) &&
+    (!query.trigger_type || query.trigger_type === "all" || run.trigger_type === query.trigger_type) &&
+    (!query.status || query.status === "all" || run.status === query.status) &&
+    (!search || text.includes(search))
+  );
+}
+
 function filterMockMessages(args?: Record<string, unknown>) {
   const query = (args?.query ?? {}) as MailMessageQuery;
   const accountId = query.account_id ?? (args?.accountId as number | undefined);
@@ -669,7 +697,10 @@ export const api = {
   listForwardingLogs: (limit = 100) => call<ForwardingLog[]>("list_forwarding_logs", { limit }),
   listBackupLogs: (limit = 100) => call<BackupLog[]>("list_backup_logs", { limit }),
   schedulerStatus: () => call<SchedulerStatus>("scheduler_status"),
-  listAutomationRuns: (limit = 100) => call<AutomationRun[]>("list_automation_runs", { limit }),
+  listAutomationRuns: (query: AutomationRunQuery = {}, limit = 100) =>
+    call<AutomationRun[]>("list_automation_runs", { limit, query: { ...query, limit: query.limit ?? limit } }),
+  clearAutomationRuns: (input: AutomationRunQuery & { older_than_days?: number; clear_all?: boolean }) =>
+    call<JobResult>("clear_automation_runs", { input }),
   listTempEmails: () => call<TempEmail[]>("list_temp_emails"),
   importTempEmails: (input: { raw: string; provider: string; channel_id?: number | null }) =>
     call<ImportAccountsResult>("import_temp_emails", { input }),

@@ -73,7 +73,7 @@ The app can export selected cached messages as a local read-only HTML file. It a
 
 Forwarding is enabled per account in the account authorization panel. The Settings view configures SMTP, Telegram, and WeCom channels, WebDAV backup credentials, and local scheduler intervals.
 
-The scheduler runs inside the desktop process after the workspace is unlocked. It can periodically refresh mail, forward cached messages, and upload a consistent SQLite snapshot created with `VACUUM INTO`. Manual and scheduled refresh/forwarding/backup jobs are recorded in a unified automation history table shown in Settings.
+The scheduler runs inside the desktop process after the workspace is unlocked. It can periodically refresh mail, forward cached messages, and upload a consistent SQLite snapshot created with `VACUUM INTO`. Manual and scheduled refresh/forwarding/backup jobs are recorded in a unified automation history table shown in Settings, where runs can be filtered and cleared.
 
 ## Temp mail
 

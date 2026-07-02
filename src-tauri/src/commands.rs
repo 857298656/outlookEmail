@@ -276,9 +276,27 @@ pub fn scheduler_status(state: State<'_, AppState>) -> AppResult<SchedulerStatus
 }
 
 #[tauri::command]
-pub fn list_automation_runs(state: State<'_, AppState>, limit: Option<i64>) -> AppResult<Vec<AutomationRun>> {
+pub fn list_automation_runs(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+    query: Option<AutomationRunQuery>,
+) -> AppResult<Vec<AutomationRun>> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.list_automation_runs(limit)
+    match query {
+        Some(mut query) => {
+            if query.limit.is_none() {
+                query.limit = limit;
+            }
+            db.list_automation_runs_query(query)
+        }
+        None => db.list_automation_runs(limit),
+    }
+}
+
+#[tauri::command]
+pub fn clear_automation_runs(state: State<'_, AppState>, input: ClearAutomationRunsInput) -> AppResult<JobResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.clear_automation_runs(input)
 }
 
 #[tauri::command]

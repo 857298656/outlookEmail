@@ -216,6 +216,25 @@ pub struct AutomationRun {
     pub finished_at: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AutomationRunQuery {
+    pub job_type: Option<String>,
+    pub trigger_type: Option<String>,
+    pub status: Option<String>,
+    pub search: Option<String>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClearAutomationRunsInput {
+    pub job_type: Option<String>,
+    pub trigger_type: Option<String>,
+    pub status: Option<String>,
+    pub search: Option<String>,
+    pub older_than_days: Option<i64>,
+    pub clear_all: Option<bool>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ForwardingInput {
     pub account_id: Option<i64>,

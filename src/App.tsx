@@ -27,6 +27,7 @@ import type {
   Account,
   AppStatus,
   AutomationRun,
+  AutomationRunQuery,
   BackupLog,
   ExportResult,
   ForwardingLog,
@@ -148,7 +149,7 @@ function App() {
       api.getSettings(),
       api.listForwardingLogs(80),
       api.listBackupLogs(40),
-      api.listAutomationRuns(80),
+      api.listAutomationRuns({}, 80),
       api.schedulerStatus()
     ]);
     setSettings(nextSettings);
@@ -572,6 +573,18 @@ function App() {
                 const result = await api.runBackupJob();
                 setNotice(result.message);
                 await loadAutomation();
+              })
+            }
+            onFilterAutomationRuns={(query) =>
+              runAction(async () => {
+                setAutomationRuns(await api.listAutomationRuns(query, 80));
+              })
+            }
+            onClearAutomationRuns={(query) =>
+              runAction(async () => {
+                const result = await api.clearAutomationRuns(query);
+                setNotice(result.message);
+                setAutomationRuns(await api.listAutomationRuns(query, 80));
               })
             }
           />
@@ -1808,7 +1821,9 @@ function SettingsView({
   busy,
   onSave,
   onRunForwarding,
-  onRunBackup
+  onRunBackup,
+  onFilterAutomationRuns,
+  onClearAutomationRuns
 }: {
   status: AppStatus;
   settings: Settings;
@@ -1820,12 +1835,24 @@ function SettingsView({
   onSave: (settings: Settings) => void;
   onRunForwarding: () => void;
   onRunBackup: () => void;
+  onFilterAutomationRuns: (query: AutomationRunQuery) => void;
+  onClearAutomationRuns: (query: AutomationRunQuery & { clear_all?: boolean }) => void;
 }) {
   const [draft, setDraft] = useState(settings);
+  const [runFilters, setRunFilters] = useState({ job_type: "all", trigger_type: "all", status: "all", search: "" });
   useEffect(() => setDraft(settings), [settings]);
 
   function setField<K extends keyof Settings>(key: K, value: Settings[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function automationRunQuery(): AutomationRunQuery {
+    return {
+      job_type: runFilters.job_type === "all" ? undefined : runFilters.job_type,
+      trigger_type: runFilters.trigger_type === "all" ? undefined : runFilters.trigger_type,
+      status: runFilters.status === "all" ? undefined : runFilters.status,
+      search: runFilters.search.trim() || undefined
+    };
   }
 
   return (
@@ -1985,6 +2012,63 @@ function SettingsView({
         <div className="panelHeader">
           <h2>Automation history</h2>
           <RefreshCw size={18} />
+        </div>
+        <div className="automationFilters">
+          <select
+            className="select"
+            value={runFilters.job_type}
+            onChange={(event) => setRunFilters({ ...runFilters, job_type: event.target.value })}
+          >
+            <option value="all">All jobs</option>
+            <option value="refresh">Refresh</option>
+            <option value="forwarding">Forwarding</option>
+            <option value="backup">Backup</option>
+          </select>
+          <select
+            className="select"
+            value={runFilters.trigger_type}
+            onChange={(event) => setRunFilters({ ...runFilters, trigger_type: event.target.value })}
+          >
+            <option value="all">All triggers</option>
+            <option value="manual">Manual</option>
+            <option value="schedule">Schedule</option>
+          </select>
+          <select
+            className="select"
+            value={runFilters.status}
+            onChange={(event) => setRunFilters({ ...runFilters, status: event.target.value })}
+          >
+            <option value="all">All statuses</option>
+            <option value="success">Success</option>
+            <option value="failed">Failed</option>
+          </select>
+          <input
+            className="input grow"
+            value={runFilters.search}
+            placeholder="Search detail"
+            onChange={(event) => setRunFilters({ ...runFilters, search: event.target.value })}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onFilterAutomationRuns(automationRunQuery());
+            }}
+          />
+          <button className="button secondary" disabled={busy} onClick={() => onFilterAutomationRuns(automationRunQuery())}>
+            <Search size={16} />
+            Apply
+          </button>
+          <button
+            className="button danger"
+            disabled={busy || automationRuns.length === 0}
+            onClick={() => {
+              const query = automationRunQuery();
+              const clearAll = !query.job_type && !query.trigger_type && !query.status && !query.search;
+              if (window.confirm(clearAll ? "Clear all automation history?" : "Clear matching automation history?")) {
+                onClearAutomationRuns({ ...query, clear_all: clearAll });
+              }
+            }}
+          >
+            <Trash2 size={16} />
+            Clear
+          </button>
         </div>
         <div className="logTable automationLogTable">
           <div className="logHeader">

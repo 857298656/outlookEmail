@@ -43,6 +43,8 @@ pub fn run() {
             delete_account,
             list_messages,
             create_demo_message,
+            mark_mail_messages,
+            delete_mail_messages,
             generate_oauth_auth_url,
             exchange_oauth_token,
             download_attachment,

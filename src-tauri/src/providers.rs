@@ -156,6 +156,51 @@ pub fn download_graph_attachment(
     })
 }
 
+pub fn mark_graph_message_read(account: &AccountCredentials, message_id: &str, is_read: bool) -> AppResult<()> {
+    let token = refresh_graph_access_token(account)?;
+    let client = http_client()?;
+    let url = format!(
+        "https://graph.microsoft.com/v1.0/me/messages/{}",
+        urlencoding::encode(message_id)
+    );
+    let response = client
+        .patch(url)
+        .bearer_auth(token.access_token)
+        .json(&json!({ "isRead": is_read }))
+        .send()
+        .map_err(network_error)?;
+    if !response.status().is_success() {
+        return Err(AppError::Internal(format!(
+            "Graph mark message failed: HTTP {} {}",
+            response.status(),
+            response.text().unwrap_or_default()
+        )));
+    }
+    Ok(())
+}
+
+pub fn delete_graph_message(account: &AccountCredentials, message_id: &str) -> AppResult<()> {
+    let token = refresh_graph_access_token(account)?;
+    let client = http_client()?;
+    let url = format!(
+        "https://graph.microsoft.com/v1.0/me/messages/{}",
+        urlencoding::encode(message_id)
+    );
+    let response = client
+        .delete(url)
+        .bearer_auth(token.access_token)
+        .send()
+        .map_err(network_error)?;
+    if !response.status().is_success() {
+        return Err(AppError::Internal(format!(
+            "Graph delete message failed: HTTP {} {}",
+            response.status(),
+            response.text().unwrap_or_default()
+        )));
+    }
+    Ok(())
+}
+
 pub fn fetch_imap_messages(account: &AccountCredentials, folder: &str, top: usize) -> AppResult<Vec<ProviderMessage>> {
     let host = account.imap_host.trim();
     if host.is_empty() {
@@ -221,6 +266,14 @@ pub fn fetch_imap_messages(account: &AccountCredentials, folder: &str, top: usiz
     let _ = session.logout();
     messages.sort_by(|a, b| b.received_at_sort.total_cmp(&a.received_at_sort));
     Ok(messages)
+}
+
+pub fn mark_imap_message_read(account: &AccountCredentials, folder: &str, message_id: &str, is_read: bool) -> AppResult<()> {
+    mutate_imap_message(account, folder, message_id, if is_read { "+FLAGS (\\Seen)" } else { "-FLAGS (\\Seen)" }, false)
+}
+
+pub fn delete_imap_message(account: &AccountCredentials, folder: &str, message_id: &str) -> AppResult<()> {
+    mutate_imap_message(account, folder, message_id, "+FLAGS (\\Deleted)", true)
 }
 
 pub fn generate_temp_email(settings: &Settings, input: &GenerateTempEmailInput, channel: Option<&CloudflareChannelCredential>) -> AppResult<TempEmailCredential> {
@@ -743,6 +796,58 @@ fn imap_mailbox_name(folder: &str) -> &'static str {
         "deleteditems" => "Deleted",
         _ => "INBOX",
     }
+}
+
+fn mutate_imap_message(
+    account: &AccountCredentials,
+    folder: &str,
+    message_id: &str,
+    operation: &str,
+    expunge: bool,
+) -> AppResult<()> {
+    let host = account.imap_host.trim();
+    if host.is_empty() {
+        return Err(AppError::InvalidInput("IMAP host is required".to_string()));
+    }
+    let password = if account.imap_password.trim().is_empty() {
+        account.password.as_str()
+    } else {
+        account.imap_password.as_str()
+    };
+    if password.trim().is_empty() {
+        return Err(AppError::InvalidInput("IMAP password is required".to_string()));
+    }
+    let uid = message_id
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| AppError::InvalidInput("IMAP message id is not a UID".to_string()))?;
+
+    let tls = native_tls::TlsConnector::builder()
+        .build()
+        .map_err(|err| AppError::Internal(format!("TLS setup failed: {err}")))?;
+    let client = imap::connect(
+        (host, u16::try_from(account.imap_port).unwrap_or(993)),
+        host,
+        &tls,
+    )
+    .map_err(|err| AppError::Internal(format!("IMAP connect failed: {err}")))?;
+    let mut session = client
+        .login(account.email.as_str(), password)
+        .map_err(|err| AppError::Internal(format!("IMAP login failed: {}", err.0)))?;
+    let mailbox = imap_mailbox_name(folder);
+    session
+        .select(mailbox)
+        .map_err(|err| AppError::Internal(format!("IMAP select {mailbox} failed: {err}")))?;
+    session
+        .uid_store(uid.to_string(), operation)
+        .map_err(|err| AppError::Internal(format!("IMAP update flags failed: {err}")))?;
+    if expunge {
+        session
+            .expunge()
+            .map_err(|err| AppError::Internal(format!("IMAP expunge failed: {err}")))?;
+    }
+    let _ = session.logout();
+    Ok(())
 }
 
 fn parse_imap_message(folder: &str, uid: u32, body: &[u8]) -> ProviderMessage {

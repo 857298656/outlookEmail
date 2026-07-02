@@ -87,15 +87,43 @@ pub fn delete_account(state: State<'_, AppState>, account_id: i64) -> AppResult<
 }
 
 #[tauri::command]
-pub fn list_messages(state: State<'_, AppState>, account_id: Option<i64>, folder: Option<String>) -> AppResult<Vec<MailMessage>> {
+pub fn list_messages(
+    state: State<'_, AppState>,
+    account_id: Option<i64>,
+    folder: Option<String>,
+    query: Option<MailMessageQuery>,
+) -> AppResult<Vec<MailMessage>> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.list_messages(account_id, folder)
+    match query {
+        Some(mut query) => {
+            if query.account_id.is_none() {
+                query.account_id = account_id;
+            }
+            if query.folder.is_none() {
+                query.folder = folder;
+            }
+            db.list_messages_query(query)
+        }
+        None => db.list_messages(account_id, folder),
+    }
 }
 
 #[tauri::command]
 pub fn create_demo_message(state: State<'_, AppState>, account_id: i64) -> AppResult<MailMessage> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.create_demo_message(account_id)
+}
+
+#[tauri::command]
+pub fn mark_mail_messages(state: State<'_, AppState>, input: MarkMailMessagesInput) -> AppResult<JobResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.mark_mail_messages(input)
+}
+
+#[tauri::command]
+pub fn delete_mail_messages(state: State<'_, AppState>, input: DeleteMailMessagesInput) -> AppResult<JobResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.delete_mail_messages(input)
 }
 
 #[tauri::command]

@@ -30,6 +30,7 @@ import type {
   ForwardingLog,
   Group,
   MailMessage,
+  MailMessageQuery,
   Project,
   ProjectAccount,
   SchedulerStatus,
@@ -41,8 +42,14 @@ import type {
 } from "./types";
 
 type View = "mail" | "accounts" | "temp" | "projects" | "settings";
+type MailFilters = {
+  search: string;
+  readState: "all" | "read" | "unread";
+  attachmentFilter: "all" | "attachments" | "plain";
+};
 
 const colors = ["#2563eb", "#16a34a", "#dc2626", "#7c3aed", "#0f766e", "#b45309"];
+const mailPageSize = 100;
 
 function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
@@ -65,6 +72,9 @@ function App() {
   const [selectedTempEmail, setSelectedTempEmail] = useState<string | undefined>();
   const [selectedTempMessageId, setSelectedTempMessageId] = useState<string | undefined>();
   const [folder, setFolder] = useState("all");
+  const [mailFilters, setMailFilters] = useState<MailFilters>({ search: "", readState: "all", attachmentFilter: "all" });
+  const [mailPage, setMailPage] = useState(0);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<number[]>([]);
   const [view, setView] = useState<View>("mail");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,11 +88,35 @@ function App() {
     return accounts.filter((account) => account.group_id === selectedGroupId);
   }, [accounts, selectedGroupId]);
 
+  function buildMailQuery(accountId = selectedAccountId, nextFolder = folder, filters = mailFilters, page = mailPage): MailMessageQuery {
+    return {
+      account_id: accountId,
+      folder: nextFolder,
+      search: filters.search.trim() || undefined,
+      read_state: filters.readState,
+      has_attachments:
+        filters.attachmentFilter === "attachments"
+          ? true
+          : filters.attachmentFilter === "plain"
+            ? false
+            : undefined,
+      limit: mailPageSize,
+      offset: page * mailPageSize
+    };
+  }
+
+  async function loadMailboxMessages(accountId = selectedAccountId, nextFolder = folder, filters = mailFilters, page = mailPage) {
+    const nextMessages = await api.listMessages(accountId, nextFolder, buildMailQuery(accountId, nextFolder, filters, page));
+    setMessages(nextMessages);
+    setSelectedMessageId((current) => (nextMessages.some((message) => message.id === current) ? current : nextMessages[0]?.id));
+    setSelectedMessageIds([]);
+  }
+
   async function loadStatus() {
     setStatus(await api.status());
   }
 
-  async function loadWorkspace(accountId = selectedAccountId, nextFolder = folder) {
+  async function loadWorkspace(accountId = selectedAccountId, nextFolder = folder, filters = mailFilters, page = mailPage) {
     const [nextGroups, nextTags, nextAccounts] = await Promise.all([
       api.listGroups(),
       api.listTags(),
@@ -93,9 +127,10 @@ function App() {
     setAccounts(nextAccounts);
     const firstAccountId = accountId ?? nextAccounts[0]?.id;
     setSelectedAccountId(firstAccountId);
-    const nextMessages = await api.listMessages(firstAccountId, nextFolder);
+    const nextMessages = await api.listMessages(firstAccountId, nextFolder, buildMailQuery(firstAccountId, nextFolder, filters, page));
     setMessages(nextMessages);
     setSelectedMessageId(nextMessages[0]?.id);
+    setSelectedMessageIds([]);
   }
 
   async function loadProjects(projectId?: number) {
@@ -225,6 +260,8 @@ function App() {
                 runAction(async () => {
                   const result = await api.runRefreshJob(selectedAccountId);
                   setNotice(result.message);
+                  await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
+                  await loadStatus();
                 })
               }
               disabled={busy}
@@ -243,33 +280,75 @@ function App() {
             selectedGroupId={selectedGroupId}
             selectedAccountId={selectedAccountId}
             selectedMessage={selectedMessage}
+            selectedMessageIds={selectedMessageIds}
             folder={folder}
+            filters={mailFilters}
+            page={mailPage}
+            hasNextPage={messages.length === mailPageSize}
             onGroupChange={(groupId) => {
               setSelectedGroupId(groupId);
               const nextAccount = groupId === "all" ? accounts[0] : accounts.find((account) => account.group_id === groupId);
               setSelectedAccountId(nextAccount?.id);
-              void runAction(async () => setMessages(await api.listMessages(nextAccount?.id, folder)));
+              setMailPage(0);
+              void runAction(async () => loadMailboxMessages(nextAccount?.id, folder, mailFilters, 0));
             }}
             onAccountSelect={(accountId) =>
               runAction(async () => {
                 setSelectedAccountId(accountId);
-                const nextMessages = await api.listMessages(accountId, folder);
-                setMessages(nextMessages);
-                setSelectedMessageId(nextMessages[0]?.id);
+                setMailPage(0);
+                await loadMailboxMessages(accountId, folder, mailFilters, 0);
               })
             }
             onFolderChange={(nextFolder) =>
               runAction(async () => {
                 setFolder(nextFolder);
-                setMessages(await api.listMessages(selectedAccountId, nextFolder));
+                setMailPage(0);
+                await loadMailboxMessages(selectedAccountId, nextFolder, mailFilters, 0);
               })
             }
             onMessageSelect={setSelectedMessageId}
+            onToggleMessageSelect={(messageId) =>
+              setSelectedMessageIds((current) =>
+                current.includes(messageId) ? current.filter((id) => id !== messageId) : [...current, messageId]
+              )
+            }
+            onSelectVisibleMessages={() => setSelectedMessageIds(messages.map((message) => message.id))}
+            onClearSelection={() => setSelectedMessageIds([])}
+            onFilterApply={(filters) =>
+              runAction(async () => {
+                setMailFilters(filters);
+                setMailPage(0);
+                await loadMailboxMessages(selectedAccountId, folder, filters, 0);
+              })
+            }
+            onPageChange={(nextPage) =>
+              runAction(async () => {
+                const page = Math.max(0, nextPage);
+                setMailPage(page);
+                await loadMailboxMessages(selectedAccountId, folder, mailFilters, page);
+              })
+            }
+            onMarkMessages={(messageIds, isRead) =>
+              runAction(async () => {
+                const result = await api.markMessagesRead(messageIds, isRead);
+                setNotice(result.message);
+                await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage);
+              })
+            }
+            onDeleteMessages={(messageIds) =>
+              runAction(async () => {
+                const result = await api.deleteMessages(messageIds);
+                setNotice(result.message);
+                await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage);
+                await loadStatus();
+              })
+            }
             onCreateDemo={() =>
               selectedAccountId
                 ? runAction(async () => {
                     await api.createDemoMessage(selectedAccountId);
-                    await loadWorkspace(selectedAccountId, folder);
+                    setMailPage(0);
+                    await loadWorkspace(selectedAccountId, folder, mailFilters, 0);
                   }, "Local message created")
                 : undefined
             }
@@ -533,11 +612,22 @@ function MailWorkspace({
   selectedGroupId,
   selectedAccountId,
   selectedMessage,
+  selectedMessageIds,
   folder,
+  filters,
+  page,
+  hasNextPage,
   onGroupChange,
   onAccountSelect,
   onFolderChange,
   onMessageSelect,
+  onToggleMessageSelect,
+  onSelectVisibleMessages,
+  onClearSelection,
+  onFilterApply,
+  onPageChange,
+  onMarkMessages,
+  onDeleteMessages,
   onCreateDemo,
   onDownloadAttachment
 }: {
@@ -547,14 +637,32 @@ function MailWorkspace({
   selectedGroupId: number | "all";
   selectedAccountId?: number;
   selectedMessage?: MailMessage;
+  selectedMessageIds: number[];
   folder: string;
+  filters: MailFilters;
+  page: number;
+  hasNextPage: boolean;
   onGroupChange: (groupId: number | "all") => void;
   onAccountSelect: (accountId: number) => void;
   onFolderChange: (folder: string) => void;
   onMessageSelect: (messageId: number) => void;
+  onToggleMessageSelect: (messageId: number) => void;
+  onSelectVisibleMessages: () => void;
+  onClearSelection: () => void;
+  onFilterApply: (filters: MailFilters) => void;
+  onPageChange: (page: number) => void;
+  onMarkMessages: (messageIds: number[], isRead: boolean) => void;
+  onDeleteMessages: (messageIds: number[]) => void;
   onCreateDemo: () => void;
   onDownloadAttachment: (message: MailMessage, attachmentId: string) => void;
 }) {
+  const [draftFilters, setDraftFilters] = useState(filters);
+  const selectedCount = selectedMessageIds.length;
+
+  useEffect(() => {
+    setDraftFilters(filters);
+  }, [filters]);
+
   return (
     <section className="workspaceGrid">
       <aside className="pane groupPane">
@@ -616,29 +724,122 @@ function MailWorkspace({
             <option value="deleteditems">Deleted</option>
           </select>
         </div>
+        <div className="messageTools">
+          <label className="searchBox messageSearch">
+            <Search size={15} />
+            <input
+              value={draftFilters.search}
+              placeholder="Search sender, subject, body"
+              onChange={(event) => setDraftFilters({ ...draftFilters, search: event.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") onFilterApply(draftFilters);
+              }}
+            />
+          </label>
+          <div className="filterRow">
+            <select
+              className="select"
+              value={draftFilters.readState}
+              onChange={(event) => setDraftFilters({ ...draftFilters, readState: event.target.value as MailFilters["readState"] })}
+            >
+              <option value="all">All mail</option>
+              <option value="unread">Unread</option>
+              <option value="read">Read</option>
+            </select>
+            <select
+              className="select"
+              value={draftFilters.attachmentFilter}
+              onChange={(event) => setDraftFilters({ ...draftFilters, attachmentFilter: event.target.value as MailFilters["attachmentFilter"] })}
+            >
+              <option value="all">Any files</option>
+              <option value="attachments">Has files</option>
+              <option value="plain">No files</option>
+            </select>
+            <button className="button compact secondary" onClick={() => onFilterApply(draftFilters)}>
+              <Search size={14} />
+              Apply
+            </button>
+          </div>
+        </div>
+        {selectedCount > 0 && (
+          <div className="bulkBar">
+            <span>{selectedCount} selected</span>
+            <button className="button compact secondary" onClick={() => onMarkMessages(selectedMessageIds, true)}>
+              <CheckCircle2 size={14} />
+              Read
+            </button>
+            <button className="button compact secondary" onClick={() => onMarkMessages(selectedMessageIds, false)}>
+              <Mail size={14} />
+              Unread
+            </button>
+            <button className="button compact danger" onClick={() => onDeleteMessages(selectedMessageIds)}>
+              <Trash2 size={14} />
+              Delete
+            </button>
+            <button className="button compact ghost" onClick={onClearSelection}>
+              Clear
+            </button>
+          </div>
+        )}
         {messages.map((message) => (
-          <button key={message.id} className="messageRow" onClick={() => onMessageSelect(message.id)}>
-            <span className="messageTop">
-              <strong>{message.subject || "(no subject)"}</strong>
-              <small>{formatDate(message.received_at)}</small>
-            </span>
-            <span className="sender">{message.sender}</span>
-            <span className="preview">{message.body_preview}</span>
-          </button>
+          <div key={message.id} className={selectedMessage?.id === message.id ? "messageRow active" : "messageRow"}>
+            <input
+              type="checkbox"
+              aria-label={`Select ${message.subject || "message"}`}
+              checked={selectedMessageIds.includes(message.id)}
+              onChange={() => onToggleMessageSelect(message.id)}
+            />
+            <button className={message.is_read ? "messageOpen" : "messageOpen unread"} onClick={() => onMessageSelect(message.id)}>
+              <span className="messageTop">
+                <strong>{message.subject || "(no subject)"}</strong>
+                <small>{formatDate(message.received_at)}</small>
+              </span>
+              <span className="sender">{message.sender}</span>
+              <span className="preview">{message.body_preview}</span>
+            </button>
+          </div>
         ))}
         {messages.length === 0 && <EmptyState icon={<Inbox size={24} />} text="No cached messages yet." />}
+        {messages.length > 0 && (
+          <div className="pagerBar">
+            <button className="button compact secondary" onClick={onSelectVisibleMessages}>
+              Select page
+            </button>
+            <span>Page {page + 1}</span>
+            <button className="button compact secondary" disabled={page === 0} onClick={() => onPageChange(page - 1)}>
+              Previous
+            </button>
+            <button className="button compact secondary" disabled={!hasNextPage} onClick={() => onPageChange(page + 1)}>
+              Next
+            </button>
+          </div>
+        )}
       </section>
 
       <article className="pane detailPane">
         {selectedMessage ? (
           <>
             <div className="detailHeader">
-              <h2>{selectedMessage.subject || "(no subject)"}</h2>
-              <p>{selectedMessage.sender}</p>
+              <div>
+                <h2>{selectedMessage.subject || "(no subject)"}</h2>
+                <p>{selectedMessage.sender}</p>
+              </div>
+              <div className="detailActions">
+                <button className="button compact secondary" onClick={() => onMarkMessages([selectedMessage.id], !selectedMessage.is_read)}>
+                  {selectedMessage.is_read ? <Mail size={14} /> : <CheckCircle2 size={14} />}
+                  {selectedMessage.is_read ? "Unread" : "Read"}
+                </button>
+                <button className="button compact danger" onClick={() => onDeleteMessages([selectedMessage.id])}>
+                  <Trash2 size={14} />
+                  Delete
+                </button>
+              </div>
             </div>
             <div className="metaGrid">
               <span>Folder</span>
               <strong>{selectedMessage.folder}</strong>
+              <span>Status</span>
+              <strong>{selectedMessage.is_read ? "Read" : "Unread"}</strong>
               <span>Received</span>
               <strong>{formatDate(selectedMessage.received_at)}</strong>
             </div>

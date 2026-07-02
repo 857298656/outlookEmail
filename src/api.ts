@@ -10,6 +10,7 @@ import type {
   ImportAccountsResult,
   JobResult,
   MailMessage,
+  MailMessageQuery,
   Project,
   ProjectAccount,
   ProjectAccountEvent,
@@ -189,11 +190,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       mockMessages = mockMessages.filter((message) => message.account_id !== args?.accountId);
       return undefined as T;
     case "list_messages":
-      return mockMessages.filter((message) => {
-        const accountId = args?.accountId as number | undefined;
-        const folder = args?.folder as string | undefined;
-        return (!accountId || message.account_id === accountId) && (!folder || folder === "all" || message.folder === folder);
-      }) as T;
+      return filterMockMessages(args) as T;
     case "create_demo_message": {
       const accountId = args?.accountId as number;
       const message: MailMessage = {
@@ -214,6 +211,25 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       };
       mockMessages = [message, ...mockMessages];
       return message as T;
+    }
+    case "mark_mail_messages": {
+      const input = args?.input as { message_ids: number[]; is_read: boolean };
+      const ids = new Set(input.message_ids);
+      let changed = 0;
+      mockMessages = mockMessages.map((message) => {
+        if (!ids.has(message.id)) return message;
+        changed += 1;
+        return { ...message, is_read: input.is_read };
+      });
+      return { success: true, message: `${input.is_read ? "Marked read" : "Marked unread"} ${changed} message(s)`, refreshed: changed, failed: 0 } as T;
+    }
+    case "delete_mail_messages": {
+      const input = args?.input as { message_ids: number[] };
+      const ids = new Set(input.message_ids);
+      const before = mockMessages.length;
+      mockMessages = mockMessages.filter((message) => !ids.has(message.id));
+      const changed = before - mockMessages.length;
+      return { success: true, message: `Deleted ${changed} message(s)`, refreshed: changed, failed: 0 } as T;
     }
     case "get_settings":
       return mockSettings as T;
@@ -467,6 +483,34 @@ function status(): AppStatus {
   };
 }
 
+function filterMockMessages(args?: Record<string, unknown>) {
+  const query = (args?.query ?? {}) as MailMessageQuery;
+  const accountId = query.account_id ?? (args?.accountId as number | undefined);
+  const folder = query.folder ?? (args?.folder as string | undefined);
+  const search = query.search?.trim().toLowerCase() ?? "";
+  const readState = query.read_state ?? "all";
+  const limit = query.limit ?? 200;
+  const offset = query.offset ?? 0;
+  return mockMessages
+    .filter((message) => {
+      const haystack = [
+        message.subject,
+        message.sender,
+        message.recipients,
+        message.body_preview,
+        message.body ?? ""
+      ].join(" ").toLowerCase();
+      return (
+        (!accountId || message.account_id === accountId) &&
+        (!folder || folder === "all" || message.folder === folder) &&
+        (!search || haystack.includes(search)) &&
+        (readState === "all" || (readState === "read" ? message.is_read : !message.is_read)) &&
+        (query.has_attachments === undefined || message.has_attachments === query.has_attachments)
+      );
+    })
+    .slice(offset, offset + limit);
+}
+
 function mockTempEmail(email: string, provider: string, channelId: number | null): TempEmail {
   return {
     id: Date.now() + Math.floor(Math.random() * 1000),
@@ -530,8 +574,21 @@ export const api = {
   importAccounts: (input: { raw: string; group_id?: number | null }) =>
     call<ImportAccountsResult>("import_accounts", { input }),
   deleteAccount: (accountId: number) => call<void>("delete_account", { accountId }),
-  listMessages: (accountId?: number, folder = "all") => call<MailMessage[]>("list_messages", { accountId, folder }),
+  listMessages: (accountId?: number, folder = "all", query: MailMessageQuery = {}) =>
+    call<MailMessage[]>("list_messages", {
+      accountId,
+      folder,
+      query: {
+        ...query,
+        account_id: query.account_id ?? accountId,
+        folder: query.folder ?? folder
+      }
+    }),
   createDemoMessage: (accountId: number) => call<MailMessage>("create_demo_message", { accountId }),
+  markMessagesRead: (messageIds: number[], isRead: boolean, syncRemote = true) =>
+    call<JobResult>("mark_mail_messages", { input: { message_ids: messageIds, is_read: isRead, sync_remote: syncRemote } }),
+  deleteMessages: (messageIds: number[], syncRemote = true) =>
+    call<JobResult>("delete_mail_messages", { input: { message_ids: messageIds, sync_remote: syncRemote } }),
   getSettings: () => call<Settings>("get_settings"),
   updateSettings: (settings: Settings) => call<Settings>("update_settings", { settings }),
   runForwardingJob: (input?: { account_id?: number; limit?: number }) =>

@@ -6,13 +6,22 @@ use crate::models::*;
 use crate::providers;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use directories::ProjectDirs;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub struct Database {
     conn: Connection,
     db_path: PathBuf,
     crypto_key: Option<[u8; 32]>,
+}
+
+#[derive(Debug, Clone)]
+struct MailMessageRef {
+    id: i64,
+    account_id: i64,
+    folder: String,
+    provider_message_id: String,
 }
 
 impl Database {
@@ -657,8 +666,26 @@ impl Database {
     }
 
     pub fn list_messages(&self, account_id: Option<i64>, folder: Option<String>) -> AppResult<Vec<MailMessage>> {
+        self.list_messages_query(MailMessageQuery {
+            account_id,
+            folder,
+            search: None,
+            read_state: None,
+            has_attachments: None,
+            limit: None,
+            offset: None,
+        })
+    }
+
+    pub fn list_messages_query(&self, query: MailMessageQuery) -> AppResult<Vec<MailMessage>> {
         self.require_unlocked()?;
-        let folder = folder.unwrap_or_else(|| "all".to_string());
+        let folder = normalize_mail_folder(query.folder.as_deref().unwrap_or("all"));
+        let read_state = normalize_read_state(query.read_state.as_deref())?;
+        let search = query.search.unwrap_or_default().trim().to_string();
+        let search_like = format!("%{}%", search);
+        let has_attachments = query.has_attachments.map(|value| if value { 1_i64 } else { 0_i64 });
+        let limit = query.limit.unwrap_or(200).clamp(1, 500);
+        let offset = query.offset.unwrap_or(0).max(0);
         let sql = String::from(
             "
             SELECT id, account_id, folder, provider_message_id, subject, sender, recipients,
@@ -667,14 +694,17 @@ impl Database {
             FROM retained_mail_messages
             WHERE (?1 IS NULL OR account_id = ?1)
               AND (?2 = 'all' OR folder = ?2)
+              AND (?3 = '' OR subject LIKE ?4 OR sender LIKE ?4 OR recipients LIKE ?4 OR body_preview LIKE ?4 OR COALESCE(body, '') LIKE ?4)
+              AND (?5 = 'all' OR (?5 = 'read' AND is_read = 1) OR (?5 = 'unread' AND is_read = 0))
+              AND (?6 IS NULL OR has_attachments = ?6)
             ORDER BY received_at_sort DESC, id DESC
-            LIMIT 200
+            LIMIT ?7 OFFSET ?8
             ",
         );
 
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(
-            params![account_id, folder],
+            params![query.account_id, folder, search, search_like, read_state, has_attachments, limit, offset],
             |row| {
                 Ok(MailMessage {
                     id: row.get(0)?,
@@ -731,6 +761,89 @@ impl Database {
             .into_iter()
             .find(|message| message.id == id)
             .ok_or_else(|| AppError::Internal("created message not found".to_string()))?)
+    }
+
+    pub fn mark_mail_messages(&self, input: MarkMailMessagesInput) -> AppResult<JobResult> {
+        self.require_unlocked()?;
+        let ids = normalize_message_ids(&input.message_ids)?;
+        let targets = self.mail_message_refs(&ids)?;
+        if targets.is_empty() {
+            return Err(AppError::InvalidInput("no matching messages found".to_string()));
+        }
+
+        let sync_remote = input.sync_remote.unwrap_or(true);
+        let mut failed = 0_usize;
+        let mut errors = Vec::new();
+        if sync_remote {
+            for target in &targets {
+                if let Err(err) = self.sync_remote_mark_message(target, input.is_read) {
+                    failed += 1;
+                    errors.push(format!("#{} {}: {}", target.id, target.provider_message_id, err));
+                }
+            }
+        }
+
+        let mut changed = 0_usize;
+        for id in &ids {
+            changed += self.conn.execute(
+                "
+                UPDATE retained_mail_messages
+                SET is_read = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                ",
+                params![if input.is_read { 1 } else { 0 }, id],
+            )?;
+        }
+
+        let action = if input.is_read { "mail.mark_read" } else { "mail.mark_unread" };
+        self.audit(action, "message", None, &format!("{} message(s)", changed))?;
+        Ok(JobResult {
+            success: failed == 0,
+            message: mail_action_message(
+                if input.is_read { "Marked read" } else { "Marked unread" },
+                changed,
+                failed,
+                &errors,
+            ),
+            refreshed: changed,
+            failed,
+        })
+    }
+
+    pub fn delete_mail_messages(&self, input: DeleteMailMessagesInput) -> AppResult<JobResult> {
+        self.require_unlocked()?;
+        let ids = normalize_message_ids(&input.message_ids)?;
+        let targets = self.mail_message_refs(&ids)?;
+        if targets.is_empty() {
+            return Err(AppError::InvalidInput("no matching messages found".to_string()));
+        }
+
+        let sync_remote = input.sync_remote.unwrap_or(true);
+        let mut failed = 0_usize;
+        let mut errors = Vec::new();
+        if sync_remote {
+            for target in &targets {
+                if let Err(err) = self.sync_remote_delete_message(target) {
+                    failed += 1;
+                    errors.push(format!("#{} {}: {}", target.id, target.provider_message_id, err));
+                }
+            }
+        }
+
+        let mut changed = 0_usize;
+        for id in &ids {
+            changed += self
+                .conn
+                .execute("DELETE FROM retained_mail_messages WHERE id = ?", [id])?;
+        }
+
+        self.audit("mail.deleted", "message", None, &format!("{} message(s)", changed))?;
+        Ok(JobResult {
+            success: failed == 0,
+            message: mail_action_message("Deleted", changed, failed, &errors),
+            refreshed: changed,
+            failed,
+        })
     }
 
     pub fn get_settings(&self) -> AppResult<Settings> {
@@ -2576,6 +2689,65 @@ impl Database {
         })
     }
 
+    fn mail_message_refs(&self, ids: &[i64]) -> AppResult<Vec<MailMessageRef>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "
+            SELECT id, account_id, folder, provider_message_id
+            FROM retained_mail_messages
+            WHERE id IN ({placeholders})
+            "
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(ids.iter()), |row| {
+            Ok(MailMessageRef {
+                id: row.get(0)?,
+                account_id: row.get(1)?,
+                folder: row.get(2)?,
+                provider_message_id: row.get(3)?,
+            })
+        })?;
+        collect_rows(rows)
+    }
+
+    fn sync_remote_mark_message(&self, target: &MailMessageRef, is_read: bool) -> AppResult<()> {
+        let account = self
+            .account_credentials(Some(target.account_id))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::InvalidInput("account not found".to_string()))?;
+        if target.provider_message_id.starts_with("local-demo-") {
+            return Ok(());
+        }
+        if should_use_graph(&account) {
+            providers::mark_graph_message_read(&account, &target.provider_message_id, is_read)
+        } else {
+            providers::mark_imap_message_read(&account, &target.folder, &target.provider_message_id, is_read)
+        }
+    }
+
+    fn sync_remote_delete_message(&self, target: &MailMessageRef) -> AppResult<()> {
+        let account = self
+            .account_credentials(Some(target.account_id))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::InvalidInput("account not found".to_string()))?;
+        if target.provider_message_id.starts_with("local-demo-") {
+            return Ok(());
+        }
+        if should_use_graph(&account) {
+            providers::delete_graph_message(&account, &target.provider_message_id)
+        } else {
+            providers::delete_imap_message(&account, &target.folder, &target.provider_message_id)
+        }
+    }
+
     fn audit(&self, action: &str, resource_type: &str, resource_id: Option<i64>, detail: &str) -> AppResult<()> {
         self.conn.execute(
             "
@@ -2613,6 +2785,50 @@ fn validate_password(password: &str) -> AppResult<()> {
         ));
     }
     Ok(())
+}
+
+fn normalize_message_ids(ids: &[i64]) -> AppResult<Vec<i64>> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+    for id in ids {
+        if *id > 0 && seen.insert(*id) {
+            normalized.push(*id);
+        }
+    }
+    if normalized.is_empty() {
+        return Err(AppError::InvalidInput("select at least one message".to_string()));
+    }
+    Ok(normalized)
+}
+
+fn normalize_mail_folder(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "inbox" => "inbox".to_string(),
+        "junk" | "junkemail" => "junkemail".to_string(),
+        "deleted" | "deleteditems" => "deleteditems".to_string(),
+        _ => "all".to_string(),
+    }
+}
+
+fn normalize_read_state(value: Option<&str>) -> AppResult<String> {
+    match value.unwrap_or("all").trim().to_ascii_lowercase().as_str() {
+        "" | "all" => Ok("all".to_string()),
+        "read" => Ok("read".to_string()),
+        "unread" => Ok("unread".to_string()),
+        _ => Err(AppError::InvalidInput("read_state must be all, read, or unread".to_string())),
+    }
+}
+
+fn mail_action_message(action: &str, changed: usize, failed: usize, errors: &[String]) -> String {
+    if failed == 0 {
+        return format!("{action} {changed} message(s)");
+    }
+    let preview = errors.iter().take(3).cloned().collect::<Vec<_>>().join("; ");
+    if errors.len() > 3 {
+        format!("{action} {changed} local message(s), {failed} remote sync failed: {preview}; ...")
+    } else {
+        format!("{action} {changed} local message(s), {failed} remote sync failed: {preview}")
+    }
 }
 
 fn normalize_email(value: &str) -> AppResult<String> {
@@ -2819,7 +3035,10 @@ fn project_account_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project
 #[cfg(test)]
 mod project_tests {
     use super::{normalize_project_key, Database};
-    use crate::models::{ClaimProjectAccountInput, CreateProjectInput, ProjectAccountActionInput};
+    use crate::models::{
+        ClaimProjectAccountInput, CreateProjectInput, DeleteMailMessagesInput,
+        MarkMailMessagesInput, ProjectAccountActionInput,
+    };
     use rusqlite::Connection;
     use std::path::PathBuf;
 
@@ -2874,5 +3093,57 @@ mod project_tests {
             .expect("success");
         assert_eq!(completed.status, "success");
         assert_eq!(db.get_project(project.id).expect("project").stats.success, 1);
+    }
+
+    #[test]
+    fn mail_message_mark_and_delete_updates_local_cache() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "INSERT INTO accounts (id, email, status, group_id) VALUES (1, 'one@example.com', 'active', 1)",
+                [],
+            )
+            .expect("insert account");
+        db.conn
+            .execute(
+                "
+                INSERT INTO retained_mail_messages
+                (id, account_id, folder, provider_message_id, subject, received_at, received_at_sort, is_read)
+                VALUES (10, 1, 'inbox', 'local-demo-test', 'Hello', '2026-01-01T00:00:00Z', 1, 0)
+                ",
+                [],
+            )
+            .expect("insert message");
+
+        let marked = db
+            .mark_mail_messages(MarkMailMessagesInput {
+                message_ids: vec![10],
+                is_read: true,
+                sync_remote: Some(false),
+            })
+            .expect("mark");
+        assert_eq!(marked.refreshed, 1);
+        assert!(db
+            .list_messages(Some(1), Some("all".to_string()))
+            .expect("messages")[0]
+            .is_read);
+
+        let deleted = db
+            .delete_mail_messages(DeleteMailMessagesInput {
+                message_ids: vec![10],
+                sync_remote: Some(false),
+            })
+            .expect("delete");
+        assert_eq!(deleted.refreshed, 1);
+        assert!(db
+            .list_messages(Some(1), Some("all".to_string()))
+            .expect("messages")
+            .is_empty());
     }
 }

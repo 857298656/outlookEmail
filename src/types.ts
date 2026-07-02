@@ -63,6 +63,16 @@ export type MailMessage = {
   attachments: AttachmentInfo[];
 };
 
+export type MailMessageQuery = {
+  account_id?: number;
+  folder?: string;
+  search?: string;
+  read_state?: "all" | "read" | "unread";
+  has_attachments?: boolean;
+  limit?: number;
+  offset?: number;
+};
+
 export type AttachmentInfo = {
   id: string;
   name: string;

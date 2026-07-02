@@ -70,6 +70,30 @@ pub struct MailMessage {
     pub attachments: Vec<AttachmentInfo>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct MailMessageQuery {
+    pub account_id: Option<i64>,
+    pub folder: Option<String>,
+    pub search: Option<String>,
+    pub read_state: Option<String>,
+    pub has_attachments: Option<bool>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MarkMailMessagesInput {
+    pub message_ids: Vec<i64>,
+    pub is_read: bool,
+    pub sync_remote: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeleteMailMessagesInput {
+    pub message_ids: Vec<i64>,
+    pub sync_remote: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachmentInfo {
     pub id: String,

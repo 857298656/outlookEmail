@@ -257,12 +257,97 @@ button:disabled {
   font-size: 13px;
 }
 
+.searchBox input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #17202a;
+}
+
+.messageTools {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #edf0f3;
+  background: #fbfdff;
+}
+
+.messageSearch {
+  margin: 0;
+}
+
+.filterRow,
+.bulkBar,
+.pagerBar,
+.detailActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.filterRow .select {
+  flex: 1;
+  min-width: 0;
+}
+
+.bulkBar,
+.pagerBar {
+  min-height: 46px;
+  padding: 0 14px;
+  border-bottom: 1px solid #edf0f3;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+}
+
+.pagerBar {
+  justify-content: flex-end;
+  border-top: 1px solid #edf0f3;
+  border-bottom: 0;
+}
+
 .messageRow {
   display: grid;
-  gap: 5px;
-  padding: 14px 16px;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 12px 14px;
   border-bottom: 1px solid #edf0f3;
   color: #17202a;
+}
+
+.messageRow input {
+  margin-top: 3px;
+}
+
+.messageOpen {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  text-align: left;
+}
+
+.messageOpen.unread .messageTop strong {
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.messageOpen.unread .messageTop strong::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 999px;
+  background: #2563eb;
+  vertical-align: 1px;
 }
 
 .messageTop {
@@ -287,6 +372,10 @@ button:disabled {
 }
 
 .detailHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
   padding-bottom: 18px;
   border-bottom: 1px solid #e5e7eb;
 }
@@ -756,6 +845,24 @@ button:disabled {
   border-color: #cfd8e3;
   background: #fff;
   color: #1f2937;
+}
+
+.button.compact {
+  min-height: 30px;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.button.ghost {
+  background: transparent;
+  color: #475569;
+}
+
+.button.danger {
+  border-color: #fecaca;
+  background: #fff;
+  color: #dc2626;
 }
 
 .fullWidth {

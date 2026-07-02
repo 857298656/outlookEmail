@@ -14,6 +14,8 @@ This version is intentionally local-first:
 
 The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag management, local retained-mail workspace, settings storage, Microsoft Graph OAuth, Graph mailbox sync, Graph attachment metadata/download, basic TLS IMAP sync, SMTP/Telegram/WeCom forwarding, WebDAV backup, in-app scheduling, desktop project account pools, and Windows desktop bundling.
 
+See [`docs/requirements-milestones.md`](docs/requirements-milestones.md) for the full requirement record, completed scope, unfinished scope, and milestone plan.
+
 ## Prerequisites
 
 - Node.js 22+

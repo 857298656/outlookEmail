@@ -1,0 +1,34 @@
+[package]
+name = "outlook-email-desktop"
+version = "0.1.0"
+description = "A local-first OutlookEmail desktop application"
+authors = ["OutlookEmail Desktop"]
+edition = "2021"
+
+[lib]
+name = "outlook_email_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+aes-gcm = "0.10"
+argon2 = "0.5"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+directories = "5"
+imap = "2.4"
+lettre = "0.11"
+mailparse = "0.15"
+native-tls = "0.2"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tauri = { version = "2", features = [] }
+thiserror = "2"
+urlencoding = "2"
+uuid = { version = "1", features = ["v4", "serde"] }

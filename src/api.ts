@@ -17,6 +17,7 @@ import type {
   Project,
   ProjectAccount,
   ProjectAccountEvent,
+  RestoreBackupResult,
   SchedulerStatus,
   Settings,
   Tag,
@@ -291,6 +292,20 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         failed: 0
       });
       return result as T;
+    }
+    case "restore_backup": {
+      const input = args?.input as { backup_log_id: number; confirm?: boolean };
+      if (!input?.confirm) throw new Error("restore confirmation is required");
+      const log = mockBackupLogs.find((item) => item.id === input.backup_log_id);
+      if (!log || log.status !== "success") throw new Error("successful backup log not found");
+      return ({
+        success: true,
+        message: `Restored local backup ${log.file_name}`,
+        restored_file: log.file_name,
+        safety_backup_path: "browser-pre-restore.sqlite",
+        replaced_database_path: "browser-preview.sqlite",
+        size: log.size
+      } satisfies RestoreBackupResult) as T;
     }
     case "list_forwarding_logs":
       return mockForwardingLogs.slice(0, (args?.limit as number | undefined) ?? 100) as T;
@@ -694,6 +709,8 @@ export const api = {
   runForwardingJob: (input?: { account_id?: number; limit?: number }) =>
     call<JobResult>("run_forwarding_job", { input }),
   runBackupJob: () => call<BackupResult>("run_backup_job"),
+  restoreBackup: (backupLogId: number) =>
+    call<RestoreBackupResult>("restore_backup", { input: { backup_log_id: backupLogId, confirm: true } }),
   listForwardingLogs: (limit = 100) => call<ForwardingLog[]>("list_forwarding_logs", { limit }),
   listBackupLogs: (limit = 100) => call<BackupLog[]>("list_backup_logs", { limit }),
   schedulerStatus: () => call<SchedulerStatus>("scheduler_status"),

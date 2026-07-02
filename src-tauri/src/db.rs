@@ -6,7 +6,7 @@ use crate::models::*;
 use crate::providers;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use directories::ProjectDirs;
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -1428,6 +1428,102 @@ impl Database {
             })
         })?;
         collect_rows(rows)
+    }
+
+    pub fn restore_backup(&mut self, input: RestoreBackupInput) -> AppResult<RestoreBackupResult> {
+        self.require_unlocked()?;
+        if !input.confirm {
+            return Err(AppError::InvalidInput(
+                "restore confirmation is required".to_string(),
+            ));
+        }
+
+        let log = self.get_backup_log(input.backup_log_id)?;
+        if log.status != "success" {
+            return Err(AppError::InvalidInput(
+                "only successful local backup snapshots can be restored".to_string(),
+            ));
+        }
+
+        let file_name = validate_local_backup_file_name(&log.file_name)?;
+        let backup_dir = backup_dir(&self.db_path)?;
+        std::fs::create_dir_all(&backup_dir).map_err(|err| AppError::Internal(err.to_string()))?;
+        let backup_dir = std::fs::canonicalize(&backup_dir).map_err(|err| AppError::Internal(err.to_string()))?;
+        let source_path = std::fs::canonicalize(backup_dir.join(&file_name))
+            .map_err(|err| AppError::InvalidInput(format!("local backup snapshot not found: {err}")))?;
+        if !source_path.starts_with(&backup_dir) {
+            return Err(AppError::InvalidInput(
+                "backup snapshot path is outside the local backup directory".to_string(),
+            ));
+        }
+
+        validate_sqlite_snapshot(&source_path)?;
+
+        let stamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
+        let safety_name = format!("pre-restore-{stamp}.sqlite");
+        let safety_path = unique_path(&backup_dir, &safety_name);
+        let safety_path_text = safety_path.to_string_lossy().to_string();
+        self.conn.execute("VACUUM INTO ?", [safety_path_text.as_str()])?;
+
+        let db_parent = self
+            .db_path
+            .parent()
+            .ok_or_else(|| AppError::Internal("database path has no parent directory".to_string()))?;
+        let replacement_path = unique_path(db_parent, &format!(".restore-{stamp}.sqlite"));
+        std::fs::copy(&source_path, &replacement_path).map_err(|err| AppError::Internal(err.to_string()))?;
+
+        let crypto_key = self.crypto_key;
+        let db_path = self.db_path.clone();
+        let memory_conn = Connection::open_in_memory()?;
+        let old_conn = std::mem::replace(&mut self.conn, memory_conn);
+        drop(old_conn);
+
+        let install_result = (|| -> AppResult<()> {
+            remove_sqlite_file_set(&db_path)?;
+            std::fs::rename(&replacement_path, &db_path).map_err(|err| AppError::Internal(err.to_string()))?;
+            Ok(())
+        })();
+
+        if let Err(err) = install_result {
+            let _ = std::fs::copy(&safety_path, &db_path);
+            self.conn = Connection::open(&db_path)?;
+            self.crypto_key = crypto_key;
+            return Err(err);
+        }
+
+        self.conn = Connection::open(&db_path)?;
+        self.crypto_key = crypto_key;
+        self.initialize_schema()?;
+        self.audit(
+            "backup.restored",
+            "backup",
+            Some(log.id),
+            &format!("{} restored; safety snapshot {}", log.file_name, safety_path_text),
+        )?;
+
+        Ok(RestoreBackupResult {
+            success: true,
+            message: format!("Restored local backup {}", log.file_name),
+            restored_file: log.file_name,
+            safety_backup_path: safety_path_text,
+            replaced_database_path: db_path.to_string_lossy().to_string(),
+            size: log.size,
+        })
+    }
+
+    fn get_backup_log(&self, backup_log_id: i64) -> AppResult<BackupLog> {
+        self.conn
+            .query_row(
+                "
+                SELECT id, target, status, file_name, size, error_message, created_at
+                FROM backup_logs
+                WHERE id = ?
+                ",
+                [backup_log_id],
+                backup_log_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| AppError::InvalidInput("backup log not found".to_string()))
     }
 
     pub fn list_automation_runs(&self, limit: Option<i64>) -> AppResult<Vec<AutomationRun>> {
@@ -3511,6 +3607,66 @@ fn backup_dir(db_path: &Path) -> AppResult<PathBuf> {
         .join("backups"))
 }
 
+fn validate_local_backup_file_name(value: &str) -> AppResult<String> {
+    let file_name = value.trim();
+    if file_name.is_empty()
+        || file_name == "."
+        || file_name == ".."
+        || file_name.contains('/')
+        || file_name.contains('\\')
+        || !file_name.ends_with(".sqlite")
+    {
+        return Err(AppError::InvalidInput(
+            "invalid local backup snapshot file name".to_string(),
+        ));
+    }
+    Ok(file_name.to_string())
+}
+
+fn validate_sqlite_snapshot(path: &Path) -> AppResult<()> {
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let integrity: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    if integrity != "ok" {
+        return Err(AppError::InvalidInput(format!(
+            "backup snapshot failed SQLite integrity check: {integrity}"
+        )));
+    }
+    let schema_tables: i64 = conn.query_row(
+        "
+        SELECT COUNT(*)
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name IN ('app_config', 'accounts', 'retained_mail_messages')
+        ",
+        [],
+        |row| row.get(0),
+    )?;
+    if schema_tables < 3 {
+        return Err(AppError::InvalidInput(
+            "backup snapshot does not look like an OutlookEmail database".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn remove_sqlite_file_set(db_path: &Path) -> AppResult<()> {
+    for path in sqlite_file_set(db_path) {
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|err| AppError::Internal(err.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
+fn sqlite_file_set(db_path: &Path) -> Vec<PathBuf> {
+    let path_text = db_path.to_string_lossy();
+    vec![
+        db_path.to_path_buf(),
+        PathBuf::from(format!("{path_text}-wal")),
+        PathBuf::from(format!("{path_text}-shm")),
+    ]
+}
+
 fn exports_dir(db_path: &Path) -> AppResult<PathBuf> {
     Ok(db_path
         .parent()
@@ -3609,6 +3765,18 @@ fn project_account_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project
     })
 }
 
+fn backup_log_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BackupLog> {
+    Ok(BackupLog {
+        id: row.get(0)?,
+        target: row.get(1)?,
+        status: row.get(2)?,
+        file_name: row.get(3)?,
+        size: row.get(4)?,
+        error_message: row.get(5)?,
+        created_at: row.get(6)?,
+    })
+}
+
 fn automation_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AutomationRun> {
     Ok(AutomationRun {
         id: row.get(0)?,
@@ -3626,12 +3794,12 @@ fn automation_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Automati
 
 #[cfg(test)]
 mod project_tests {
-    use super::{normalize_project_key, Database};
+    use super::{backup_dir, normalize_project_key, Database};
     use crate::models::{
-        ClaimProjectAccountInput, CreateProjectInput, DeleteMailMessagesInput,
-        AutomationRunQuery, ClearAutomationRunsInput, ExportAccountsInput,
-        ExportMailMessagesInput, MarkMailMessagesInput,
-        ProjectAccountActionInput, RefreshInput,
+        AutomationRunQuery, ClaimProjectAccountInput, ClearAutomationRunsInput,
+        CreateProjectInput, DeleteMailMessagesInput, ExportAccountsInput,
+        ExportMailMessagesInput, MarkMailMessagesInput, ProjectAccountActionInput,
+        RefreshInput, RestoreBackupInput,
     };
     use rusqlite::Connection;
     use std::path::PathBuf;
@@ -3856,5 +4024,57 @@ mod project_tests {
             .expect("clear failed");
         assert_eq!(cleared.refreshed, 1);
         assert_eq!(db.list_automation_runs(Some(10)).expect("remaining").len(), 1);
+    }
+
+    #[test]
+    fn restores_database_from_local_backup_snapshot() {
+        let root = std::env::temp_dir().join(format!("outlook-email-restore-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let db_path = root.join("test.sqlite");
+        let conn = Connection::open(&db_path).expect("open file db");
+        let mut db = Database {
+            conn,
+            db_path,
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "INSERT INTO accounts (id, email, status, group_id) VALUES (1, 'before@example.com', 'active', 1)",
+                [],
+            )
+            .expect("insert first account");
+
+        let backup_dir = backup_dir(&db.db_path).expect("backup dir");
+        std::fs::create_dir_all(&backup_dir).expect("create backup dir");
+        let file_name = "outlook-email-test-restore.sqlite";
+        let backup_path = backup_dir.join(file_name);
+        let backup_path_text = backup_path.to_string_lossy().to_string();
+        db.conn
+            .execute("VACUUM INTO ?", [backup_path_text.as_str()])
+            .expect("vacuum backup");
+        let size = backup_path.metadata().expect("backup metadata").len() as i64;
+        db.insert_backup_log("local-test", "success", file_name, size, None)
+            .expect("backup log");
+
+        db.conn
+            .execute(
+                "INSERT INTO accounts (id, email, status, group_id) VALUES (2, 'after@example.com', 'active', 1)",
+                [],
+            )
+            .expect("insert second account");
+        assert_eq!(db.list_accounts().expect("accounts before restore").len(), 2);
+
+        let result = db
+            .restore_backup(RestoreBackupInput {
+                backup_log_id: 1,
+                confirm: true,
+            })
+            .expect("restore backup");
+        assert!(result.success);
+        assert!(std::path::Path::new(&result.safety_backup_path).exists());
+        let accounts = db.list_accounts().expect("accounts after restore");
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].email, "before@example.com");
     }
 }

@@ -258,6 +258,12 @@ pub fn run_backup_job(state: State<'_, AppState>) -> AppResult<BackupResult> {
 }
 
 #[tauri::command]
+pub fn restore_backup(state: State<'_, AppState>, input: RestoreBackupInput) -> AppResult<RestoreBackupResult> {
+    let mut db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.restore_backup(input)
+}
+
+#[tauri::command]
 pub fn list_forwarding_logs(state: State<'_, AppState>, limit: Option<i64>) -> AppResult<Vec<ForwardingLog>> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.list_forwarding_logs(limit)

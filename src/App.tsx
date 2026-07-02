@@ -11,6 +11,7 @@ import {
   Mail,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Settings as SettingsIcon,
   Tags,
@@ -120,7 +121,12 @@ function App() {
     setStatus(await api.status());
   }
 
-  async function loadWorkspace(accountId = selectedAccountId, nextFolder = folder, filters = mailFilters, page = mailPage) {
+  async function loadWorkspace(
+    accountId: number | undefined | null = selectedAccountId,
+    nextFolder = folder,
+    filters = mailFilters,
+    page = mailPage
+  ) {
     const [nextGroups, nextTags, nextAccounts] = await Promise.all([
       api.listGroups(),
       api.listTags(),
@@ -129,7 +135,7 @@ function App() {
     setGroups(nextGroups);
     setTags(nextTags);
     setAccounts(nextAccounts);
-    const firstAccountId = accountId ?? nextAccounts[0]?.id;
+    const firstAccountId = accountId === null ? nextAccounts[0]?.id : accountId ?? nextAccounts[0]?.id;
     setSelectedAccountId(firstAccountId);
     const nextMessages = await api.listMessages(firstAccountId, nextFolder, buildMailQuery(firstAccountId, nextFolder, filters, page));
     setMessages(nextMessages);
@@ -159,11 +165,11 @@ function App() {
     setSchedulerStatus(nextSchedulerStatus);
   }
 
-  async function loadTempWorkspace(email = selectedTempEmail) {
+  async function loadTempWorkspace(email: string | undefined | null = selectedTempEmail) {
     const [nextTempEmails, nextChannels] = await Promise.all([api.listTempEmails(), api.listCloudflareChannels()]);
     setTempEmails(nextTempEmails);
     setCloudflareChannels(nextChannels);
-    const nextEmail = email ?? nextTempEmails[0]?.email;
+    const nextEmail = email === null ? nextTempEmails[0]?.email : email ?? nextTempEmails[0]?.email;
     setSelectedTempEmail(nextEmail);
     const nextMessages = nextEmail ? await api.listTempEmailMessages(nextEmail) : [];
     setTempMessages(nextMessages);
@@ -573,6 +579,21 @@ function App() {
                 const result = await api.runBackupJob();
                 setNotice(result.message);
                 await loadAutomation();
+              })
+            }
+            onRestoreBackup={(backupLogId) =>
+              runAction(async () => {
+                const result = await api.restoreBackup(backupLogId);
+                const restoredFilters: MailFilters = { search: "", readState: "all", attachmentFilter: "all" };
+                setFolder("all");
+                setMailFilters(restoredFilters);
+                setMailPage(0);
+                setNotice(`${result.message}. Safety snapshot: ${result.safety_backup_path}`);
+                await loadStatus();
+                await loadWorkspace(null, "all", restoredFilters, 0);
+                await loadProjects();
+                await loadAutomation();
+                await loadTempWorkspace(null);
               })
             }
             onFilterAutomationRuns={(query) =>
@@ -1822,6 +1843,7 @@ function SettingsView({
   onSave,
   onRunForwarding,
   onRunBackup,
+  onRestoreBackup,
   onFilterAutomationRuns,
   onClearAutomationRuns
 }: {
@@ -1835,6 +1857,7 @@ function SettingsView({
   onSave: (settings: Settings) => void;
   onRunForwarding: () => void;
   onRunBackup: () => void;
+  onRestoreBackup: (backupLogId: number) => void;
   onFilterAutomationRuns: (query: AutomationRunQuery) => void;
   onClearAutomationRuns: (query: AutomationRunQuery & { clear_all?: boolean }) => void;
 }) {
@@ -2133,6 +2156,7 @@ function SettingsView({
             <span>Status</span>
             <span>Size</span>
             <span>Target</span>
+            <span>Actions</span>
           </div>
           {backupLogs.map((log) => (
             <div className="logRow" key={log.id}>
@@ -2141,6 +2165,20 @@ function SettingsView({
               <StatusPill status={log.status} />
               <span>{formatBytes(log.size)}</span>
               <span>{log.error_message || log.target}</span>
+              <span className="rowActions">
+                <button
+                  className="iconMini"
+                  title="Restore backup"
+                  disabled={busy || log.status !== "success"}
+                  onClick={() => {
+                    if (window.confirm("Restore the current workspace from this backup? A safety snapshot will be created first.")) {
+                      onRestoreBackup(log.id);
+                    }
+                  }}
+                >
+                  <RotateCcw size={14} />
+                </button>
+              </span>
             </div>
           ))}
         </div>

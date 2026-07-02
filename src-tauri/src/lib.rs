@@ -67,6 +67,7 @@ pub fn run() {
             update_settings,
             run_forwarding_job,
             run_backup_job,
+            restore_backup,
             list_forwarding_logs,
             list_backup_logs,
             scheduler_status,

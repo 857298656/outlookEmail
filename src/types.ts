@@ -149,6 +149,15 @@ export type BackupResult = {
   size: number;
 };
 
+export type RestoreBackupResult = {
+  success: boolean;
+  message: string;
+  restored_file: string;
+  safety_backup_path: string;
+  replaced_database_path: string;
+  size: number;
+};
+
 export type ExportResult = {
   path: string;
   file_name: string;

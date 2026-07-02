@@ -10,7 +10,7 @@ The application is a single-user local desktop app. It does not expose a public 
 
 - React/Vite renders the desktop UI.
 - Tauri commands are the boundary between UI and native services.
-- SQLite stores configuration, accounts, cached mail metadata/body content, temp-mail metadata, forwarding logs, project state, share exports, and audit logs.
+- SQLite stores configuration, accounts, cached mail metadata/body content, temp-mail metadata, forwarding logs, backup logs, project state, share exports, and audit logs.
 - Secrets are encrypted with AES-GCM using a key derived from the local app password.
 
 ## Implemented modules
@@ -27,7 +27,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Local HTML/CSV exports for cached mail, account inventory, and project account pools
 - GPTMail, DuckMail, and Cloudflare temp-mail management
 - SMTP, Telegram, and WeCom forwarding for cached messages
-- WebDAV backup from a consistent SQLite snapshot
+- WebDAV backup from a consistent SQLite snapshot with local restore
 - Background scheduler inside the desktop process
 - Unified automation run history with filtering and clearing for manual and scheduled refresh/forwarding/backup jobs
 - Desktop project account pools
@@ -46,6 +46,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Refresh failures are recorded on the account and in `refresh_logs`.
 - Forwarding is controlled by a per-account `forward_enabled` flag and deduplicated through `forwarding_logs`.
 - Backups are created with SQLite `VACUUM INTO`, stored locally under the app data backup directory, then uploaded with WebDAV `PUT`.
+- Restores are limited to successful backup log entries that resolve to local `.sqlite` snapshots under the app backup directory. The restore command validates the snapshot with SQLite `integrity_check`, creates a pre-restore safety snapshot, replaces the current database file set, reopens SQLite, and audits the restore.
 - Scheduled jobs only run while the local workspace is unlocked.
 - Manual and scheduled automation jobs append status, counts, duration, and detail into `automation_runs`; the Settings UI can filter by job, trigger, status, and detail text before clearing matching rows.
 - Projects synchronize account scope into `project_accounts` and record claim/result events in `project_account_events`.
@@ -58,5 +59,5 @@ The application is a single-user local desktop app. It does not expose a public 
 - More provider-specific folder discovery
 - Safer HTML body rendering policy for cached messages
 - Revocable share-link workflow and optional local HTTP API
-- Retry queue and backup restore workflow
+- Retry queue for failed remote operations and automation jobs
 - Cloudflare AI username generation and advanced batch generation

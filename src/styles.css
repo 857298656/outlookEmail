@@ -1013,7 +1013,7 @@ button:disabled {
 
 .backupLogTable .logHeader,
 .backupLogTable .logRow {
-  grid-template-columns: 150px minmax(190px, 1fr) 100px 100px minmax(280px, 1.4fr);
+  grid-template-columns: 150px minmax(190px, 1fr) 100px 100px minmax(240px, 1.4fr) 90px;
 }
 
 .automationLogTable .logHeader,

@@ -195,6 +195,22 @@ pub struct BackupResult {
     pub size: i64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RestoreBackupInput {
+    pub backup_log_id: i64,
+    pub confirm: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RestoreBackupResult {
+    pub success: bool,
+    pub message: String,
+    pub restored_file: String,
+    pub safety_backup_path: String,
+    pub replaced_database_path: String,
+    pub size: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SchedulerStatus {
     pub last_refresh_at: Option<String>,

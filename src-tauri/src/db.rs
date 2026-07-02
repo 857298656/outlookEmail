@@ -743,9 +743,11 @@ impl Database {
         settings.gptmail_base_url = self
             .get_config("gptmail_base_url")?
             .unwrap_or(settings.gptmail_base_url);
+        settings.gptmail_api_key = self.get_config_secret("gptmail_api_key")?;
         settings.duckmail_base_url = self
             .get_config("duckmail_base_url")?
             .unwrap_or(settings.duckmail_base_url);
+        settings.duckmail_api_key = self.get_config_secret("duckmail_api_key")?;
         settings.webdav_url = self.get_config("webdav_url")?.unwrap_or_default();
         settings.webdav_username = self.get_config("webdav_username")?.unwrap_or_default();
         settings.webdav_password = self.get_config_secret("webdav_password")?;
@@ -779,7 +781,9 @@ impl Database {
         self.set_config("graph_client_id", &settings.graph_client_id)?;
         self.set_config("oauth_redirect_uri", &settings.oauth_redirect_uri)?;
         self.set_config("gptmail_base_url", &settings.gptmail_base_url)?;
+        self.set_config_secret("gptmail_api_key", &settings.gptmail_api_key)?;
         self.set_config("duckmail_base_url", &settings.duckmail_base_url)?;
+        self.set_config_secret("duckmail_api_key", &settings.duckmail_api_key)?;
         self.set_config("webdav_url", &settings.webdav_url)?;
         self.set_config("webdav_username", &settings.webdav_username)?;
         self.set_config_secret("webdav_password", &settings.webdav_password)?;
@@ -1161,6 +1165,319 @@ impl Database {
         Ok(())
     }
 
+    pub fn list_temp_emails(&self) -> AppResult<Vec<TempEmail>> {
+        self.require_unlocked()?;
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT te.id, te.email, te.provider, te.status, te.channel_id,
+                   COUNT(tm.id) AS message_count, te.last_refresh_at,
+                   COALESCE(te.last_refresh_status, 'never'), te.last_refresh_error,
+                   te.created_at, te.updated_at
+            FROM temp_emails te
+            LEFT JOIN temp_email_messages tm ON tm.email_address = te.email
+            GROUP BY te.id
+            ORDER BY te.updated_at DESC, te.id DESC
+            ",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(TempEmail {
+                id: row.get(0)?,
+                email: row.get(1)?,
+                provider: row.get(2)?,
+                status: row.get(3)?,
+                channel_id: row.get(4)?,
+                message_count: row.get(5)?,
+                last_refresh_at: row.get(6)?,
+                last_refresh_status: row.get(7)?,
+                last_refresh_error: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+            })
+        })?;
+        collect_rows(rows)
+    }
+
+    pub fn list_temp_email_messages(&self, email: String) -> AppResult<Vec<TempEmailMessage>> {
+        self.require_unlocked()?;
+        let email = normalize_email(&email)?;
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT id, message_id, email_address, from_address, subject, content,
+                   html_content, has_html, COALESCE(timestamp, 0), raw_content, created_at
+            FROM temp_email_messages
+            WHERE email_address = ?
+            ORDER BY timestamp DESC, id DESC
+            LIMIT 200
+            ",
+        )?;
+        let rows = stmt.query_map([email], temp_message_from_row)?;
+        collect_rows(rows)
+    }
+
+    pub fn import_temp_emails(&self, input: ImportTempEmailsInput) -> AppResult<ImportAccountsResult> {
+        self.require_unlocked()?;
+        let provider = normalize_temp_provider(&input.provider)?;
+        if provider == "cloudflare" {
+            self.ensure_cloudflare_channel_exists(input.channel_id)?;
+        }
+        let mut imported = 0_usize;
+        let mut skipped = 0_usize;
+        for line in input.raw.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')) {
+            let parts = split_legacy_line(line);
+            let Some(raw_email) = parts.first() else {
+                skipped += 1;
+                continue;
+            };
+            let Ok(email) = normalize_email(raw_email) else {
+                skipped += 1;
+                continue;
+            };
+            let mut credential = TempEmailCredential {
+                id: 0,
+                email,
+                provider: provider.clone(),
+                channel_id: if provider == "cloudflare" { input.channel_id } else { None },
+                provider_token: String::new(),
+                provider_account_id: String::new(),
+                provider_password: String::new(),
+            };
+            if provider == "duckmail" {
+                credential.provider_password = parts.get(1).cloned().unwrap_or_default();
+            } else if provider == "cloudflare" {
+                credential.provider_account_id = parts.get(1).cloned().unwrap_or_default();
+            }
+            if self.upsert_temp_email_credential(&credential)? {
+                imported += 1;
+            } else {
+                skipped += 1;
+            }
+        }
+        self.audit("temp_email.imported", "temp_email", None, &format!("{imported} imported"))?;
+        Ok(ImportAccountsResult { imported, skipped })
+    }
+
+    pub fn generate_temp_email(&self, input: GenerateTempEmailInput) -> AppResult<TempEmail> {
+        self.require_unlocked()?;
+        let provider = normalize_temp_provider(&input.provider)?;
+        let mut input = input;
+        input.provider = provider.clone();
+        let channel = if provider == "cloudflare" {
+            Some(self.cloudflare_channel_credential(input.channel_id)?)
+        } else {
+            None
+        };
+        let settings = self.get_settings()?;
+        let credential = providers::generate_temp_email(&settings, &input, channel.as_ref())?;
+        self.upsert_temp_email_credential(&credential)?;
+        self.audit("temp_email.generated", "temp_email", None, &credential.email)?;
+        self.list_temp_emails()?
+            .into_iter()
+            .find(|item| item.email == credential.email)
+            .ok_or_else(|| AppError::Internal("generated temp email not found".to_string()))
+    }
+
+    pub fn refresh_temp_email_messages(&self, email: String) -> AppResult<JobResult> {
+        self.require_unlocked()?;
+        let credential = self.temp_email_credential(&email)?;
+        let settings = self.get_settings()?;
+        let channel = if credential.provider == "cloudflare" {
+            Some(self.cloudflare_channel_credential(credential.channel_id)?)
+        } else {
+            None
+        };
+        match providers::fetch_temp_messages(&settings, &credential, channel.as_ref(), 50) {
+            Ok(messages) => {
+                let saved = self.upsert_temp_messages(&credential.email, &messages)?;
+                self.conn.execute(
+                    "
+                    UPDATE temp_emails
+                    SET last_refresh_at = CURRENT_TIMESTAMP,
+                        last_refresh_status = 'success',
+                        last_refresh_error = NULL,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    ",
+                    [credential.id],
+                )?;
+                self.audit("temp_email.refreshed", "temp_email", Some(credential.id), &credential.email)?;
+                Ok(JobResult {
+                    success: true,
+                    message: format!("Refreshed {} temp message(s)", messages.len()),
+                    refreshed: saved,
+                    failed: 0,
+                })
+            }
+            Err(err) => {
+                let message = err.to_string();
+                self.conn.execute(
+                    "
+                    UPDATE temp_emails
+                    SET last_refresh_at = CURRENT_TIMESTAMP,
+                        last_refresh_status = 'failed',
+                        last_refresh_error = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    ",
+                    params![message, credential.id],
+                )?;
+                Err(err)
+            }
+        }
+    }
+
+    pub fn delete_temp_email(&self, email: String) -> AppResult<()> {
+        self.require_unlocked()?;
+        let credential = self.temp_email_credential(&email)?;
+        let channel = if credential.provider == "cloudflare" {
+            Some(self.cloudflare_channel_credential(credential.channel_id)?)
+        } else {
+            None
+        };
+        let _ = providers::delete_temp_remote(&credential, channel.as_ref());
+        self.conn.execute("DELETE FROM temp_email_messages WHERE email_address = ?", [credential.email.as_str()])?;
+        self.conn.execute("DELETE FROM temp_emails WHERE id = ?", [credential.id])?;
+        self.audit("temp_email.deleted", "temp_email", Some(credential.id), &credential.email)?;
+        Ok(())
+    }
+
+    pub fn list_cloudflare_channels(&self) -> AppResult<Vec<CloudflareChannel>> {
+        self.require_unlocked()?;
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT c.id, c.name, c.worker_domain, COALESCE(c.email_domains, ''),
+                   c.admin_password_enc, c.enabled, c.is_default, c.created_at, c.updated_at,
+                   COUNT(te.id) AS reference_count
+            FROM cloudflare_channels c
+            LEFT JOIN temp_emails te ON te.provider = 'cloudflare' AND te.channel_id = c.id
+            GROUP BY c.id
+            ORDER BY c.is_default DESC, c.name ASC, c.id ASC
+            ",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let domains: String = row.get(3)?;
+            let admin_password: String = row.get(4)?;
+            Ok(CloudflareChannel {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                worker_domain: row.get(2)?,
+                email_domains: parse_domain_list(&domains),
+                admin_password_configured: !admin_password.is_empty(),
+                enabled: row.get::<_, i64>(5)? == 1,
+                is_default: row.get::<_, i64>(6)? == 1,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+                reference_count: row.get(9)?,
+            })
+        })?;
+        collect_rows(rows)
+    }
+
+    pub fn upsert_cloudflare_channel(&self, input: UpsertCloudflareChannelInput) -> AppResult<CloudflareChannel> {
+        self.require_unlocked()?;
+        let name = input.name.trim();
+        let worker_domain = input.worker_domain.trim().trim_end_matches('/').to_string();
+        if name.is_empty() || worker_domain.is_empty() {
+            return Err(AppError::InvalidInput("Cloudflare channel name and worker domain are required".to_string()));
+        }
+        let domains = serialize_domain_list(&input.email_domains);
+        let admin_password_enc = match input.admin_password.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            Some(secret) => self.encrypt_optional_secret(secret)?,
+            None => String::new(),
+        };
+
+        if input.is_default {
+            self.conn.execute("UPDATE cloudflare_channels SET is_default = 0", [])?;
+        }
+
+        let channel_id = if let Some(id) = input.id {
+            let existing_password: String = self
+                .conn
+                .query_row("SELECT admin_password_enc FROM cloudflare_channels WHERE id = ?", [id], |row| row.get(0))
+                .optional()?
+                .ok_or_else(|| AppError::InvalidInput("Cloudflare channel not found".to_string()))?;
+            let next_password = if admin_password_enc.is_empty() {
+                existing_password
+            } else {
+                admin_password_enc
+            };
+            self.conn.execute(
+                "
+                UPDATE cloudflare_channels
+                SET name = ?, worker_domain = ?, email_domains = ?, admin_password_enc = ?,
+                    enabled = ?, is_default = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                ",
+                params![
+                    name,
+                    worker_domain,
+                    domains,
+                    next_password,
+                    if input.enabled { 1 } else { 0 },
+                    if input.is_default { 1 } else { 0 },
+                    id
+                ],
+            )?;
+            id
+        } else {
+            self.conn.execute(
+                "
+                INSERT INTO cloudflare_channels
+                (name, worker_domain, email_domains, admin_password_enc, enabled, is_default)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ",
+                params![
+                    name,
+                    worker_domain,
+                    domains,
+                    admin_password_enc,
+                    if input.enabled { 1 } else { 0 },
+                    if input.is_default { 1 } else { 0 }
+                ],
+            )?;
+            self.conn.last_insert_rowid()
+        };
+        if input.is_default {
+            self.conn.execute(
+                "UPDATE cloudflare_channels SET is_default = CASE WHEN id = ? THEN 1 ELSE 0 END",
+                [channel_id],
+            )?;
+        }
+        self.audit("cloudflare_channel.saved", "cloudflare_channel", Some(channel_id), name)?;
+        self.list_cloudflare_channels()?
+            .into_iter()
+            .find(|channel| channel.id == channel_id)
+            .ok_or_else(|| AppError::Internal("saved Cloudflare channel not found".to_string()))
+    }
+
+    pub fn delete_cloudflare_channel(&self, channel_id: i64) -> AppResult<()> {
+        self.require_unlocked()?;
+        let references: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM temp_emails WHERE provider = 'cloudflare' AND channel_id = ?",
+            [channel_id],
+            |row| row.get(0),
+        )?;
+        if references > 0 {
+            return Err(AppError::InvalidInput(
+                "Cloudflare channel is still referenced by temp emails".to_string(),
+            ));
+        }
+        self.conn.execute("DELETE FROM cloudflare_channels WHERE id = ?", [channel_id])?;
+        self.audit("cloudflare_channel.deleted", "cloudflare_channel", Some(channel_id), "")?;
+        Ok(())
+    }
+
+    pub fn test_cloudflare_channel(&self, channel_id: i64) -> AppResult<JobResult> {
+        self.require_unlocked()?;
+        let channel = self.cloudflare_channel_credential(Some(channel_id))?;
+        let message = providers::test_cloudflare_channel(&channel)?;
+        Ok(JobResult {
+            success: true,
+            message,
+            refreshed: 1,
+            failed: 0,
+        })
+    }
+
     fn initialize_schema(&mut self) -> AppResult<()> {
         self.conn.pragma_update(None, "journal_mode", "WAL")?;
         self.conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -1247,6 +1564,11 @@ impl Database {
                 status TEXT NOT NULL DEFAULT 'active',
                 channel_id INTEGER,
                 provider_token_enc TEXT NOT NULL DEFAULT '',
+                provider_account_id TEXT NOT NULL DEFAULT '',
+                provider_password_enc TEXT NOT NULL DEFAULT '',
+                last_refresh_at TEXT,
+                last_refresh_status TEXT NOT NULL DEFAULT 'never',
+                last_refresh_error TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
@@ -1416,6 +1738,8 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_accounts_group ON accounts(group_id);
             CREATE INDEX IF NOT EXISTS idx_messages_account_folder ON retained_mail_messages(account_id, folder);
             CREATE INDEX IF NOT EXISTS idx_messages_received ON retained_mail_messages(received_at_sort DESC);
+            CREATE INDEX IF NOT EXISTS idx_temp_messages_email ON temp_email_messages(email_address, timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_temp_emails_provider ON temp_emails(provider, status);
             CREATE INDEX IF NOT EXISTS idx_project_accounts_project_status ON project_accounts(project_id, status);
             CREATE INDEX IF NOT EXISTS idx_project_events_project_created ON project_account_events(project_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_forwarding_logs_message ON forwarding_logs(account_id, message_id, channel, status);
@@ -1425,6 +1749,7 @@ impl Database {
         )?;
         self.ensure_default_data()?;
         self.ensure_account_columns()?;
+        self.ensure_temp_columns()?;
         Ok(())
     }
 
@@ -1448,6 +1773,37 @@ impl Database {
             (
                 "refresh_token_updated_at",
                 "ALTER TABLE accounts ADD COLUMN refresh_token_updated_at TEXT",
+            ),
+        ] {
+            if !columns.iter().any(|column| column == name) {
+                self.conn.execute(ddl, [])?;
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_temp_columns(&self) -> AppResult<()> {
+        let columns = table_columns(&self.conn, "temp_emails")?;
+        for (name, ddl) in [
+            (
+                "provider_account_id",
+                "ALTER TABLE temp_emails ADD COLUMN provider_account_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "provider_password_enc",
+                "ALTER TABLE temp_emails ADD COLUMN provider_password_enc TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "last_refresh_at",
+                "ALTER TABLE temp_emails ADD COLUMN last_refresh_at TEXT",
+            ),
+            (
+                "last_refresh_status",
+                "ALTER TABLE temp_emails ADD COLUMN last_refresh_status TEXT NOT NULL DEFAULT 'never'",
+            ),
+            (
+                "last_refresh_error",
+                "ALTER TABLE temp_emails ADD COLUMN last_refresh_error TEXT",
             ),
         ] {
             if !columns.iter().any(|column| column == name) {
@@ -2042,6 +2398,184 @@ impl Database {
         Ok(now.signed_duration_since(last_run).num_minutes() >= interval_minutes)
     }
 
+    fn encrypt_optional_secret(&self, value: &str) -> AppResult<String> {
+        if value.is_empty() {
+            return Ok(String::new());
+        }
+        let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
+        crypto::encrypt_text(value, key)
+    }
+
+    fn decrypt_optional_secret(&self, value: &str) -> AppResult<String> {
+        if value.is_empty() {
+            return Ok(String::new());
+        }
+        let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
+        crypto::decrypt_text(value, key)
+    }
+
+    fn upsert_temp_email_credential(&self, credential: &TempEmailCredential) -> AppResult<bool> {
+        let provider = normalize_temp_provider(&credential.provider)?;
+        let provider_token = self.encrypt_optional_secret(&credential.provider_token)?;
+        let provider_password = self.encrypt_optional_secret(&credential.provider_password)?;
+        let changed = self.conn.execute(
+            "
+            INSERT INTO temp_emails
+            (email, provider, status, channel_id, provider_token_enc, provider_account_id, provider_password_enc)
+            VALUES (?, ?, 'active', ?, ?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+                provider = excluded.provider,
+                status = 'active',
+                channel_id = excluded.channel_id,
+                provider_token_enc = CASE
+                    WHEN excluded.provider_token_enc = '' THEN temp_emails.provider_token_enc
+                    ELSE excluded.provider_token_enc
+                END,
+                provider_account_id = CASE
+                    WHEN excluded.provider_account_id = '' THEN temp_emails.provider_account_id
+                    ELSE excluded.provider_account_id
+                END,
+                provider_password_enc = CASE
+                    WHEN excluded.provider_password_enc = '' THEN temp_emails.provider_password_enc
+                    ELSE excluded.provider_password_enc
+                END,
+                updated_at = CURRENT_TIMESTAMP
+            ",
+            params![
+                credential.email,
+                provider,
+                credential.channel_id,
+                provider_token,
+                credential.provider_account_id,
+                provider_password
+            ],
+        )?;
+        Ok(changed > 0)
+    }
+
+    fn temp_email_credential(&self, email: &str) -> AppResult<TempEmailCredential> {
+        let email = normalize_email(email)?;
+        let row = self
+            .conn
+            .query_row(
+                "
+                SELECT id, email, provider, channel_id, provider_token_enc,
+                       COALESCE(provider_account_id, ''), COALESCE(provider_password_enc, '')
+                FROM temp_emails
+                WHERE email = ?
+                ",
+                [email],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| AppError::InvalidInput("temp email not found".to_string()))?;
+        Ok(TempEmailCredential {
+            id: row.0,
+            email: row.1,
+            provider: row.2,
+            channel_id: row.3,
+            provider_token: self.decrypt_optional_secret(&row.4)?,
+            provider_account_id: row.5,
+            provider_password: self.decrypt_optional_secret(&row.6)?,
+        })
+    }
+
+    fn upsert_temp_messages(&self, email: &str, messages: &[TempEmailMessage]) -> AppResult<usize> {
+        let mut saved = 0_usize;
+        for message in messages {
+            let changed = self.conn.execute(
+                "
+                INSERT INTO temp_email_messages
+                (message_id, email_address, from_address, subject, content, html_content,
+                 has_html, timestamp, raw_content)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(message_id) DO UPDATE SET
+                    email_address = excluded.email_address,
+                    from_address = excluded.from_address,
+                    subject = excluded.subject,
+                    content = excluded.content,
+                    html_content = excluded.html_content,
+                    has_html = excluded.has_html,
+                    timestamp = excluded.timestamp,
+                    raw_content = excluded.raw_content
+                ",
+                params![
+                    message.message_id,
+                    email,
+                    message.from_address,
+                    message.subject,
+                    message.content,
+                    message.html_content,
+                    if message.has_html { 1 } else { 0 },
+                    message.timestamp,
+                    message.raw_content
+                ],
+            )?;
+            if changed > 0 {
+                saved += 1;
+            }
+        }
+        Ok(saved)
+    }
+
+    fn ensure_cloudflare_channel_exists(&self, channel_id: Option<i64>) -> AppResult<()> {
+        if let Some(channel_id) = channel_id {
+            let exists = self
+                .conn
+                .query_row("SELECT 1 FROM cloudflare_channels WHERE id = ?", [channel_id], |row| row.get::<_, i64>(0))
+                .optional()?;
+            if exists.is_none() {
+                return Err(AppError::InvalidInput("Cloudflare channel not found".to_string()));
+            }
+        }
+        Ok(())
+    }
+
+    fn cloudflare_channel_credential(&self, channel_id: Option<i64>) -> AppResult<CloudflareChannelCredential> {
+        let sql = if channel_id.is_some() {
+            "
+            SELECT id, name, worker_domain, COALESCE(email_domains, ''),
+                   admin_password_enc, enabled, is_default
+            FROM cloudflare_channels
+            WHERE id = ?
+            "
+        } else {
+            "
+            SELECT id, name, worker_domain, COALESCE(email_domains, ''),
+                   admin_password_enc, enabled, is_default
+            FROM cloudflare_channels
+            WHERE is_default = 1
+            ORDER BY id
+            LIMIT 1
+            "
+        };
+        let row = if let Some(channel_id) = channel_id {
+            self.conn
+                .query_row(sql, [channel_id], cloudflare_channel_row)
+                .optional()?
+        } else {
+            self.conn.query_row(sql, [], cloudflare_channel_row).optional()?
+        }
+        .ok_or_else(|| AppError::InvalidInput("Cloudflare channel not found".to_string()))?;
+        Ok(CloudflareChannelCredential {
+            id: row.0,
+            worker_domain: row.2,
+            email_domains: parse_domain_list(&row.3),
+            admin_password: self.decrypt_optional_secret(&row.4)?,
+            enabled: row.5,
+        })
+    }
+
     fn audit(&self, action: &str, resource_type: &str, resource_id: Option<i64>, detail: &str) -> AppResult<()> {
         self.conn.execute(
             "
@@ -2079,6 +2613,76 @@ fn validate_password(password: &str) -> AppResult<()> {
         ));
     }
     Ok(())
+}
+
+fn normalize_email(value: &str) -> AppResult<String> {
+    let email = value.trim().to_ascii_lowercase();
+    if !email.contains('@') {
+        return Err(AppError::InvalidInput("email is invalid".to_string()));
+    }
+    Ok(email)
+}
+
+fn normalize_temp_provider(value: &str) -> AppResult<String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "gptmail" => Ok("gptmail".to_string()),
+        "duckmail" => Ok("duckmail".to_string()),
+        "cloudflare" => Ok("cloudflare".to_string()),
+        _ => Err(AppError::InvalidInput("temp email provider must be gptmail, duckmail, or cloudflare".to_string())),
+    }
+}
+
+fn split_legacy_line(value: &str) -> Vec<String> {
+    if value.contains("----") {
+        value.split("----").map(|part| part.trim().to_string()).collect()
+    } else {
+        value.split(',').map(|part| part.trim().to_string()).collect()
+    }
+}
+
+fn parse_domain_list(value: &str) -> Vec<String> {
+    value
+        .split([',', '\n', ';'])
+        .map(|item| item.trim().trim_start_matches('@').trim_end_matches('.').to_ascii_lowercase())
+        .filter(|item| !item.is_empty())
+        .fold(Vec::new(), |mut domains, item| {
+            if !domains.contains(&item) {
+                domains.push(item);
+            }
+            domains
+        })
+}
+
+fn serialize_domain_list(values: &[String]) -> String {
+    parse_domain_list(&values.join(",")).join(", ")
+}
+
+fn temp_message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TempEmailMessage> {
+    Ok(TempEmailMessage {
+        id: row.get(0)?,
+        message_id: row.get(1)?,
+        email_address: row.get(2)?,
+        from_address: row.get(3)?,
+        subject: row.get(4)?,
+        content: row.get(5)?,
+        html_content: row.get(6)?,
+        has_html: row.get::<_, i64>(7)? == 1,
+        timestamp: row.get(8)?,
+        raw_content: row.get(9)?,
+        created_at: row.get(10)?,
+    })
+}
+
+fn cloudflare_channel_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, String, String, String, String, bool, bool)> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get::<_, i64>(5)? == 1,
+        row.get::<_, i64>(6)? == 1,
+    ))
 }
 
 fn parse_attachments_json(value: &str) -> Vec<AttachmentInfo> {

@@ -8,7 +8,7 @@
 - 使用 SQLite 作为本地数据库。
 - 保持本地优先，单用户本机运行，不做 SaaS 多租户服务。
 - 优先还原原项目的邮箱管理、账号池、邮件同步、转发、备份和自动化能力。
-- 后续再补齐临时邮箱、邮件操作、导出分享等周边能力。
+- 后续再补齐邮件操作、导出分享、临时邮箱增强等周边能力。
 
 ## 技术方案
 
@@ -18,6 +18,7 @@
 - 数据库：SQLite WAL mode
 - 密钥保护：本地应用密码派生密钥，AES-GCM 加密敏感配置
 - 邮件协议：Microsoft Graph OAuth + Graph API，基础 IMAP TLS
+- 临时邮箱：GPTMail、DuckMail、Cloudflare Worker 通道
 - 自动化：桌面进程内 scheduler
 - 打包：Windows exe、MSI、NSIS installer
 
@@ -65,6 +66,16 @@
 - 应用内定时刷新、定时转发、定时备份。
 - 设置页提供手动运行、配置保存、运行状态和日志查看。
 
+### 临时邮箱
+
+- GPTMail 临时邮箱生成、导入、刷新、删除。
+- DuckMail 临时邮箱生成、导入、刷新、删除。
+- Cloudflare Worker 邮箱通道管理。
+- Cloudflare 邮箱域名、通道密码、默认通道配置。
+- 临时邮箱消息刷新并缓存到 SQLite。
+- 临时邮箱列表、消息列表、消息详情和刷新状态展示。
+- 设置页支持 GPTMail 和 DuckMail API key 加密保存。
+
 ### 交付和仓库
 
 - 已绑定 GitHub 仓库：`https://github.com/857298656/outlookEmail.git`
@@ -74,16 +85,18 @@
   - `feat: implement local desktop backend`
   - `feat: build desktop mailbox interface`
   - `docs: document desktop rebuild architecture`
+  - `docs: add requirements and milestone plan`
+  - `feat: add temp mail management`
 
 ## 未完成
 
-### 临时邮箱模块
+### 临时邮箱增强
 
-- GPTMail 临时邮箱生成、导入、刷新、删除。
-- DuckMail 临时邮箱能力。
-- Cloudflare Worker 邮箱通道管理。
-- Cloudflare 邮箱域名、通道密码、默认通道配置。
 - AI 用户名生成。
+- Cloudflare 批量生成和批量导入的流式进度。
+- 临时邮箱标签和更细的筛选。
+- 不同 GPTMail/DuckMail 部署版本的 API 兼容适配。
+- 临时邮箱刷新失败的重试队列和退避策略。
 
 ### IMAP 完整能力
 
@@ -159,11 +172,12 @@
 - 完成应用内定时刷新、转发、备份。
 - 完成设置页、手动触发和日志视图。
 
-### M5：临时邮箱，还未完成
+### M5：临时邮箱核心，已完成
 
 - 目标：还原 GPTMail、DuckMail、Cloudflare 临时邮箱能力。
-- 交付物：临时邮箱列表、生成/导入、消息刷新、删除、Cloudflare 通道设置。
-- 风险点：不同临时邮箱服务 API 稳定性和认证方式。
+- 已交付：临时邮箱列表、生成/导入、消息刷新、删除、Cloudflare 通道设置。
+- 已交付：GPTMail 和 DuckMail base URL/API key 配置，Cloudflare 通道密码加密保存。
+- 剩余增强：AI 用户名、批量生成/导入流式进度、更多服务 API 兼容。
 
 ### M6：邮件操作补齐，还未完成
 
@@ -185,4 +199,4 @@
 
 ## 当前推荐下一步
 
-优先进入 M5 临时邮箱模块。它是原项目功能差距最大的独立模块，和现有邮箱同步、转发、项目池耦合较低，适合作为下一批开发。
+优先进入 M6 邮件操作补齐，同时补 M5+ 临时邮箱增强。邮件标记已读/未读、删除、批量操作和搜索筛选是原项目使用频率较高的能力；临时邮箱剩余项主要是体验和兼容性增强，可以并行推进。

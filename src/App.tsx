@@ -1,6 +1,7 @@
 import {
   Archive,
   CheckCircle2,
+  Cloud,
   Download,
   FolderKanban,
   Inbox,
@@ -33,10 +34,13 @@ import type {
   ProjectAccount,
   SchedulerStatus,
   Settings,
-  Tag
+  Tag,
+  TempEmail,
+  TempEmailMessage,
+  CloudflareChannel
 } from "./types";
 
-type View = "mail" | "accounts" | "projects" | "settings";
+type View = "mail" | "accounts" | "temp" | "projects" | "settings";
 
 const colors = ["#2563eb", "#16a34a", "#dc2626", "#7c3aed", "#0f766e", "#b45309"];
 
@@ -49,12 +53,17 @@ function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectAccounts, setProjectAccounts] = useState<ProjectAccount[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [tempEmails, setTempEmails] = useState<TempEmail[]>([]);
+  const [tempMessages, setTempMessages] = useState<TempEmailMessage[]>([]);
+  const [cloudflareChannels, setCloudflareChannels] = useState<CloudflareChannel[]>([]);
   const [forwardingLogs, setForwardingLogs] = useState<ForwardingLog[]>([]);
   const [backupLogs, setBackupLogs] = useState<BackupLog[]>([]);
   const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<number | "all">("all");
   const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>();
   const [selectedMessageId, setSelectedMessageId] = useState<number | undefined>();
+  const [selectedTempEmail, setSelectedTempEmail] = useState<string | undefined>();
+  const [selectedTempMessageId, setSelectedTempMessageId] = useState<string | undefined>();
   const [folder, setFolder] = useState("all");
   const [view, setView] = useState<View>("mail");
   const [busy, setBusy] = useState(false);
@@ -63,6 +72,7 @@ function App() {
 
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const selectedMessage = messages.find((message) => message.id === selectedMessageId);
+  const selectedTempMessage = tempMessages.find((message) => message.message_id === selectedTempMessageId);
   const filteredAccounts = useMemo(() => {
     if (selectedGroupId === "all") return accounts;
     return accounts.filter((account) => account.group_id === selectedGroupId);
@@ -108,6 +118,17 @@ function App() {
     setSchedulerStatus(nextSchedulerStatus);
   }
 
+  async function loadTempWorkspace(email = selectedTempEmail) {
+    const [nextTempEmails, nextChannels] = await Promise.all([api.listTempEmails(), api.listCloudflareChannels()]);
+    setTempEmails(nextTempEmails);
+    setCloudflareChannels(nextChannels);
+    const nextEmail = email ?? nextTempEmails[0]?.email;
+    setSelectedTempEmail(nextEmail);
+    const nextMessages = nextEmail ? await api.listTempEmailMessages(nextEmail) : [];
+    setTempMessages(nextMessages);
+    setSelectedTempMessageId(nextMessages[0]?.message_id);
+  }
+
   useEffect(() => {
     loadStatus().catch((err) => setError(readError(err)));
   }, []);
@@ -117,6 +138,7 @@ function App() {
     loadWorkspace().catch((err) => setError(readError(err)));
     loadProjects().catch((err) => setError(readError(err)));
     loadAutomation().catch((err) => setError(readError(err)));
+    loadTempWorkspace().catch((err) => setError(readError(err)));
   }, [status?.unlocked]);
 
   async function runAction(action: () => Promise<void>, success?: string) {
@@ -165,6 +187,9 @@ function App() {
         </IconButton>
         <IconButton active={view === "accounts"} title="Accounts" onClick={() => setView("accounts")}>
           <Users size={20} />
+        </IconButton>
+        <IconButton active={view === "temp"} title="Temp Mail" onClick={() => setView("temp")}>
+          <Cloud size={20} />
         </IconButton>
         <IconButton active={view === "projects"} title="Projects" onClick={() => setView("projects")}>
           <FolderKanban size={20} />
@@ -306,6 +331,70 @@ function App() {
                 const result = await api.exchangeOAuthToken(input);
                 setNotice(`OAuth saved: ${result.refresh_token_preview}`);
                 await loadWorkspace(input.account_id, folder);
+              })
+            }
+          />
+        )}
+
+        {view === "temp" && (
+          <TempEmailsView
+            tempEmails={tempEmails}
+            messages={tempMessages}
+            channels={cloudflareChannels}
+            selectedEmail={selectedTempEmail}
+            selectedMessage={selectedTempMessage}
+            busy={busy}
+            onSelect={(email) =>
+              runAction(async () => {
+                setSelectedTempEmail(email);
+                const nextMessages = await api.listTempEmailMessages(email);
+                setTempMessages(nextMessages);
+                setSelectedTempMessageId(nextMessages[0]?.message_id);
+              })
+            }
+            onMessageSelect={setSelectedTempMessageId}
+            onGenerate={(input) =>
+              runAction(async () => {
+                const created = await api.generateTempEmail(input);
+                await loadTempWorkspace(created.email);
+              }, "Temp email generated")
+            }
+            onImport={(input) =>
+              runAction(async () => {
+                const result = await api.importTempEmails(input);
+                await loadTempWorkspace();
+                setNotice(`Imported ${result.imported}, skipped ${result.skipped}`);
+              })
+            }
+            onRefresh={(email) =>
+              runAction(async () => {
+                const result = await api.refreshTempEmailMessages(email);
+                setNotice(result.message);
+                await loadTempWorkspace(email);
+              })
+            }
+            onDelete={(email) =>
+              runAction(async () => {
+                await api.deleteTempEmail(email);
+                await loadTempWorkspace(undefined);
+              }, "Temp email deleted")
+            }
+            onSaveChannel={(input) =>
+              runAction(async () => {
+                await api.upsertCloudflareChannel(input);
+                await loadTempWorkspace(selectedTempEmail);
+              }, "Cloudflare channel saved")
+            }
+            onDeleteChannel={(channelId) =>
+              runAction(async () => {
+                await api.deleteCloudflareChannel(channelId);
+                await loadTempWorkspace(selectedTempEmail);
+              }, "Cloudflare channel deleted")
+            }
+            onTestChannel={(channelId) =>
+              runAction(async () => {
+                const result = await api.testCloudflareChannel(channelId);
+                setNotice(result.message);
               })
             }
           />
@@ -751,6 +840,297 @@ function AccountsView({
           ))}
         </div>
       </div>
+    </section>
+  );
+}
+
+function TempEmailsView({
+  tempEmails,
+  messages,
+  channels,
+  selectedEmail,
+  selectedMessage,
+  busy,
+  onSelect,
+  onMessageSelect,
+  onGenerate,
+  onImport,
+  onRefresh,
+  onDelete,
+  onSaveChannel,
+  onDeleteChannel,
+  onTestChannel
+}: {
+  tempEmails: TempEmail[];
+  messages: TempEmailMessage[];
+  channels: CloudflareChannel[];
+  selectedEmail?: string;
+  selectedMessage?: TempEmailMessage;
+  busy: boolean;
+  onSelect: (email: string) => void;
+  onMessageSelect: (messageId: string) => void;
+  onGenerate: (input: { provider: string; prefix?: string; domain?: string; username?: string; password?: string; channel_id?: number | null }) => void;
+  onImport: (input: { raw: string; provider: string; channel_id?: number | null }) => void;
+  onRefresh: (email: string) => void;
+  onDelete: (email: string) => void;
+  onSaveChannel: (input: {
+    id?: number;
+    name: string;
+    worker_domain: string;
+    email_domains: string[];
+    admin_password?: string;
+    enabled: boolean;
+    is_default: boolean;
+  }) => void;
+  onDeleteChannel: (channelId: number) => void;
+  onTestChannel: (channelId: number) => void;
+}) {
+  const [provider, setProvider] = useState("gptmail");
+  const [prefix, setPrefix] = useState("");
+  const [domain, setDomain] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [channelId, setChannelId] = useState<number | null>(channels[0]?.id ?? null);
+  const [importRaw, setImportRaw] = useState("");
+  const [channelDraft, setChannelDraft] = useState({
+    id: undefined as number | undefined,
+    name: "",
+    worker_domain: "",
+    email_domains: "",
+    admin_password: "",
+    enabled: true,
+    is_default: false
+  });
+
+  useEffect(() => {
+    if (!channelId && channels[0]) setChannelId(channels[0].id);
+  }, [channels.length]);
+
+  const selectedTemp = tempEmails.find((item) => item.email === selectedEmail);
+
+  return (
+    <section className="tempGrid">
+      <aside className="panel tempControlPanel">
+        <div className="panelHeader">
+          <h2>Temp mail</h2>
+          <Cloud size={18} />
+        </div>
+        <div className="formLine">
+          <select className="select grow" value={provider} onChange={(event) => setProvider(event.target.value)}>
+            <option value="gptmail">GPTMail</option>
+            <option value="duckmail">DuckMail</option>
+            <option value="cloudflare">Cloudflare</option>
+          </select>
+          {provider === "cloudflare" && (
+            <select className="select grow" value={channelId ?? ""} onChange={(event) => setChannelId(Number(event.target.value) || null)}>
+              <option value="">Channel</option>
+              {channels.map((channel) => (
+                <option key={channel.id} value={channel.id}>
+                  {channel.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+        <div className="formLine">
+          <input
+            className="input grow"
+            value={provider === "gptmail" ? prefix : username}
+            placeholder={provider === "gptmail" ? "Prefix" : "Username"}
+            onChange={(event) => (provider === "gptmail" ? setPrefix(event.target.value) : setUsername(event.target.value))}
+          />
+          <input className="input grow" value={domain} placeholder="Domain" onChange={(event) => setDomain(event.target.value)} />
+        </div>
+        {provider === "duckmail" && (
+          <input
+            className="input fullWidth tempPassword"
+            type="password"
+            value={password}
+            placeholder="DuckMail password"
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        )}
+        <button
+          className="button primary fullWidth"
+          disabled={busy || (provider === "duckmail" && (!username.trim() || !domain.trim() || password.length < 6)) || (provider === "cloudflare" && !channelId)}
+          onClick={() =>
+            onGenerate({
+              provider,
+              prefix: prefix || undefined,
+              domain: domain || undefined,
+              username: username || undefined,
+              password: password || undefined,
+              channel_id: provider === "cloudflare" ? channelId : undefined
+            })
+          }
+        >
+          {busy ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
+          Generate
+        </button>
+
+        <textarea
+          className="textarea compact tempImportBox"
+          value={importRaw}
+          onChange={(event) => setImportRaw(event.target.value)}
+          placeholder={provider === "duckmail" ? "email----password" : "email@example.com"}
+        />
+        <button
+          className="button secondary fullWidth"
+          disabled={busy || !importRaw.trim() || (provider === "cloudflare" && !channelId)}
+          onClick={() => onImport({ raw: importRaw, provider, channel_id: provider === "cloudflare" ? channelId : undefined })}
+        >
+          <Upload size={16} />
+          Import
+        </button>
+      </aside>
+
+      <aside className="panel tempListPanel">
+        <div className="panelHeader">
+          <h2>Addresses</h2>
+          <span>{tempEmails.length}</span>
+        </div>
+        <div className="tempRows">
+          {tempEmails.map((item) => (
+            <button key={item.id} className={selectedEmail === item.email ? "tempEmailRow active" : "tempEmailRow"} onClick={() => onSelect(item.email)}>
+              <strong>{item.email}</strong>
+              <small>
+                {item.provider} 路 {item.message_count} messages 路 {item.last_refresh_status}
+              </small>
+            </button>
+          ))}
+        </div>
+        {tempEmails.length === 0 && <EmptyState icon={<Cloud size={24} />} text="No temp emails yet." />}
+      </aside>
+
+      <section className="panel tempMessagePanel">
+        <div className="panelHeader">
+          <h2>{selectedTemp?.email ?? "Messages"}</h2>
+          <div className="rowActions">
+            <button className="iconMini" title="Refresh" disabled={!selectedEmail || busy} onClick={() => selectedEmail && onRefresh(selectedEmail)}>
+              <RefreshCw size={15} />
+            </button>
+            <button className="iconMini danger" title="Delete" disabled={!selectedEmail || busy} onClick={() => selectedEmail && onDelete(selectedEmail)}>
+              <Trash2 size={15} />
+            </button>
+          </div>
+        </div>
+        <div className="tempMessageRows">
+          {messages.map((message) => (
+            <button
+              key={message.message_id}
+              className={selectedMessage?.message_id === message.message_id ? "messageRow active" : "messageRow"}
+              onClick={() => onMessageSelect(message.message_id)}
+            >
+              <span className="messageTop">
+                <strong>{message.subject || "(no subject)"}</strong>
+                <small>{message.timestamp ? formatUnixDate(message.timestamp) : formatDate(message.created_at)}</small>
+              </span>
+              <span className="sender">{message.from_address}</span>
+              <span className="preview">{message.content || message.html_content}</span>
+            </button>
+          ))}
+        </div>
+        {messages.length === 0 && <EmptyState icon={<Mail size={24} />} text="No cached temp messages." />}
+      </section>
+
+      <article className="panel tempDetailPanel">
+        {selectedMessage ? (
+          <>
+            <div className="detailHeader">
+              <h2>{selectedMessage.subject || "(no subject)"}</h2>
+              <p>{selectedMessage.from_address}</p>
+            </div>
+            <div className="metaGrid">
+              <span>Mailbox</span>
+              <strong>{selectedMessage.email_address}</strong>
+              <span>Received</span>
+              <strong>{selectedMessage.timestamp ? formatUnixDate(selectedMessage.timestamp) : formatDate(selectedMessage.created_at)}</strong>
+            </div>
+            <div className="messageBody">{selectedMessage.has_html ? selectedMessage.html_content : selectedMessage.content}</div>
+          </>
+        ) : (
+          <EmptyState icon={<Mail size={24} />} text="Select a temp message." />
+        )}
+      </article>
+
+      <section className="panel widePanel">
+        <div className="panelHeader">
+          <h2>Cloudflare channels</h2>
+          <Cloud size={18} />
+        </div>
+        <div className="channelEditor">
+          <input className="input" value={channelDraft.name} placeholder="Name" onChange={(event) => setChannelDraft({ ...channelDraft, name: event.target.value })} />
+          <input
+            className="input"
+            value={channelDraft.worker_domain}
+            placeholder="Worker domain"
+            onChange={(event) => setChannelDraft({ ...channelDraft, worker_domain: event.target.value })}
+          />
+          <input
+            className="input"
+            value={channelDraft.email_domains}
+            placeholder="Domains, comma separated"
+            onChange={(event) => setChannelDraft({ ...channelDraft, email_domains: event.target.value })}
+          />
+          <input
+            className="input"
+            type="password"
+            value={channelDraft.admin_password}
+            placeholder="Admin password"
+            onChange={(event) => setChannelDraft({ ...channelDraft, admin_password: event.target.value })}
+          />
+          <label className="checkLine">
+            <input type="checkbox" checked={channelDraft.enabled} onChange={(event) => setChannelDraft({ ...channelDraft, enabled: event.target.checked })} />
+            <span>Enabled</span>
+          </label>
+          <label className="checkLine">
+            <input type="checkbox" checked={channelDraft.is_default} onChange={(event) => setChannelDraft({ ...channelDraft, is_default: event.target.checked })} />
+            <span>Default</span>
+          </label>
+          <button
+            className="button primary"
+            disabled={busy || !channelDraft.name.trim() || !channelDraft.worker_domain.trim()}
+            onClick={() => {
+              onSaveChannel({
+                id: channelDraft.id,
+                name: channelDraft.name,
+                worker_domain: channelDraft.worker_domain,
+                email_domains: channelDraft.email_domains.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean),
+                admin_password: channelDraft.admin_password || undefined,
+                enabled: channelDraft.enabled,
+                is_default: channelDraft.is_default
+              });
+              setChannelDraft({ id: undefined, name: "", worker_domain: "", email_domains: "", admin_password: "", enabled: true, is_default: false });
+            }}
+          >
+            <SettingsIcon size={16} />
+            Save
+          </button>
+        </div>
+        <div className="cloudflareChannelRows">
+          {channels.map((channel) => (
+            <div className="cloudflareChannelRow" key={channel.id}>
+              <span>
+                <strong>{channel.name}</strong>
+                <small>{channel.worker_domain}</small>
+              </span>
+              <span>{channel.email_domains.join(", ")}</span>
+              <StatusPill status={channel.enabled ? "success" : "removed"} />
+              <span className="rowActions">
+                <button className="iconMini" title="Edit" onClick={() => setChannelDraft({ id: channel.id, name: channel.name, worker_domain: channel.worker_domain, email_domains: channel.email_domains.join(", "), admin_password: "", enabled: channel.enabled, is_default: channel.is_default })}>
+                  <SettingsIcon size={15} />
+                </button>
+                <button className="iconMini" title="Test" onClick={() => onTestChannel(channel.id)}>
+                  <RefreshCw size={15} />
+                </button>
+                <button className="iconMini danger" title="Delete" disabled={channel.reference_count > 0} onClick={() => onDeleteChannel(channel.id)}>
+                  <Trash2 size={15} />
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
     </section>
   );
 }
@@ -1208,7 +1588,9 @@ function SettingsView({
         <Field label="Microsoft Graph client ID" value={draft.graph_client_id} onChange={(value) => setField("graph_client_id", value)} />
         <Field label="OAuth redirect URI" value={draft.oauth_redirect_uri} onChange={(value) => setField("oauth_redirect_uri", value)} />
         <Field label="GPTMail base URL" value={draft.gptmail_base_url} onChange={(value) => setField("gptmail_base_url", value)} />
+        <SecretField label="GPTMail API key" value={draft.gptmail_api_key} onChange={(value) => setField("gptmail_api_key", value)} />
         <Field label="DuckMail base URL" value={draft.duckmail_base_url} onChange={(value) => setField("duckmail_base_url", value)} />
+        <SecretField label="DuckMail API key" value={draft.duckmail_api_key} onChange={(value) => setField("duckmail_api_key", value)} />
       </div>
 
       <div className="panel">
@@ -1496,6 +1878,11 @@ function formatDate(value: string) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
+}
+
+function formatUnixDate(value: number) {
+  if (!value) return "";
+  return formatDate(new Date(value * 1000).toISOString());
 }
 
 function formatBytes(value: number) {

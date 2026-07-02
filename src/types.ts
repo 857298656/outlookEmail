@@ -74,7 +74,9 @@ export type Settings = {
   graph_client_id: string;
   oauth_redirect_uri: string;
   gptmail_base_url: string;
+  gptmail_api_key: string;
   duckmail_base_url: string;
+  duckmail_api_key: string;
   webdav_url: string;
   webdav_username: string;
   webdav_password: string;
@@ -141,6 +143,47 @@ export type SchedulerStatus = {
   last_refresh_at: string | null;
   last_forwarding_at: string | null;
   last_backup_at: string | null;
+};
+
+export type TempEmail = {
+  id: number;
+  email: string;
+  provider: string;
+  status: string;
+  channel_id: number | null;
+  message_count: number;
+  last_refresh_at: string | null;
+  last_refresh_status: string;
+  last_refresh_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TempEmailMessage = {
+  id: number;
+  message_id: string;
+  email_address: string;
+  from_address: string;
+  subject: string;
+  content: string;
+  html_content: string;
+  has_html: boolean;
+  timestamp: number;
+  raw_content: string;
+  created_at: string;
+};
+
+export type CloudflareChannel = {
+  id: number;
+  name: string;
+  worker_domain: string;
+  email_domains: string[];
+  enabled: boolean;
+  is_default: boolean;
+  admin_password_configured: boolean;
+  reference_count: number;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ProjectStats = {

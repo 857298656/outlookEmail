@@ -230,6 +230,66 @@ pub fn scheduler_status(state: State<'_, AppState>) -> AppResult<SchedulerStatus
 }
 
 #[tauri::command]
+pub fn list_temp_emails(state: State<'_, AppState>) -> AppResult<Vec<TempEmail>> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.list_temp_emails()
+}
+
+#[tauri::command]
+pub fn import_temp_emails(state: State<'_, AppState>, input: ImportTempEmailsInput) -> AppResult<ImportAccountsResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.import_temp_emails(input)
+}
+
+#[tauri::command]
+pub fn generate_temp_email(state: State<'_, AppState>, input: GenerateTempEmailInput) -> AppResult<TempEmail> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.generate_temp_email(input)
+}
+
+#[tauri::command]
+pub fn delete_temp_email(state: State<'_, AppState>, input: TempEmailAddressInput) -> AppResult<()> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.delete_temp_email(input.email)
+}
+
+#[tauri::command]
+pub fn refresh_temp_email_messages(state: State<'_, AppState>, input: TempEmailAddressInput) -> AppResult<JobResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.refresh_temp_email_messages(input.email)
+}
+
+#[tauri::command]
+pub fn list_temp_email_messages(state: State<'_, AppState>, email: String) -> AppResult<Vec<TempEmailMessage>> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.list_temp_email_messages(email)
+}
+
+#[tauri::command]
+pub fn list_cloudflare_channels(state: State<'_, AppState>) -> AppResult<Vec<CloudflareChannel>> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.list_cloudflare_channels()
+}
+
+#[tauri::command]
+pub fn upsert_cloudflare_channel(state: State<'_, AppState>, input: UpsertCloudflareChannelInput) -> AppResult<CloudflareChannel> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.upsert_cloudflare_channel(input)
+}
+
+#[tauri::command]
+pub fn delete_cloudflare_channel(state: State<'_, AppState>, channel_id: i64) -> AppResult<()> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.delete_cloudflare_channel(channel_id)
+}
+
+#[tauri::command]
+pub fn test_cloudflare_channel(state: State<'_, AppState>, channel_id: i64) -> AppResult<JobResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.test_cloudflare_channel(channel_id)
+}
+
+#[tauri::command]
 pub fn run_refresh_job(state: State<'_, AppState>, input: Option<RefreshInput>, account_id: Option<i64>) -> AppResult<JobResult> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.refresh_accounts(input.unwrap_or(RefreshInput {

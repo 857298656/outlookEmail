@@ -65,6 +65,16 @@ pub fn run() {
             list_forwarding_logs,
             list_backup_logs,
             scheduler_status,
+            list_temp_emails,
+            import_temp_emails,
+            generate_temp_email,
+            delete_temp_email,
+            refresh_temp_email_messages,
+            list_temp_email_messages,
+            list_cloudflare_channels,
+            upsert_cloudflare_channel,
+            delete_cloudflare_channel,
+            test_cloudflare_channel,
             run_refresh_job
         ])
         .run(tauri::generate_context!())

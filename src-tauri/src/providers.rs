@@ -1,11 +1,16 @@
 use crate::error::{AppError, AppResult};
-use crate::models::{AccountCredentials, AttachmentInfo, DownloadedAttachment, OAuthAuthUrlInput, ProviderMessage};
+use crate::models::{
+    AccountCredentials, AttachmentInfo, CloudflareChannelCredential, DownloadedAttachment,
+    GenerateTempEmailInput, OAuthAuthUrlInput, ProviderMessage, Settings, TempEmailCredential,
+    TempEmailMessage,
+};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use mailparse::MailHeaderMap;
 use reqwest::blocking::Client;
 use serde::Deserialize;
+use serde_json::{json, Value};
 use std::time::Duration;
 
 const GRAPH_SCOPE: &str = "offline_access Mail.ReadWrite User.Read";
@@ -218,6 +223,54 @@ pub fn fetch_imap_messages(account: &AccountCredentials, folder: &str, top: usiz
     Ok(messages)
 }
 
+pub fn generate_temp_email(settings: &Settings, input: &GenerateTempEmailInput, channel: Option<&CloudflareChannelCredential>) -> AppResult<TempEmailCredential> {
+    match input.provider.to_ascii_lowercase().as_str() {
+        "gptmail" => generate_gptmail_address(settings, input),
+        "duckmail" => generate_duckmail_address(settings, input),
+        "cloudflare" => generate_cloudflare_address(input, channel),
+        value => Err(AppError::InvalidInput(format!("unsupported temp email provider: {value}"))),
+    }
+}
+
+pub fn fetch_temp_messages(
+    settings: &Settings,
+    temp_email: &TempEmailCredential,
+    channel: Option<&CloudflareChannelCredential>,
+    limit: usize,
+) -> AppResult<Vec<TempEmailMessage>> {
+    match temp_email.provider.to_ascii_lowercase().as_str() {
+        "gptmail" => fetch_gptmail_messages(settings, &temp_email.email),
+        "duckmail" => fetch_duckmail_messages(settings, temp_email),
+        "cloudflare" => fetch_cloudflare_messages(temp_email, channel, limit),
+        value => Err(AppError::InvalidInput(format!("unsupported temp email provider: {value}"))),
+    }
+}
+
+pub fn delete_temp_remote(temp_email: &TempEmailCredential, channel: Option<&CloudflareChannelCredential>) -> AppResult<bool> {
+    match temp_email.provider.to_ascii_lowercase().as_str() {
+        "cloudflare" => {
+            let Some(channel) = channel else {
+                return Ok(false);
+            };
+            let address_id = temp_email.provider_account_id.trim();
+            if address_id.is_empty() {
+                return Ok(false);
+            }
+            let endpoint = format!("/admin/delete_address/{}", urlencoding::encode(address_id));
+            cloudflare_request("DELETE", channel, &endpoint, None, None).map(|_| true)
+        }
+        _ => Ok(false),
+    }
+}
+
+pub fn test_cloudflare_channel(channel: &CloudflareChannelCredential) -> AppResult<String> {
+    let value = cloudflare_request("GET", channel, "/admin/address", Some(&[("limit", "1"), ("offset", "0")]), None)?;
+    let count = extract_array(&value, &["results", "addresses", "data"])
+        .map(|items| items.len())
+        .unwrap_or_default();
+    Ok(format!("Cloudflare channel connected, sample addresses: {count}"))
+}
+
 fn http_client() -> AppResult<Client> {
     Client::builder()
         .timeout(Duration::from_secs(30))
@@ -228,6 +281,390 @@ fn http_client() -> AppResult<Client> {
 
 fn network_error(err: reqwest::Error) -> AppError {
     AppError::Internal(format!("network request failed: {err}"))
+}
+
+fn generate_gptmail_address(settings: &Settings, input: &GenerateTempEmailInput) -> AppResult<TempEmailCredential> {
+    let base_url = settings.gptmail_base_url.trim().trim_end_matches('/');
+    if base_url.is_empty() {
+        return Err(AppError::InvalidInput("GPTMail base URL is required".to_string()));
+    }
+    let client = http_client()?;
+    let mut request = if input.prefix.as_deref().unwrap_or_default().trim().is_empty()
+        && input.domain.as_deref().unwrap_or_default().trim().is_empty()
+    {
+        client.get(format!("{base_url}/api/generate-email"))
+    } else {
+        client.post(format!("{base_url}/api/generate-email")).json(&json!({
+            "prefix": input.prefix.as_deref().unwrap_or_default().trim(),
+            "domain": input.domain.as_deref().unwrap_or_default().trim()
+        }))
+    };
+    if !settings.gptmail_api_key.trim().is_empty() {
+        request = request.header("X-API-Key", settings.gptmail_api_key.trim());
+    }
+    let value = send_json(request, "GPTMail generate email")?;
+    let email = string_path(&value, &["data", "email"])
+        .or_else(|| string_path(&value, &["email"]))
+        .ok_or_else(|| AppError::Internal("GPTMail response did not include an email".to_string()))?;
+    Ok(TempEmailCredential {
+        id: 0,
+        email,
+        provider: "gptmail".to_string(),
+        channel_id: None,
+        provider_token: String::new(),
+        provider_account_id: String::new(),
+        provider_password: String::new(),
+    })
+}
+
+fn generate_duckmail_address(settings: &Settings, input: &GenerateTempEmailInput) -> AppResult<TempEmailCredential> {
+    let base_url = settings.duckmail_base_url.trim().trim_end_matches('/');
+    let username = input.username.as_deref().unwrap_or_default().trim();
+    let domain = input.domain.as_deref().unwrap_or_default().trim().trim_start_matches('@');
+    let password = input.password.as_deref().unwrap_or_default().trim();
+    if base_url.is_empty() || username.is_empty() || domain.is_empty() || password.len() < 6 {
+        return Err(AppError::InvalidInput(
+            "DuckMail requires base URL, username, domain, and a 6+ character password".to_string(),
+        ));
+    }
+    let email = format!("{username}@{domain}").to_ascii_lowercase();
+    let client = http_client()?;
+    let mut create = client
+        .post(format!("{base_url}/accounts"))
+        .json(&json!({ "address": email, "password": password }));
+    if !settings.duckmail_api_key.trim().is_empty() {
+        create = create.bearer_auth(settings.duckmail_api_key.trim());
+    }
+    let account = send_json(create, "DuckMail create account")?;
+    let account_id = string_path(&account, &["id"]).unwrap_or_default();
+    let token = duckmail_token(settings, &email, password)?;
+    Ok(TempEmailCredential {
+        id: 0,
+        email,
+        provider: "duckmail".to_string(),
+        channel_id: None,
+        provider_token: token,
+        provider_account_id: account_id,
+        provider_password: password.to_string(),
+    })
+}
+
+fn generate_cloudflare_address(input: &GenerateTempEmailInput, channel: Option<&CloudflareChannelCredential>) -> AppResult<TempEmailCredential> {
+    let channel = channel.ok_or_else(|| AppError::InvalidInput("Cloudflare channel is required".to_string()))?;
+    if !channel.enabled {
+        return Err(AppError::InvalidInput("Cloudflare channel is disabled".to_string()));
+    }
+    let username = input
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(random_temp_username);
+    let domain = input
+        .domain
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.trim_start_matches('@').to_ascii_lowercase())
+        .or_else(|| channel.email_domains.first().cloned())
+        .ok_or_else(|| AppError::InvalidInput("Cloudflare channel has no email domain".to_string()))?;
+    let value = cloudflare_request(
+        "POST",
+        channel,
+        "/admin/new_address",
+        None,
+        Some(json!({
+            "enablePrefix": true,
+            "name": username,
+            "domain": domain
+        })),
+    )?;
+    let email = string_path(&value, &["address"])
+        .or_else(|| string_path(&value, &["email"]))
+        .ok_or_else(|| AppError::Internal("Cloudflare response did not include an address".to_string()))?;
+    let address_id = string_path(&value, &["id"])
+        .or_else(|| string_path(&value, &["address_id"]))
+        .unwrap_or_default();
+    Ok(TempEmailCredential {
+        id: 0,
+        email: email.to_ascii_lowercase(),
+        provider: "cloudflare".to_string(),
+        channel_id: Some(channel.id),
+        provider_token: String::new(),
+        provider_account_id: address_id,
+        provider_password: String::new(),
+    })
+}
+
+fn fetch_gptmail_messages(settings: &Settings, email: &str) -> AppResult<Vec<TempEmailMessage>> {
+    let base_url = settings.gptmail_base_url.trim().trim_end_matches('/');
+    if base_url.is_empty() {
+        return Err(AppError::InvalidInput("GPTMail base URL is required".to_string()));
+    }
+    let client = http_client()?;
+    let mut request = client.get(format!("{base_url}/api/emails")).query(&[("email", email)]);
+    if !settings.gptmail_api_key.trim().is_empty() {
+        request = request.header("X-API-Key", settings.gptmail_api_key.trim());
+    }
+    let value = send_json(request, "GPTMail list messages")?;
+    let items = extract_array(&value, &["data.emails", "emails", "data", "results"]).unwrap_or_default();
+    Ok(items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| temp_message_from_json(email, item, index))
+        .collect())
+}
+
+fn fetch_duckmail_messages(settings: &Settings, temp_email: &TempEmailCredential) -> AppResult<Vec<TempEmailMessage>> {
+    let token = if temp_email.provider_token.trim().is_empty() {
+        duckmail_token(settings, &temp_email.email, &temp_email.provider_password)?
+    } else {
+        temp_email.provider_token.clone()
+    };
+    let base_url = settings.duckmail_base_url.trim().trim_end_matches('/');
+    let value = send_json(
+        http_client()?
+            .get(format!("{base_url}/messages"))
+            .bearer_auth(token)
+            .query(&[("page", "1")]),
+        "DuckMail list messages",
+    )?;
+    let items = extract_array(&value, &["hydra:member", "messages", "data", "results"]).unwrap_or_default();
+    Ok(items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| temp_message_from_json(&temp_email.email, item, index))
+        .collect())
+}
+
+fn fetch_cloudflare_messages(
+    temp_email: &TempEmailCredential,
+    channel: Option<&CloudflareChannelCredential>,
+    limit: usize,
+) -> AppResult<Vec<TempEmailMessage>> {
+    let channel = channel.ok_or_else(|| AppError::InvalidInput("Cloudflare channel is required".to_string()))?;
+    let limit_text = limit.clamp(1, 100).to_string();
+    let value = cloudflare_request(
+        "GET",
+        channel,
+        "/admin/mails",
+        Some(&[
+            ("limit", limit_text.as_str()),
+            ("offset", "0"),
+            ("address", temp_email.email.as_str()),
+        ]),
+        None,
+    )?;
+    let items = extract_array(&value, &["results", "mails", "emails", "data.results", "data"]).unwrap_or_default();
+    Ok(items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| cloudflare_message_from_json(&temp_email.email, item, index))
+        .collect())
+}
+
+fn duckmail_token(settings: &Settings, email: &str, password: &str) -> AppResult<String> {
+    if password.trim().is_empty() {
+        return Err(AppError::InvalidInput("DuckMail password is required".to_string()));
+    }
+    let base_url = settings.duckmail_base_url.trim().trim_end_matches('/');
+    let value = send_json(
+        http_client()?
+            .post(format!("{base_url}/token"))
+            .json(&json!({ "address": email, "password": password })),
+        "DuckMail token",
+    )?;
+    string_path(&value, &["token"]).ok_or_else(|| AppError::Internal("DuckMail token response is missing token".to_string()))
+}
+
+fn cloudflare_request(
+    method: &str,
+    channel: &CloudflareChannelCredential,
+    endpoint: &str,
+    query: Option<&[(&str, &str)]>,
+    body: Option<Value>,
+) -> AppResult<Value> {
+    let worker = channel.worker_domain.trim().trim_end_matches('/');
+    if worker.is_empty() || channel.admin_password.trim().is_empty() {
+        return Err(AppError::InvalidInput(
+            "Cloudflare worker domain and admin password are required".to_string(),
+        ));
+    }
+    let base = if worker.starts_with("http://") || worker.starts_with("https://") {
+        worker.to_string()
+    } else {
+        format!("https://{worker}")
+    };
+    let url = format!("{base}{endpoint}");
+    let client = http_client()?;
+    let mut request = match method {
+        "GET" => client.get(url),
+        "POST" => client.post(url),
+        "DELETE" => client.delete(url),
+        _ => return Err(AppError::InvalidInput(format!("unsupported Cloudflare method: {method}"))),
+    }
+    .header("x-admin-auth", channel.admin_password.trim());
+    if let Some(query) = query {
+        request = request.query(query);
+    }
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    send_json(request, "Cloudflare temp email")
+}
+
+fn send_json(request: reqwest::blocking::RequestBuilder, label: &str) -> AppResult<Value> {
+    let response = request.send().map_err(network_error)?;
+    let status = response.status();
+    let text = response.text().map_err(network_error)?;
+    if !status.is_success() {
+        return Err(AppError::Internal(format!("{label} failed: HTTP {status} {text}")));
+    }
+    if text.trim().is_empty() {
+        return Ok(json!({ "success": true }));
+    }
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|err| AppError::Internal(format!("{label} response is not valid JSON: {err}")))?;
+    if value.get("success").and_then(Value::as_bool) == Some(false) {
+        let error = string_path(&value, &["error"])
+            .or_else(|| string_path(&value, &["message"]))
+            .unwrap_or_else(|| "request failed".to_string());
+        return Err(AppError::Internal(format!("{label} failed: {error}")));
+    }
+    Ok(value)
+}
+
+fn temp_message_from_json(email: &str, item: &Value, index: usize) -> Option<TempEmailMessage> {
+    let message_id = string_path(item, &["id"])
+        .or_else(|| string_path(item, &["message_id"]))
+        .unwrap_or_else(|| format!("{email}-{index}"));
+    let from_address = string_path(item, &["from.address"])
+        .or_else(|| string_path(item, &["from"]))
+        .or_else(|| string_path(item, &["from_address"]))
+        .unwrap_or_default();
+    let subject = string_path(item, &["subject"]).unwrap_or_else(|| "(no subject)".to_string());
+    let html_content = string_path(item, &["html.0"])
+        .or_else(|| string_path(item, &["html_content"]))
+        .or_else(|| string_path(item, &["html"]))
+        .unwrap_or_default();
+    let content = string_path(item, &["text"])
+        .or_else(|| string_path(item, &["content"]))
+        .or_else(|| string_path(item, &["body"]))
+        .unwrap_or_default();
+    Some(TempEmailMessage {
+        id: 0,
+        message_id,
+        email_address: email.to_string(),
+        from_address,
+        subject,
+        content,
+        html_content: html_content.clone(),
+        has_html: !html_content.trim().is_empty(),
+        timestamp: timestamp_from_value(item).unwrap_or_else(|| Utc::now().timestamp()),
+        raw_content: string_path(item, &["raw"]).or_else(|| string_path(item, &["raw_content"])).unwrap_or_default(),
+        created_at: String::new(),
+    })
+}
+
+fn cloudflare_message_from_json(email: &str, item: &Value, index: usize) -> Option<TempEmailMessage> {
+    if let Some(raw) = string_path(item, &["raw"]).or_else(|| string_path(item, &["raw_content"])).or_else(|| string_path(item, &["source_raw"])) {
+        return Some(parse_raw_temp_message(
+            email,
+            &raw,
+            string_path(item, &["id"]).unwrap_or_else(|| format!("{email}-cf-{index}")),
+            timestamp_from_value(item).unwrap_or_else(|| Utc::now().timestamp()),
+        ));
+    }
+    temp_message_from_json(email, item, index)
+}
+
+fn parse_raw_temp_message(email: &str, raw: &str, fallback_id: String, timestamp: i64) -> TempEmailMessage {
+    let parsed = mailparse::parse_mail(raw.as_bytes()).ok();
+    let subject = parsed
+        .as_ref()
+        .and_then(|mail| mail.headers.get_first_value("Subject"))
+        .unwrap_or_else(|| "(no subject)".to_string());
+    let from_address = parsed
+        .as_ref()
+        .and_then(|mail| mail.headers.get_first_value("From"))
+        .unwrap_or_default();
+    let (body, body_type, _) = parsed
+        .as_ref()
+        .map(extract_body_and_attachments)
+        .unwrap_or_else(|| (String::new(), "text".to_string(), Vec::new()));
+    let has_html = body_type == "html";
+    TempEmailMessage {
+        id: 0,
+        message_id: fallback_id,
+        email_address: email.to_string(),
+        from_address,
+        subject,
+        content: if has_html { String::new() } else { body.clone() },
+        html_content: if has_html { body } else { String::new() },
+        has_html,
+        timestamp,
+        raw_content: raw.to_string(),
+        created_at: String::new(),
+    }
+}
+
+fn extract_array(value: &Value, paths: &[&str]) -> Option<Vec<Value>> {
+    for path in paths {
+        if let Some(array) = value_at_path(value, path).and_then(Value::as_array) {
+            return Some(array.clone());
+        }
+    }
+    None
+}
+
+fn string_path(value: &Value, paths: &[&str]) -> Option<String> {
+    for path in paths {
+        let Some(value) = value_at_path(value, path) else {
+            continue;
+        };
+        if let Some(text) = value.as_str() {
+            if !text.trim().is_empty() {
+                return Some(text.to_string());
+            }
+        } else if value.is_number() || value.is_boolean() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut current = value;
+    for part in path.split('.') {
+        if let Ok(index) = part.parse::<usize>() {
+            current = current.as_array()?.get(index)?;
+        } else {
+            current = current.get(part)?;
+        }
+    }
+    Some(current)
+}
+
+fn timestamp_from_value(value: &Value) -> Option<i64> {
+    for path in ["timestamp", "created_at", "createdAt", "date"] {
+        let value = value_at_path(value, path)?;
+        if let Some(number) = value.as_i64() {
+            return Some(number);
+        }
+        let text = value.as_str()?;
+        if let Ok(number) = text.parse::<i64>() {
+            return Some(number);
+        }
+        if let Ok(parsed) = DateTime::parse_from_rfc3339(text) {
+            return Some(parsed.timestamp());
+        }
+    }
+    None
+}
+
+fn random_temp_username() -> String {
+    format!("oe{}", uuid::Uuid::new_v4().simple().to_string()[..12].to_string())
 }
 
 fn parse_token_response(response: reqwest::blocking::Response) -> AppResult<OAuthTokenResponse> {

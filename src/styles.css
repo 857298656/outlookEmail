@@ -186,7 +186,8 @@ button:disabled {
 .listRow.active,
 .accountRow:hover,
 .accountRow.active,
-.messageRow:hover {
+.messageRow:hover,
+.messageRow.active {
   background: #edf5ff;
 }
 
@@ -359,7 +360,8 @@ button:disabled {
 
 .managementGrid,
 .settingsGrid,
-.projectsGrid {
+.projectsGrid,
+.tempGrid {
   display: grid;
   grid-template-columns: minmax(360px, 0.9fr) minmax(360px, 0.9fr);
   align-content: start;
@@ -371,6 +373,10 @@ button:disabled {
 
 .projectsGrid {
   grid-template-columns: 360px minmax(0, 1fr);
+}
+
+.tempGrid {
+  grid-template-columns: 300px 320px minmax(320px, 0.9fr) minmax(360px, 1.1fr);
 }
 
 .panel {
@@ -392,6 +398,90 @@ button:disabled {
 .projectListPanel,
 .projectDetailPanel {
   min-height: calc(100vh - 120px);
+}
+
+.tempControlPanel,
+.tempListPanel,
+.tempMessagePanel,
+.tempDetailPanel {
+  min-height: calc(100vh - 120px);
+}
+
+.tempRows,
+.tempMessageRows,
+.cloudflareChannelRows {
+  display: grid;
+  gap: 8px;
+}
+
+.tempEmailRow {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  min-height: 62px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px 12px;
+  text-align: left;
+  color: #17202a;
+}
+
+.tempEmailRow:hover,
+.tempEmailRow.active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.tempEmailRow strong,
+.tempEmailRow small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tempEmailRow small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.tempPassword,
+.tempImportBox {
+  margin-top: 12px;
+}
+
+.channelEditor {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr)) 110px 110px 100px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.cloudflareChannelRow {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) 100px 120px;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 0 12px;
+  color: #273444;
+  font-size: 13px;
+}
+
+.cloudflareChannelRow strong,
+.cloudflareChannelRow small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cloudflareChannelRow small {
+  margin-top: 3px;
+  color: #64748b;
 }
 
 .projectCreate {

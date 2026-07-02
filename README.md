@@ -12,7 +12,7 @@ This version is intentionally local-first:
 
 ## Current implementation
 
-The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag management, local retained-mail workspace, settings storage, Microsoft Graph OAuth, Graph mailbox sync, Graph attachment metadata/download, basic TLS IMAP sync, SMTP/Telegram/WeCom forwarding, WebDAV backup, in-app scheduling, desktop project account pools, and Windows desktop bundling.
+The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag management, local retained-mail workspace, settings storage, Microsoft Graph OAuth, Graph mailbox sync, Graph attachment metadata/download, basic TLS IMAP sync, GPTMail/DuckMail/Cloudflare temp-mail management, SMTP/Telegram/WeCom forwarding, WebDAV backup, in-app scheduling, desktop project account pools, and Windows desktop bundling.
 
 See [`docs/requirements-milestones.md`](docs/requirements-milestones.md) for the full requirement record, completed scope, unfinished scope, and milestone plan.
 
@@ -68,6 +68,10 @@ IMAP accounts need host, port, and password fields. The first IMAP implementatio
 Forwarding is enabled per account in the account authorization panel. The Settings view configures SMTP, Telegram, and WeCom channels, WebDAV backup credentials, and local scheduler intervals.
 
 The scheduler runs inside the desktop process after the workspace is unlocked. It can periodically refresh mail, forward cached messages, and upload a consistent SQLite snapshot created with `VACUUM INTO`.
+
+## Temp mail
+
+The Temp Mail view manages GPTMail, DuckMail, and Cloudflare temporary addresses. It supports address generation, import, message refresh into SQLite, local message browsing, deletion, and Cloudflare channel configuration.
 
 ## Project account pools
 

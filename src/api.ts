@@ -4,6 +4,7 @@ import type {
   AppStatus,
   BackupLog,
   BackupResult,
+  CloudflareChannel,
   ForwardingLog,
   Group,
   ImportAccountsResult,
@@ -14,14 +15,18 @@ import type {
   ProjectAccountEvent,
   SchedulerStatus,
   Settings,
-  Tag
+  Tag,
+  TempEmail,
+  TempEmailMessage
 } from "./types";
 
 const defaultSettings: Settings = {
   graph_client_id: "",
   oauth_redirect_uri: "http://localhost:8080",
   gptmail_base_url: "https://mail.chatgpt.org.uk",
+  gptmail_api_key: "",
   duckmail_base_url: "https://api.duckmail.sbs",
+  duckmail_api_key: "",
   webdav_url: "",
   webdav_username: "",
   webdav_password: "",
@@ -70,6 +75,9 @@ let mockProjectAccounts: ProjectAccount[] = [];
 let mockProjectEvents: ProjectAccountEvent[] = [];
 let mockForwardingLogs: ForwardingLog[] = [];
 let mockBackupLogs: BackupLog[] = [];
+let mockTempEmails: TempEmail[] = [];
+let mockTempMessages: TempEmailMessage[] = [];
+let mockCloudflareChannels: CloudflareChannel[] = [];
 let mockSchedulerStatus: SchedulerStatus = {
   last_refresh_at: null,
   last_forwarding_at: null,
@@ -253,6 +261,78 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       return mockBackupLogs.slice(0, (args?.limit as number | undefined) ?? 100) as T;
     case "scheduler_status":
       return mockSchedulerStatus as T;
+    case "list_temp_emails":
+      return mockTempEmails as T;
+    case "import_temp_emails": {
+      const input = args?.input as { raw: string; provider: string; channel_id?: number | null };
+      let imported = 0;
+      let skipped = 0;
+      for (const line of input.raw.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+        const email = (line.includes("----") ? line.split("----")[0] : line.split(",")[0]).trim().toLowerCase();
+        if (!email.includes("@") || mockTempEmails.some((item) => item.email === email)) {
+          skipped += 1;
+          continue;
+        }
+        mockTempEmails = [mockTempEmail(email, input.provider, input.channel_id ?? null), ...mockTempEmails];
+        imported += 1;
+      }
+      return { imported, skipped } as T;
+    }
+    case "generate_temp_email": {
+      const input = args?.input as { provider: string; prefix?: string; domain?: string; username?: string; channel_id?: number | null };
+      const provider = input.provider || "gptmail";
+      const domain = input.domain || (provider === "cloudflare" ? mockCloudflareChannels[0]?.email_domains[0] : "example.test") || "example.test";
+      const name = input.username || input.prefix || `oe${Math.floor(Math.random() * 100000)}`;
+      const email = `${name}@${domain}`.toLowerCase();
+      const item = mockTempEmail(email, provider, input.channel_id ?? mockCloudflareChannels[0]?.id ?? null);
+      mockTempEmails = [item, ...mockTempEmails.filter((existing) => existing.email !== email)];
+      return item as T;
+    }
+    case "delete_temp_email": {
+      const input = args?.input as { email: string };
+      mockTempEmails = mockTempEmails.filter((item) => item.email !== input.email);
+      mockTempMessages = mockTempMessages.filter((item) => item.email_address !== input.email);
+      return undefined as T;
+    }
+    case "refresh_temp_email_messages": {
+      const input = args?.input as { email: string };
+      const message = mockTempMessage(input.email);
+      mockTempMessages = [message, ...mockTempMessages.filter((item) => item.message_id !== message.message_id)];
+      mockTempEmails = mockTempEmails.map((item) =>
+        item.email === input.email
+          ? { ...item, message_count: mockTempMessages.filter((msg) => msg.email_address === input.email).length, last_refresh_at: new Date().toISOString(), last_refresh_status: "success", updated_at: new Date().toISOString() }
+          : item
+      );
+      return { success: true, message: "Temp mailbox refreshed", refreshed: 1, failed: 0 } as T;
+    }
+    case "list_temp_email_messages":
+      return mockTempMessages.filter((item) => item.email_address === args?.email) as T;
+    case "list_cloudflare_channels":
+      return mockCloudflareChannels as T;
+    case "upsert_cloudflare_channel": {
+      const input = args?.input as { id?: number; name: string; worker_domain: string; email_domains: string[]; enabled: boolean; is_default: boolean };
+      const channel: CloudflareChannel = {
+        id: input.id ?? Date.now(),
+        name: input.name,
+        worker_domain: input.worker_domain,
+        email_domains: input.email_domains,
+        enabled: input.enabled,
+        is_default: input.is_default,
+        admin_password_configured: true,
+        reference_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      mockCloudflareChannels = [channel, ...mockCloudflareChannels.filter((item) => item.id !== channel.id)].map((item) =>
+        channel.is_default && item.id !== channel.id ? { ...item, is_default: false } : item
+      );
+      return channel as T;
+    }
+    case "delete_cloudflare_channel":
+      mockCloudflareChannels = mockCloudflareChannels.filter((item) => item.id !== args?.channelId);
+      return undefined as T;
+    case "test_cloudflare_channel":
+      return { success: true, message: "Cloudflare channel connected", refreshed: 1, failed: 0 } as T;
     case "generate_oauth_auth_url": {
       const input = args?.input as { client_id: string; redirect_uri: string; login_hint?: string };
       return `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=${encodeURIComponent(input.client_id)}&response_type=code&redirect_uri=${encodeURIComponent(input.redirect_uri)}&scope=${encodeURIComponent("offline_access Mail.ReadWrite User.Read")}&response_mode=query&prompt=select_account${input.login_hint ? `&login_hint=${encodeURIComponent(input.login_hint)}` : ""}` as T;
@@ -387,6 +467,38 @@ function status(): AppStatus {
   };
 }
 
+function mockTempEmail(email: string, provider: string, channelId: number | null): TempEmail {
+  return {
+    id: Date.now() + Math.floor(Math.random() * 1000),
+    email,
+    provider,
+    status: "active",
+    channel_id: channelId,
+    message_count: 0,
+    last_refresh_at: null,
+    last_refresh_status: "never",
+    last_refresh_error: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+}
+
+function mockTempMessage(email: string): TempEmailMessage {
+  return {
+    id: Date.now(),
+    message_id: crypto.randomUUID(),
+    email_address: email,
+    from_address: "sender@example.test",
+    subject: "Temporary mailbox preview",
+    content: "This preview message confirms the temp mailbox workspace is wired.",
+    html_content: "",
+    has_html: false,
+    timestamp: Math.floor(Date.now() / 1000),
+    raw_content: "",
+    created_at: new Date().toISOString()
+  };
+}
+
 export const api = {
   status: () => call<AppStatus>("app_status"),
   initialize: (password: string) => call<AppStatus>("initialize_app", { password }),
@@ -428,6 +540,26 @@ export const api = {
   listForwardingLogs: (limit = 100) => call<ForwardingLog[]>("list_forwarding_logs", { limit }),
   listBackupLogs: (limit = 100) => call<BackupLog[]>("list_backup_logs", { limit }),
   schedulerStatus: () => call<SchedulerStatus>("scheduler_status"),
+  listTempEmails: () => call<TempEmail[]>("list_temp_emails"),
+  importTempEmails: (input: { raw: string; provider: string; channel_id?: number | null }) =>
+    call<ImportAccountsResult>("import_temp_emails", { input }),
+  generateTempEmail: (input: { provider: string; prefix?: string; domain?: string; username?: string; password?: string; channel_id?: number | null }) =>
+    call<TempEmail>("generate_temp_email", { input }),
+  deleteTempEmail: (email: string) => call<void>("delete_temp_email", { input: { email } }),
+  refreshTempEmailMessages: (email: string) => call<JobResult>("refresh_temp_email_messages", { input: { email } }),
+  listTempEmailMessages: (email: string) => call<TempEmailMessage[]>("list_temp_email_messages", { email }),
+  listCloudflareChannels: () => call<CloudflareChannel[]>("list_cloudflare_channels"),
+  upsertCloudflareChannel: (input: {
+    id?: number;
+    name: string;
+    worker_domain: string;
+    email_domains: string[];
+    admin_password?: string;
+    enabled: boolean;
+    is_default: boolean;
+  }) => call<CloudflareChannel>("upsert_cloudflare_channel", { input }),
+  deleteCloudflareChannel: (channelId: number) => call<void>("delete_cloudflare_channel", { channelId }),
+  testCloudflareChannel: (channelId: number) => call<JobResult>("test_cloudflare_channel", { channelId }),
   generateOAuthAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string }) =>
     call<string>("generate_oauth_auth_url", { input }),
   exchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string }) =>

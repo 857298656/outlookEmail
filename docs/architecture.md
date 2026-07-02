@@ -23,6 +23,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Settings persistence
 - Microsoft Graph OAuth and mailbox refresh
 - Basic TLS IMAP mailbox refresh
+- GPTMail, DuckMail, and Cloudflare temp-mail management
 - SMTP, Telegram, and WeCom forwarding for cached messages
 - WebDAV backup from a consistent SQLite snapshot
 - Background scheduler inside the desktop process
@@ -34,6 +35,8 @@ The application is a single-user local desktop app. It does not expose a public 
 - Graph uses Microsoft OAuth v2 and Graph `/me/mailFolders/{folder}/messages` calls.
 - Graph attachments are listed during sync and downloaded to the local app data `attachments` directory on demand.
 - IMAP uses TLS login, UID search/fetch, and MIME parsing.
+- Temp-mail providers use configurable GPTMail and DuckMail HTTP APIs plus Cloudflare Worker admin channels.
+- Temp-mail messages are normalized and cached in `temp_email_messages` for local browsing.
 - Refreshed messages are upserted into SQLite and read by the workspace UI.
 - Refresh failures are recorded on the account and in `refresh_logs`.
 - Forwarding is controlled by a per-account `forward_enabled` flag and deduplicated through `forwarding_logs`.
@@ -46,4 +49,5 @@ The application is a single-user local desktop app. It does not expose a public 
 - IMAP attachment extraction/download from cached raw MIME
 - IMAP XOAUTH2 login
 - More provider-specific folder discovery
+- Cloudflare AI username generation and advanced batch generation
 - Local HTTP API only if external scripts need project-pool access later

@@ -83,7 +83,9 @@ pub struct Settings {
     pub graph_client_id: String,
     pub oauth_redirect_uri: String,
     pub gptmail_base_url: String,
+    pub gptmail_api_key: String,
     pub duckmail_base_url: String,
+    pub duckmail_api_key: String,
     pub webdav_url: String,
     pub webdav_username: String,
     pub webdav_password: String,
@@ -111,7 +113,9 @@ impl Default for Settings {
             graph_client_id: String::new(),
             oauth_redirect_uri: "http://localhost:8080".to_string(),
             gptmail_base_url: "https://mail.chatgpt.org.uk".to_string(),
+            gptmail_api_key: String::new(),
             duckmail_base_url: "https://api.duckmail.sbs".to_string(),
+            duckmail_api_key: String::new(),
             webdav_url: String::new(),
             webdav_username: String::new(),
             webdav_password: String::new(),
@@ -189,6 +193,103 @@ pub struct ForwardContent {
     pub received_at: String,
     pub body_preview: String,
     pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TempEmail {
+    pub id: i64,
+    pub email: String,
+    pub provider: String,
+    pub status: String,
+    pub channel_id: Option<i64>,
+    pub message_count: i64,
+    pub last_refresh_at: Option<String>,
+    pub last_refresh_status: String,
+    pub last_refresh_error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TempEmailMessage {
+    pub id: i64,
+    pub message_id: String,
+    pub email_address: String,
+    pub from_address: String,
+    pub subject: String,
+    pub content: String,
+    pub html_content: String,
+    pub has_html: bool,
+    pub timestamp: i64,
+    pub raw_content: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CloudflareChannel {
+    pub id: i64,
+    pub name: String,
+    pub worker_domain: String,
+    pub email_domains: Vec<String>,
+    pub enabled: bool,
+    pub is_default: bool,
+    pub admin_password_configured: bool,
+    pub reference_count: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GenerateTempEmailInput {
+    pub provider: String,
+    pub prefix: Option<String>,
+    pub domain: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub channel_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportTempEmailsInput {
+    pub raw: String,
+    pub provider: String,
+    pub channel_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TempEmailAddressInput {
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpsertCloudflareChannelInput {
+    pub id: Option<i64>,
+    pub name: String,
+    pub worker_domain: String,
+    pub email_domains: Vec<String>,
+    pub admin_password: Option<String>,
+    pub enabled: bool,
+    pub is_default: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct TempEmailCredential {
+    pub id: i64,
+    pub email: String,
+    pub provider: String,
+    pub channel_id: Option<i64>,
+    pub provider_token: String,
+    pub provider_account_id: String,
+    pub provider_password: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CloudflareChannelCredential {
+    pub id: i64,
+    pub worker_domain: String,
+    pub email_domains: Vec<String>,
+    pub admin_password: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

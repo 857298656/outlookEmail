@@ -1,0 +1,912 @@
+:root {
+  color-scheme: light;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background: #eef1f4;
+  color: #17202a;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 1100px;
+  min-height: 720px;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.appShell {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  height: 100vh;
+  background: #eef1f4;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 12px;
+  background: #1d2733;
+  color: #f8fafc;
+}
+
+.brandMark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #1d2733;
+  font-weight: 800;
+}
+
+.railButton,
+.iconMini {
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+}
+
+.railButton {
+  width: 44px;
+  height: 44px;
+}
+
+.railButton:hover,
+.railButton.active {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.railSpacer {
+  flex: 1;
+}
+
+.mainSurface {
+  display: grid;
+  grid-template-rows: 76px 1fr;
+  min-width: 0;
+  height: 100vh;
+}
+
+.topBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 24px;
+  border-bottom: 1px solid #d7dde4;
+  background: #fff;
+}
+
+.topBar h1 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.topBar p {
+  margin: 4px 0 0;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.topActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.workspaceGrid {
+  display: grid;
+  grid-template-columns: 230px 320px minmax(320px, 0.95fr) minmax(360px, 1.2fr);
+  gap: 1px;
+  min-height: 0;
+  background: #d7dde4;
+}
+
+.pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: #fff;
+}
+
+.paneHeader,
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.paneHeader {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 52px;
+  padding: 0 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+}
+
+.paneHeader h2,
+.panelHeader h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.listRow,
+.accountRow,
+.messageRow {
+  width: 100%;
+  border: 0;
+  text-align: left;
+  background: transparent;
+}
+
+.listRow {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 0 14px;
+  color: #334155;
+}
+
+.listRow:hover,
+.listRow.active,
+.accountRow:hover,
+.accountRow.active,
+.messageRow:hover {
+  background: #edf5ff;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.accountRow {
+  display: grid;
+  grid-template-columns: 38px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 11px 14px;
+  border-bottom: 1px solid #edf0f3;
+  color: #17202a;
+}
+
+.mailAvatar {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: #e0f2fe;
+  color: #075985;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.accountText {
+  min-width: 0;
+}
+
+.accountText strong,
+.accountText small,
+.messageTop strong,
+.sender,
+.preview {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountText strong {
+  font-size: 13px;
+}
+
+.accountText small {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.searchBox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  margin: 12px 14px;
+  padding: 0 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.messageRow {
+  display: grid;
+  gap: 5px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #edf0f3;
+  color: #17202a;
+}
+
+.messageTop {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+}
+
+.messageTop strong {
+  font-size: 14px;
+}
+
+.messageTop small,
+.sender,
+.preview {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.detailPane {
+  padding: 24px;
+}
+
+.detailHeader {
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.detailHeader h2 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.25;
+}
+
+.detailHeader p {
+  margin: 8px 0 0;
+  color: #64748b;
+}
+
+.metaGrid {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 9px 14px;
+  margin: 18px 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.metaGrid strong {
+  color: #17202a;
+}
+
+.messageBody {
+  max-width: 760px;
+  white-space: pre-wrap;
+  line-height: 1.6;
+  color: #273444;
+}
+
+.attachmentList {
+  display: grid;
+  gap: 8px;
+  max-width: 520px;
+  margin-top: 24px;
+}
+
+.attachmentList h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.attachmentButton {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  border: 1px solid #dbe3ec;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #273444;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.attachmentButton span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachmentButton small {
+  color: #64748b;
+}
+
+.managementGrid,
+.settingsGrid,
+.projectsGrid {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(360px, 0.9fr);
+  align-content: start;
+  gap: 18px;
+  min-height: 0;
+  overflow: auto;
+  padding: 22px;
+}
+
+.projectsGrid {
+  grid-template-columns: 360px minmax(0, 1fr);
+}
+
+.panel {
+  min-width: 0;
+  border: 1px solid #dfe5ec;
+  border-radius: 8px;
+  background: #fff;
+  padding: 18px;
+}
+
+.widePanel {
+  grid-column: 1 / -1;
+}
+
+.panelHeader {
+  margin-bottom: 16px;
+}
+
+.projectListPanel,
+.projectDetailPanel {
+  min-height: calc(100vh - 120px);
+}
+
+.projectCreate {
+  display: grid;
+  gap: 10px;
+}
+
+.projectRows {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.projectRow {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 72px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px 12px;
+  text-align: left;
+  color: #17202a;
+}
+
+.projectRow:hover,
+.projectRow.active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.projectRow strong,
+.projectRow small,
+.projectRow span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projectRow small,
+.projectRow span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.groupPicker {
+  display: grid;
+  gap: 6px;
+  max-height: 140px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.checkLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  color: #334155;
+  font-size: 13px;
+}
+
+.toggleLine {
+  min-height: 34px;
+  margin: 8px 0;
+}
+
+.projectHero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.projectHero h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.projectHero p {
+  margin: 6px 0 0;
+  color: #64748b;
+}
+
+.statStrip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.statBox {
+  display: grid;
+  gap: 2px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 12px;
+}
+
+.statBox strong {
+  font-size: 20px;
+}
+
+.statBox span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.projectAccountTable {
+  display: grid;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.projectTableHeader,
+.projectTableRow {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 120px 80px 150px 180px;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 0 12px;
+}
+
+.projectTableHeader {
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.projectTableRow {
+  border-top: 1px solid #eef2f7;
+  color: #273444;
+  font-size: 13px;
+}
+
+.projectTableRow strong,
+.projectTableRow small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projectTableRow small {
+  margin-top: 3px;
+  color: #64748b;
+}
+
+.statusPill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 0 9px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status-toClaim {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.status-claimed {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-removed {
+  background: #e5e7eb;
+  color: #4b5563;
+}
+
+.rowActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.textarea {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  border: 1px solid #cfd8e3;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.textarea.compact {
+  min-height: 72px;
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.input,
+.select {
+  height: 38px;
+  border: 1px solid #cfd8e3;
+  border-radius: 8px;
+  background: #fff;
+  color: #17202a;
+  padding: 0 11px;
+}
+
+.field {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 13px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.field.grow {
+  margin-bottom: 0;
+}
+
+.formLine {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.smallInput {
+  width: 96px;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0 14px;
+  font-weight: 650;
+}
+
+.button.primary {
+  background: #2563eb;
+  color: #fff;
+}
+
+.button.secondary {
+  border-color: #cfd8e3;
+  background: #fff;
+  color: #1f2937;
+}
+
+.fullWidth {
+  width: 100%;
+}
+
+.iconMini {
+  width: 32px;
+  height: 32px;
+  color: #475569;
+}
+
+.iconMini:hover {
+  background: #eef2f7;
+}
+
+.danger {
+  color: #dc2626;
+}
+
+.chipCloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 18px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 0 10px;
+  color: #334155;
+  font-size: 12px;
+}
+
+.table {
+  display: grid;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.tableHeader,
+.tableRow {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 160px 120px 120px 44px;
+  align-items: center;
+  gap: 12px;
+  min-height: 42px;
+  padding: 0 12px;
+}
+
+.tableHeader {
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tableRow {
+  border-top: 1px solid #eef2f7;
+  color: #273444;
+  font-size: 13px;
+}
+
+.tableRow.active {
+  background: #edf5ff;
+}
+
+.storageLine {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.actionGrid,
+.runStatusGrid {
+  display: grid;
+  gap: 10px;
+}
+
+.actionGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 16px;
+}
+
+.runStatusGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 18px;
+}
+
+.runStatus {
+  display: grid;
+  gap: 4px;
+  min-height: 54px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px 12px;
+}
+
+.runStatus span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.runStatus strong {
+  color: #17202a;
+  font-size: 13px;
+}
+
+.logTable {
+  display: grid;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.logHeader,
+.logRow {
+  display: grid;
+  align-items: center;
+  gap: 12px;
+  min-height: 42px;
+  padding: 0 12px;
+}
+
+.forwardingLogTable .logHeader,
+.forwardingLogTable .logRow {
+  grid-template-columns: 150px minmax(180px, 1fr) 100px 100px minmax(220px, 1.4fr);
+}
+
+.backupLogTable .logHeader,
+.backupLogTable .logRow {
+  grid-template-columns: 150px minmax(190px, 1fr) 100px 100px minmax(280px, 1.4fr);
+}
+
+.logHeader {
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.logRow {
+  border-top: 1px solid #eef2f7;
+  color: #273444;
+  font-size: 13px;
+}
+
+.logRow > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 6px;
+  background: #f1f5f9;
+  padding: 5px 8px;
+  color: #334155;
+}
+
+.lockScreen,
+.centerScreen {
+  display: grid;
+  place-items: center;
+  width: 100vw;
+  height: 100vh;
+  background: radial-gradient(circle at 20% 10%, #e0f2fe 0, transparent 30%),
+    linear-gradient(135deg, #eef1f4, #dbe4ee);
+}
+
+.lockPanel {
+  width: min(440px, calc(100vw - 40px));
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 28px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.18);
+}
+
+.lockIcon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  background: #1d2733;
+  color: #fff;
+}
+
+.lockPanel h1 {
+  margin: 20px 0 8px;
+  font-size: 24px;
+}
+
+.lockPanel p {
+  margin: 0 0 18px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.formError,
+.errorText {
+  color: #b91c1c;
+}
+
+.formError {
+  margin: 10px 0;
+  font-size: 13px;
+}
+
+.notice {
+  color: #047857;
+  font-size: 13px;
+}
+
+.emptyState {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  height: 160px;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

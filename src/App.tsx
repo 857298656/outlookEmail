@@ -22,6 +22,7 @@ import {
   Trash2,
   Upload,
   Users,
+  WandSparkles,
   XCircle
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -38,6 +39,7 @@ import type {
   ExportResult,
   ForwardingLog,
   Group,
+  ImportAccountsResult,
   MailMessage,
   MailMessageQuery,
   Project,
@@ -693,13 +695,22 @@ function App() {
                 setNotice(`已生成 ${result.imported} 个 Cloudflare 地址，跳过 ${result.skipped} 个`);
               })
             }
-            onImport={(input) =>
-              runAction(async () => {
+            onImport={async (input) => {
+              setBusy(true);
+              setError(null);
+              setNotice(null);
+              try {
                 const result = await api.importTempEmails(input);
                 await loadTempWorkspace();
                 setNotice(`已导入 ${result.imported} 个，跳过 ${result.skipped} 个`);
-              })
-            }
+                return result;
+              } catch (err) {
+                setError(readError(err));
+                throw err;
+              } finally {
+                setBusy(false);
+              }
+            }}
             onRefresh={(email) =>
               runAction(async () => {
                 const result = await api.refreshTempEmailMessages(email);
@@ -2165,7 +2176,7 @@ function TempEmailsView({
   onMessageSelect: (messageId: string) => void;
   onGenerate: (input: { provider: string; prefix?: string; domain?: string; username?: string; password?: string; channel_id?: number | null }) => void;
   onGenerateCloudflareBatch: (input: Parameters<typeof api.generateCloudflareTempEmails>[0]) => void;
-  onImport: (input: { raw: string; provider: string; channel_id?: number | null }) => void;
+  onImport: (input: { raw: string; provider: string; channel_id?: number | null }) => Promise<ImportAccountsResult>;
   onRefresh: (email: string) => void;
   onUpdate: (input: Parameters<typeof api.updateTempEmail>[0]) => void;
   onDelete: (email: string) => void;
@@ -2195,6 +2206,7 @@ function TempEmailsView({
   const [batchCount, setBatchCount] = useState(10);
   const [batchPrefix, setBatchPrefix] = useState("cf");
   const [batchTagsText, setBatchTagsText] = useState("");
+  const [importProgress, setImportProgress] = useState({ active: false, done: 0, total: 0 });
   const [channelDraft, setChannelDraft] = useState({
     id: undefined as number | undefined,
     name: "",
@@ -2232,6 +2244,30 @@ function TempEmailsView({
     setTempTagsText(selectedTemp?.tags.join(", ") ?? "");
   }, [selectedTemp?.email, selectedTemp?.updated_at]);
 
+  async function runTempImport() {
+    const rows = importRaw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (rows.length === 0) return;
+    const chunkSize = provider === "cloudflare" ? 50 : rows.length;
+    setImportProgress({ active: true, done: 0, total: rows.length });
+    try {
+      for (let index = 0; index < rows.length; index += chunkSize) {
+        const chunk = rows.slice(index, index + chunkSize);
+        await onImport({
+          raw: chunk.join("\n"),
+          provider,
+          channel_id: provider === "cloudflare" ? channelId : undefined
+        });
+        setImportProgress({ active: true, done: Math.min(index + chunk.length, rows.length), total: rows.length });
+      }
+      setImportRaw("");
+    } finally {
+      setImportProgress((current) => ({ ...current, active: false }));
+    }
+  }
+
   return (
     <section className="tempGrid">
       <aside className="panel tempControlPanel">
@@ -2263,6 +2299,17 @@ function TempEmailsView({
             placeholder={provider === "gptmail" ? "前缀" : "用户名"}
             onChange={(event) => (provider === "gptmail" ? setPrefix(event.target.value) : setUsername(event.target.value))}
           />
+          <button
+            className="iconMini"
+            title="生成智能用户名"
+            onClick={() => {
+              const nextName = smartTempUsername();
+              if (provider === "gptmail") setPrefix(nextName);
+              else setUsername(nextName);
+            }}
+          >
+            <WandSparkles size={15} />
+          </button>
           <input className="input grow" value={domain} placeholder="域名" onChange={(event) => setDomain(event.target.value)} />
         </div>
         {provider === "duckmail" && (
@@ -2342,12 +2389,22 @@ function TempEmailsView({
         />
         <button
           className="button secondary fullWidth"
-          disabled={busy || !importRaw.trim() || (provider === "cloudflare" && !channelId)}
-          onClick={() => onImport({ raw: importRaw, provider, channel_id: provider === "cloudflare" ? channelId : undefined })}
+          disabled={busy || importProgress.active || !importRaw.trim() || (provider === "cloudflare" && !channelId)}
+          onClick={() => void runTempImport()}
         >
-          <Upload size={16} />
+          {importProgress.active ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
           导入
         </button>
+        {importProgress.total > 0 && (
+          <div className="importProgress">
+            <div>
+              <span style={{ width: `${Math.round((importProgress.done / importProgress.total) * 100)}%` }} />
+            </div>
+            <small>
+              {importProgress.done}/{importProgress.total}
+            </small>
+          </div>
+        )}
       </aside>
 
       <aside className="panel tempListPanel">
@@ -3754,6 +3811,15 @@ function parseTagText(value: string) {
     seen.add(key);
     return true;
   });
+}
+
+function smartTempUsername() {
+  const adjectives = ["clear", "fast", "nova", "quiet", "prime", "bright", "solid", "fresh"];
+  const nouns = ["mail", "orbit", "relay", "pilot", "signal", "matrix", "portal", "vertex"];
+  const adjective = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const noun = nouns[Math.floor(Math.random() * nouns.length)];
+  const suffix = Math.floor(1000 + Math.random() * 9000);
+  return `${adjective}${noun}${suffix}`;
 }
 
 function formatBytes(value: number) {

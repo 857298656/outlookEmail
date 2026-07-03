@@ -870,6 +870,28 @@ button:disabled {
   margin-top: 0;
 }
 
+.importProgress {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.importProgress > div {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.importProgress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #111827;
+}
+
 .channelEditor {
   display: grid;
   grid-template-columns: repeat(4, minmax(160px, 1fr)) 110px 110px 100px;

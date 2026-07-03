@@ -115,6 +115,8 @@
 - Cloudflare Worker 邮箱通道管理。
 - Cloudflare 邮箱域名、通道密码、默认通道配置。
 - Cloudflare 临时邮箱支持按通道批量生成，并可为批量生成地址写入标签。
+- 临时邮箱生成表单支持本地智能用户名生成。
+- Cloudflare 地址批量导入按分块执行并显示导入进度。
 - 临时邮箱支持标签保存、标签筛选、服务商筛选和关键字搜索。
 - 临时邮箱消息刷新并缓存到 SQLite。
 - 临时邮箱刷新失败会进入共享重试队列。
@@ -162,6 +164,7 @@
   - `feat: add refresh management view`
   - `feat: protect account secret reveal`
   - `feat: add temp email labels and cloudflare batch generation`
+  - `feat: add temp email smart names and import progress`
 
 ## 未完成
 
@@ -175,7 +178,6 @@ P0：已补齐
 
 P1：补齐常用体验
 
-- 临时邮箱增强：AI 用户名生成、Cloudflare 地址批量导入进度。
 - 邮件详情增强：全部附件打包下载、原始邮件 raw 查看、更多附件错误提示和下载状态。
 - IMAP 增强：XOAUTH2、文件夹发现、特殊文件夹映射，不再只依赖固定 `Junk` / `Deleted` 名称。
 - 本地保留管理：缓存统计、清理入口、关闭确认、新邮件同步提示和更明确的本地/远程状态。
@@ -193,14 +195,6 @@ P2：后续增强
 - Chrome/Edge 浏览器扩展。
 - Docker/服务器部署、Watchtower 在线更新和远程多设备访问。
 - Web 登录、Session/CSRF、API Key 鉴权、面向公网部署的安全体系。
-
-### 临时邮箱增强
-
-- AI 用户名生成。
-- Cloudflare 批量生成和批量导入的流式进度。
-- 临时邮箱标签和更细的筛选。
-- 不同 GPTMail/DuckMail 部署版本的 API 兼容适配。
-- 临时邮箱失败重试的批量策略和更细错误可视化。
 
 ### IMAP 完整能力
 
@@ -268,7 +262,7 @@ P2：后续增强
 - 已交付：临时邮箱列表、生成/导入、消息刷新、删除、Cloudflare 通道设置。
 - 已交付：GPTMail 和 DuckMail base URL/API key 配置，Cloudflare 通道密码加密保存。
 - 已交付：临时邮箱刷新失败重试队列，支持手动和调度器自动重试。
-- 剩余增强：AI 用户名、批量生成/导入流式进度、更多服务 API 兼容、失败错误可视化。
+- 剩余增强：更多服务 API 兼容、失败错误可视化。
 
 ### M6：邮件操作核心，已完成
 
@@ -305,4 +299,4 @@ P2：后续增强
 
 ## 当前推荐下一步
 
-继续按“桌面版够用，优先补功能”推进。下一批建议继续补临时邮箱 AI 用户名生成和 Cloudflare 地址批量导入进度，然后推进邮件详情增强和 IMAP 增强；Web 服务和浏览器扩展暂不处理。
+继续按“桌面版够用，优先补功能”推进。下一批建议先做邮件详情增强，然后推进 IMAP 增强；Web 服务和浏览器扩展暂不处理。

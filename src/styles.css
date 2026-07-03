@@ -1173,6 +1173,10 @@ code {
   color: #fff;
 }
 
+.lockPanel .input {
+  width: 100%;
+}
+
 .lockPanel .button {
   margin-top: 14px;
 }

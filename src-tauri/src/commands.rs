@@ -396,6 +396,15 @@ pub fn generate_temp_email(state: State<'_, AppState>, input: GenerateTempEmailI
 }
 
 #[tauri::command]
+pub fn generate_cloudflare_temp_emails(
+    state: State<'_, AppState>,
+    input: GenerateCloudflareBatchInput,
+) -> AppResult<ImportAccountsResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.generate_cloudflare_batch(input)
+}
+
+#[tauri::command]
 pub fn delete_temp_email(state: State<'_, AppState>, input: TempEmailAddressInput) -> AppResult<()> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.delete_temp_email(input.email)
@@ -405,6 +414,12 @@ pub fn delete_temp_email(state: State<'_, AppState>, input: TempEmailAddressInpu
 pub fn refresh_temp_email_messages(state: State<'_, AppState>, input: TempEmailAddressInput) -> AppResult<JobResult> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.refresh_temp_email_messages(input.email)
+}
+
+#[tauri::command]
+pub fn update_temp_email(state: State<'_, AppState>, input: UpdateTempEmailInput) -> AppResult<TempEmail> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.update_temp_email(input)
 }
 
 #[tauri::command]

@@ -114,6 +114,8 @@
 - DuckMail 临时邮箱生成、导入、刷新、删除。
 - Cloudflare Worker 邮箱通道管理。
 - Cloudflare 邮箱域名、通道密码、默认通道配置。
+- Cloudflare 临时邮箱支持按通道批量生成，并可为批量生成地址写入标签。
+- 临时邮箱支持标签保存、标签筛选、服务商筛选和关键字搜索。
 - 临时邮箱消息刷新并缓存到 SQLite。
 - 临时邮箱刷新失败会进入共享重试队列。
 - 临时邮箱列表、消息列表、消息详情和刷新状态展示。
@@ -159,6 +161,7 @@
   - `feat: add account batch operations`
   - `feat: add refresh management view`
   - `feat: protect account secret reveal`
+  - `feat: add temp email labels and cloudflare batch generation`
 
 ## 未完成
 
@@ -172,7 +175,7 @@ P0：已补齐
 
 P1：补齐常用体验
 
-- 临时邮箱增强：AI 用户名生成、Cloudflare 批量生成、Cloudflare 地址批量导入进度、临时邮箱标签和筛选。
+- 临时邮箱增强：AI 用户名生成、Cloudflare 地址批量导入进度。
 - 邮件详情增强：全部附件打包下载、原始邮件 raw 查看、更多附件错误提示和下载状态。
 - IMAP 增强：XOAUTH2、文件夹发现、特殊文件夹映射，不再只依赖固定 `Junk` / `Deleted` 名称。
 - 本地保留管理：缓存统计、清理入口、关闭确认、新邮件同步提示和更明确的本地/远程状态。
@@ -302,4 +305,4 @@ P2：后续增强
 
 ## 当前推荐下一步
 
-继续按“桌面版够用，优先补功能”推进。下一批建议先做临时邮箱增强，然后推进邮件详情增强和 IMAP 增强；Web 服务和浏览器扩展暂不处理。
+继续按“桌面版够用，优先补功能”推进。下一批建议继续补临时邮箱 AI 用户名生成和 Cloudflare 地址批量导入进度，然后推进邮件详情增强和 IMAP 增强；Web 服务和浏览器扩展暂不处理。

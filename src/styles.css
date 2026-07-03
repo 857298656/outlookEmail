@@ -823,9 +823,51 @@ button:disabled {
   font-size: 12px;
 }
 
+.tempFilters {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.tempFilters .formLine {
+  margin-top: 0;
+}
+
+.tempTagLine {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.tempTagLine .chip {
+  min-height: 22px;
+  padding: 0 8px;
+}
+
+.tempTagEditor {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .tempPassword,
 .tempImportBox {
   margin-top: 12px;
+}
+
+.tempBatchBox {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 12px;
+}
+
+.tempBatchBox .formLine {
+  margin-top: 0;
 }
 
 .channelEditor {

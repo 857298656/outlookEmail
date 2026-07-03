@@ -686,6 +686,13 @@ function App() {
                 await loadTempWorkspace(created.email);
               }, "临时邮箱已生成")
             }
+            onGenerateCloudflareBatch={(input) =>
+              runAction(async () => {
+                const result = await api.generateCloudflareTempEmails(input);
+                await loadTempWorkspace();
+                setNotice(`已生成 ${result.imported} 个 Cloudflare 地址，跳过 ${result.skipped} 个`);
+              })
+            }
             onImport={(input) =>
               runAction(async () => {
                 const result = await api.importTempEmails(input);
@@ -699,6 +706,12 @@ function App() {
                 setNotice(formatResultMessage(result.message));
                 await loadTempWorkspace(email);
               })
+            }
+            onUpdate={(input) =>
+              runAction(async () => {
+                await api.updateTempEmail(input);
+                await loadTempWorkspace(input.email);
+              }, "临时邮箱已保存")
             }
             onDelete={(email) =>
               runAction(async () => {
@@ -2133,8 +2146,10 @@ function TempEmailsView({
   onSelect,
   onMessageSelect,
   onGenerate,
+  onGenerateCloudflareBatch,
   onImport,
   onRefresh,
+  onUpdate,
   onDelete,
   onSaveChannel,
   onDeleteChannel,
@@ -2149,8 +2164,10 @@ function TempEmailsView({
   onSelect: (email: string) => void;
   onMessageSelect: (messageId: string) => void;
   onGenerate: (input: { provider: string; prefix?: string; domain?: string; username?: string; password?: string; channel_id?: number | null }) => void;
+  onGenerateCloudflareBatch: (input: Parameters<typeof api.generateCloudflareTempEmails>[0]) => void;
   onImport: (input: { raw: string; provider: string; channel_id?: number | null }) => void;
   onRefresh: (email: string) => void;
+  onUpdate: (input: Parameters<typeof api.updateTempEmail>[0]) => void;
   onDelete: (email: string) => void;
   onSaveChannel: (input: {
     id?: number;
@@ -2171,6 +2188,13 @@ function TempEmailsView({
   const [password, setPassword] = useState("");
   const [channelId, setChannelId] = useState<number | null>(channels[0]?.id ?? null);
   const [importRaw, setImportRaw] = useState("");
+  const [tempSearch, setTempSearch] = useState("");
+  const [tempProviderFilter, setTempProviderFilter] = useState("all");
+  const [tempTagFilter, setTempTagFilter] = useState("all");
+  const [tempTagsText, setTempTagsText] = useState("");
+  const [batchCount, setBatchCount] = useState(10);
+  const [batchPrefix, setBatchPrefix] = useState("cf");
+  const [batchTagsText, setBatchTagsText] = useState("");
   const [channelDraft, setChannelDraft] = useState({
     id: undefined as number | undefined,
     name: "",
@@ -2186,6 +2210,27 @@ function TempEmailsView({
   }, [channels.length]);
 
   const selectedTemp = tempEmails.find((item) => item.email === selectedEmail);
+  const tempTags = useMemo(() => {
+    const tags = new Set<string>();
+    tempEmails.forEach((item) => item.tags.forEach((tag) => tags.add(tag)));
+    return [...tags].sort((a, b) => a.localeCompare(b));
+  }, [tempEmails]);
+  const visibleTempEmails = useMemo(() => {
+    const keyword = tempSearch.trim().toLowerCase();
+    return tempEmails.filter((item) => {
+      if (tempProviderFilter !== "all" && item.provider !== tempProviderFilter) return false;
+      if (tempTagFilter !== "all" && !item.tags.some((tag) => tag.toLowerCase() === tempTagFilter.toLowerCase())) return false;
+      if (!keyword) return true;
+      return [item.email, item.provider, item.last_refresh_status, item.last_refresh_error ?? "", ...item.tags]
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword);
+    });
+  }, [tempEmails, tempProviderFilter, tempSearch, tempTagFilter]);
+
+  useEffect(() => {
+    setTempTagsText(selectedTemp?.tags.join(", ") ?? "");
+  }, [selectedTemp?.email, selectedTemp?.updated_at]);
 
   return (
     <section className="tempGrid">
@@ -2246,6 +2291,48 @@ function TempEmailsView({
           {busy ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
           生成
         </button>
+        {provider === "cloudflare" && (
+          <div className="tempBatchBox">
+            <div className="formLine">
+              <input
+                className="input grow"
+                value={batchPrefix}
+                placeholder="批量前缀"
+                onChange={(event) => setBatchPrefix(event.target.value)}
+              />
+              <input
+                className="input smallInput"
+                type="number"
+                min={1}
+                max={200}
+                value={batchCount}
+                onChange={(event) => setBatchCount(Math.min(Math.max(Number(event.target.value) || 1, 1), 200))}
+              />
+            </div>
+            <input
+              className="input"
+              value={batchTagsText}
+              placeholder="批量标签，逗号分隔"
+              onChange={(event) => setBatchTagsText(event.target.value)}
+            />
+            <button
+              className="button secondary fullWidth"
+              disabled={busy || !channelId}
+              onClick={() =>
+                onGenerateCloudflareBatch({
+                  channel_id: channelId,
+                  prefix: batchPrefix || undefined,
+                  domain: domain || undefined,
+                  count: batchCount,
+                  tags: parseTagText(batchTagsText)
+                })
+              }
+            >
+              <Plus size={16} />
+              批量生成 {batchCount}
+            </button>
+          </div>
+        )}
 
         <textarea
           className="textarea compact tempImportBox"
@@ -2266,19 +2353,52 @@ function TempEmailsView({
       <aside className="panel tempListPanel">
         <div className="panelHeader">
           <h2>地址</h2>
-          <span>{tempEmails.length}</span>
+          <span>{visibleTempEmails.length}/{tempEmails.length}</span>
+        </div>
+        <div className="tempFilters">
+          <input
+            className="input"
+            value={tempSearch}
+            placeholder="搜索地址、标签或状态"
+            onChange={(event) => setTempSearch(event.target.value)}
+          />
+          <div className="formLine">
+            <select className="select grow" value={tempProviderFilter} onChange={(event) => setTempProviderFilter(event.target.value)}>
+              <option value="all">全部服务</option>
+              <option value="gptmail">GPTMail</option>
+              <option value="duckmail">DuckMail</option>
+              <option value="cloudflare">Cloudflare</option>
+            </select>
+            <select className="select grow" value={tempTagFilter} onChange={(event) => setTempTagFilter(event.target.value)}>
+              <option value="all">全部标签</option>
+              {tempTags.map((tag) => (
+                <option value={tag} key={tag}>
+                  {tag}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
         <div className="tempRows">
-          {tempEmails.map((item) => (
+          {visibleTempEmails.map((item) => (
             <button key={item.id} className={selectedEmail === item.email ? "tempEmailRow active" : "tempEmailRow"} onClick={() => onSelect(item.email)}>
               <strong>{item.email}</strong>
               <small>
                 {item.provider} · {item.message_count} 条消息 · {formatStatus(item.last_refresh_status)}
               </small>
+              {item.tags.length > 0 && (
+                <span className="tempTagLine">
+                  {item.tags.map((tag) => (
+                    <span className="chip" key={tag}>
+                      {tag}
+                    </span>
+                  ))}
+                </span>
+              )}
             </button>
           ))}
         </div>
-        {tempEmails.length === 0 && <EmptyState icon={<Cloud size={24} />} text="暂无临时邮箱。" />}
+        {visibleTempEmails.length === 0 && <EmptyState icon={<Cloud size={24} />} text="暂无匹配临时邮箱。" />}
       </aside>
 
       <section className="panel tempMessagePanel">
@@ -2293,6 +2413,24 @@ function TempEmailsView({
             </button>
           </div>
         </div>
+        {selectedTemp && (
+          <div className="tempTagEditor">
+            <input
+              className="input grow"
+              value={tempTagsText}
+              placeholder="标签，逗号分隔"
+              onChange={(event) => setTempTagsText(event.target.value)}
+            />
+            <button
+              className="button secondary"
+              disabled={busy}
+              onClick={() => onUpdate({ email: selectedTemp.email, tags: parseTagText(tempTagsText) })}
+            >
+              <Tags size={15} />
+              保存标签
+            </button>
+          </div>
+        )}
         <div className="tempMessageRows">
           {messages.map((message) => (
             <button
@@ -3602,6 +3740,20 @@ function parseAliasText(value: string) {
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
   return Array.from(new Set(aliases));
+}
+
+function parseTagText(value: string) {
+  const tags = value
+    .split(/[\n,;，；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const seen = new Set<string>();
+  return tags.filter((tag) => {
+    const key = tag.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function formatBytes(value: number) {

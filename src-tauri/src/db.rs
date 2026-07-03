@@ -2223,7 +2223,7 @@ impl Database {
             SELECT te.id, te.email, te.provider, te.status, te.channel_id,
                    COUNT(tm.id) AS message_count, te.last_refresh_at,
                    COALESCE(te.last_refresh_status, 'never'), te.last_refresh_error,
-                   te.created_at, te.updated_at
+                   COALESCE(te.tags_json, '[]'), te.created_at, te.updated_at
             FROM temp_emails te
             LEFT JOIN temp_email_messages tm ON tm.email_address = te.email
             GROUP BY te.id
@@ -2241,8 +2241,9 @@ impl Database {
                 last_refresh_at: row.get(6)?,
                 last_refresh_status: row.get(7)?,
                 last_refresh_error: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
+                tags: temp_tags_from_json(&row.get::<_, String>(9)?),
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
             })
         })?;
         collect_rows(rows)
@@ -2327,6 +2328,47 @@ impl Database {
             .ok_or_else(|| AppError::Internal("generated temp email not found".to_string()))
     }
 
+    pub fn generate_cloudflare_batch(&self, input: GenerateCloudflareBatchInput) -> AppResult<ImportAccountsResult> {
+        self.require_unlocked()?;
+        let count = input.count.clamp(1, 200);
+        let tags = normalize_temp_tags(input.tags.unwrap_or_default());
+        let tags_json = serde_json::to_string(&tags).map_err(|err| AppError::Internal(err.to_string()))?;
+        self.cloudflare_channel_credential(input.channel_id)?;
+        let prefix = input
+            .prefix
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("cf");
+        let mut imported = 0_usize;
+        let mut skipped = 0_usize;
+        for index in 0..count {
+            let username = format!("{}{}", prefix, random_temp_suffix(index));
+            let generated = self.generate_temp_email(GenerateTempEmailInput {
+                provider: "cloudflare".to_string(),
+                prefix: None,
+                domain: input.domain.clone(),
+                username: Some(username),
+                password: None,
+                channel_id: input.channel_id,
+            });
+            match generated {
+                Ok(item) => {
+                    imported += 1;
+                    if !tags.is_empty() {
+                        self.conn.execute(
+                            "UPDATE temp_emails SET tags_json = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
+                            params![tags_json, item.email],
+                        )?;
+                    }
+                }
+                Err(_) => skipped += 1,
+            }
+        }
+        self.audit("temp_email.cloudflare_batch_generated", "temp_email", None, &format!("{imported} generated"))?;
+        Ok(ImportAccountsResult { imported, skipped })
+    }
+
     pub fn refresh_temp_email_messages(&self, email: String) -> AppResult<JobResult> {
         self.require_unlocked()?;
         let credential = self.temp_email_credential(&email)?;
@@ -2339,6 +2381,29 @@ impl Database {
                 Err(err)
             }
         }
+    }
+
+    pub fn update_temp_email(&self, input: UpdateTempEmailInput) -> AppResult<TempEmail> {
+        self.require_unlocked()?;
+        let email = normalize_email(&input.email)?;
+        let tags = normalize_temp_tags(input.tags);
+        let tags_json = serde_json::to_string(&tags).map_err(|err| AppError::Internal(err.to_string()))?;
+        let changed = self.conn.execute(
+            "
+            UPDATE temp_emails
+            SET tags_json = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE email = ?
+            ",
+            params![tags_json, email],
+        )?;
+        if changed == 0 {
+            return Err(AppError::InvalidInput("temp email not found".to_string()));
+        }
+        self.audit("temp_email.updated", "temp_email", None, &email)?;
+        self.list_temp_emails()?
+            .into_iter()
+            .find(|item| item.email == email)
+            .ok_or_else(|| AppError::Internal("updated temp email not found".to_string()))
     }
 
     pub fn delete_temp_email(&self, email: String) -> AppResult<()> {
@@ -2588,6 +2653,7 @@ impl Database {
                 last_refresh_at TEXT,
                 last_refresh_status TEXT NOT NULL DEFAULT 'never',
                 last_refresh_error TEXT,
+                tags_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
@@ -2917,6 +2983,10 @@ impl Database {
             (
                 "last_refresh_error",
                 "ALTER TABLE temp_emails ADD COLUMN last_refresh_error TEXT",
+            ),
+            (
+                "tags_json",
+                "ALTER TABLE temp_emails ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
             ),
         ] {
             if !columns.iter().any(|column| column == name) {
@@ -5058,6 +5128,36 @@ fn normalize_temp_provider(value: &str) -> AppResult<String> {
     }
 }
 
+fn normalize_temp_tags(tags: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+    for tag in tags {
+        let tag = tag.trim();
+        if tag.is_empty() {
+            continue;
+        }
+        let key = tag.to_ascii_lowercase();
+        if seen.insert(key) {
+            normalized.push(tag.chars().take(32).collect());
+        }
+        if normalized.len() >= 20 {
+            break;
+        }
+    }
+    normalized
+}
+
+fn temp_tags_from_json(value: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(value)
+        .map(normalize_temp_tags)
+        .unwrap_or_default()
+}
+
+fn random_temp_suffix(index: usize) -> String {
+    let value = uuid::Uuid::new_v4().simple().to_string();
+    format!("{index}{}", &value[..8])
+}
+
 fn split_legacy_line(value: &str) -> Vec<String> {
     if value.contains("----") {
         value.split("----").map(|part| part.trim().to_string()).collect()
@@ -5535,6 +5635,7 @@ mod project_tests {
         MailMessageQuery, MarkMailMessagesInput, ProjectAccountActionInput, RefreshInput,
         RestoreBackupInput, RevealAccountSecretsInput, RetryQueueItemInput, RetryQueueQuery,
         RetryQueueRunInput, UpdateAccountInput, UpdateGroupInput, UpdateGroupProxyInput,
+        UpdateTempEmailInput,
     };
     use rusqlite::{params, Connection};
     use std::path::PathBuf;
@@ -6750,6 +6851,43 @@ mod project_tests {
             .list_retry_queue(RetryQueueQuery::default())
             .expect("retry queue after retry");
         assert_eq!(queued[0].attempts, 1);
+    }
+
+    #[test]
+    fn temp_email_tags_are_saved_and_normalized() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "
+                INSERT INTO temp_emails
+                (email, provider, status, channel_id, provider_token_enc, provider_account_id, provider_password_enc)
+                VALUES ('tagged@example.com', 'gptmail', 'active', NULL, '', '', '')
+                ",
+                [],
+            )
+            .expect("insert temp email");
+
+        let updated = db
+            .update_temp_email(UpdateTempEmailInput {
+                email: "Tagged@Example.com".to_string(),
+                tags: vec![
+                    "Warmup".to_string(),
+                    "warmup".to_string(),
+                    "  Client A  ".to_string(),
+                    "".to_string(),
+                ],
+            })
+            .expect("update temp email");
+        assert_eq!(updated.email, "tagged@example.com");
+        assert_eq!(updated.tags, vec!["Warmup".to_string(), "Client A".to_string()]);
+        let listed = db.list_temp_emails().expect("list temp emails");
+        assert_eq!(listed[0].tags, updated.tags);
     }
 
     #[test]

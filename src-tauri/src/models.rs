@@ -353,6 +353,7 @@ pub struct TempEmail {
     pub last_refresh_at: Option<String>,
     pub last_refresh_status: String,
     pub last_refresh_error: Option<String>,
+    pub tags: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -404,8 +405,23 @@ pub struct ImportTempEmailsInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct GenerateCloudflareBatchInput {
+    pub channel_id: Option<i64>,
+    pub prefix: Option<String>,
+    pub domain: Option<String>,
+    pub count: usize,
+    pub tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct TempEmailAddressInput {
     pub email: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateTempEmailInput {
+    pub email: String,
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

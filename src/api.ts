@@ -537,6 +537,21 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       mockTempEmails = [item, ...mockTempEmails.filter((existing) => existing.email !== email)];
       return item as T;
     }
+    case "generate_cloudflare_temp_emails": {
+      const input = args?.input as { channel_id?: number | null; prefix?: string; domain?: string; count: number; tags?: string[] };
+      const channel = input.channel_id ? mockCloudflareChannels.find((item) => item.id === input.channel_id) : mockCloudflareChannels[0];
+      const domain = input.domain || channel?.email_domains[0] || "example.test";
+      const prefix = input.prefix?.trim() || "cf";
+      const tags = normalizeMockTempTags(input.tags ?? []);
+      const count = Math.min(Math.max(input.count || 1, 1), 200);
+      let imported = 0;
+      for (let index = 0; index < count; index += 1) {
+        const email = `${prefix}${index}${Math.floor(Math.random() * 100000)}@${domain}`.toLowerCase();
+        mockTempEmails = [{ ...mockTempEmail(email, "cloudflare", channel?.id ?? null), tags }, ...mockTempEmails];
+        imported += 1;
+      }
+      return { imported, skipped: 0 } as T;
+    }
     case "delete_temp_email": {
       const input = args?.input as { email: string };
       mockTempEmails = mockTempEmails.filter((item) => item.email !== input.email);
@@ -553,6 +568,17 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
           : item
       );
       return { success: true, message: "Temp mailbox refreshed", refreshed: 1, failed: 0 } as T;
+    }
+    case "update_temp_email": {
+      const input = args?.input as { email: string; tags: string[] };
+      const normalizedEmail = input.email.trim().toLowerCase();
+      const tags = normalizeMockTempTags(input.tags);
+      mockTempEmails = mockTempEmails.map((item) =>
+        item.email === normalizedEmail ? { ...item, tags, updated_at: new Date().toISOString() } : item
+      );
+      const updated = mockTempEmails.find((item) => item.email === normalizedEmail);
+      if (!updated) throw new Error("temp email not found");
+      return updated as T;
     }
     case "list_temp_email_messages":
       return mockTempMessages.filter((item) => item.email_address === args?.email) as T;
@@ -946,9 +972,25 @@ function mockTempEmail(email: string, provider: string, channelId: number | null
     last_refresh_at: null,
     last_refresh_status: "never",
     last_refresh_error: null,
+    tags: [],
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString()
   };
+}
+
+function normalizeMockTempTags(tags: string[]) {
+  const seen = new Set<string>();
+  return tags
+    .map((tag) => tag.trim())
+    .filter((tag) => {
+      if (!tag) return false;
+      const key = tag.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((tag) => tag.slice(0, 32))
+    .slice(0, 20);
 }
 
 function mockTempMessage(email: string): TempEmailMessage {
@@ -1085,8 +1127,11 @@ export const api = {
     call<ImportAccountsResult>("import_temp_emails", { input }),
   generateTempEmail: (input: { provider: string; prefix?: string; domain?: string; username?: string; password?: string; channel_id?: number | null }) =>
     call<TempEmail>("generate_temp_email", { input }),
+  generateCloudflareTempEmails: (input: { channel_id?: number | null; prefix?: string; domain?: string; count: number; tags?: string[] }) =>
+    call<ImportAccountsResult>("generate_cloudflare_temp_emails", { input }),
   deleteTempEmail: (email: string) => call<void>("delete_temp_email", { input: { email } }),
   refreshTempEmailMessages: (email: string) => call<JobResult>("refresh_temp_email_messages", { input: { email } }),
+  updateTempEmail: (input: { email: string; tags: string[] }) => call<TempEmail>("update_temp_email", { input }),
   listTempEmailMessages: (email: string) => call<TempEmailMessage[]>("list_temp_email_messages", { email }),
   listCloudflareChannels: () => call<CloudflareChannel[]>("list_cloudflare_channels"),
   upsertCloudflareChannel: (input: {

@@ -268,6 +268,7 @@ export type TempEmail = {
   last_refresh_at: string | null;
   last_refresh_status: string;
   last_refresh_error: string | null;
+  tags: string[];
   created_at: string;
   updated_at: string;
 };

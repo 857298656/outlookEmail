@@ -517,6 +517,20 @@ button:disabled {
   font-size: 12px;
 }
 
+.accountBulkBar {
+  flex-wrap: wrap;
+  min-height: auto;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.accountBulkBar .select {
+  height: 30px;
+  min-width: 120px;
+}
+
 .pagerBar {
   justify-content: flex-end;
   border-top: 1px solid #edf0f3;
@@ -1289,7 +1303,7 @@ button:disabled {
 .tableHeader,
 .tableRow {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 160px 120px 120px 44px;
+  grid-template-columns: 32px minmax(220px, 1fr) 160px 120px 120px 44px;
   align-items: center;
   gap: 12px;
   min-height: 42px;
@@ -1311,6 +1325,11 @@ button:disabled {
 
 .tableRow.active {
   background: #f3f4f6;
+}
+
+.selectCell {
+  display: grid;
+  place-items: center;
 }
 
 .storageLine {

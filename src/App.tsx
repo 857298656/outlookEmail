@@ -561,9 +561,21 @@ function App() {
                 await loadStatus();
               }, "账号已删除")
             }
-            onExportAccounts={(groupId) =>
+            onBatchAccounts={(input) =>
               runAction(async () => {
-                const result = await api.exportAccounts(groupId);
+                const result = await api.batchAccounts(input);
+                setNotice(formatResultMessage(result.message));
+                const nextSelectedAccountId =
+                  input.action === "delete" && selectedAccountId && input.account_ids.includes(selectedAccountId)
+                    ? undefined
+                    : selectedAccountId;
+                await loadWorkspace(nextSelectedAccountId, folder);
+                await loadStatus();
+              })
+            }
+            onExportAccounts={(groupId, accountIds) =>
+              runAction(async () => {
+                const result = await api.exportAccounts(groupId, accountIds);
                 setNotice(exportNotice(result));
               })
             }
@@ -1198,6 +1210,7 @@ function AccountsView({
   onDeleteGroup,
   onCreateTag,
   onDeleteAccount,
+  onBatchAccounts,
   onExportAccounts,
   onUpdateAccount,
   onGenerateOAuthUrl,
@@ -1214,7 +1227,8 @@ function AccountsView({
   onDeleteGroup: (groupId: number) => void;
   onCreateTag: (name: string, color: string) => void;
   onDeleteAccount: (accountId: number) => void;
-  onExportAccounts: (groupId?: number | null) => void;
+  onBatchAccounts: (input: Parameters<typeof api.batchAccounts>[0]) => void;
+  onExportAccounts: (groupId?: number | null, accountIds?: number[]) => void;
   onUpdateAccount: (input: Parameters<typeof api.updateAccount>[0]) => void;
   onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string }) => Promise<string>;
   onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string }) => void;
@@ -1237,6 +1251,9 @@ function AccountsView({
   const [colorIndex, setColorIndex] = useState(0);
   const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>(accounts[0]?.id);
   const [accountSearch, setAccountSearch] = useState("");
+  const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
+  const [batchGroupId, setBatchGroupId] = useState<number | "">(groups[0]?.id ?? "");
+  const [batchTagId, setBatchTagId] = useState<number | "">(tags[0]?.id ?? "");
   const [oauthUrl, setOauthUrl] = useState("");
   const [oauthCallback, setOauthCallback] = useState("");
   const visibleAccounts = useMemo(() => {
@@ -1257,6 +1274,11 @@ function AccountsView({
   }, [accounts, accountSearch]);
   const selectedAccount =
     visibleAccounts.find((account) => account.id === selectedAccountId) ?? visibleAccounts[0] ?? accounts[0];
+  const selectedAccountIdSet = useMemo(() => new Set(selectedAccountIds), [selectedAccountIds]);
+  const visibleAccountIds = useMemo(() => visibleAccounts.map((account) => account.id), [visibleAccounts]);
+  const allVisibleAccountsSelected =
+    visibleAccountIds.length > 0 && visibleAccountIds.every((accountId) => selectedAccountIdSet.has(accountId));
+  const selectedAccountCount = selectedAccountIds.length;
   const parsedRows = useMemo(() => parseAccountRows(raw), [raw]);
   const selectedManageGroup = groups.find((group) => group.id === selectedManageGroupId) ?? groups[0];
   const selectedDescendantGroupIds = useMemo(
@@ -1310,6 +1332,23 @@ function AccountsView({
     selectedManageGroup?.fallback_proxy_url_1,
     selectedManageGroup?.fallback_proxy_url_2
   ]);
+
+  useEffect(() => {
+    const accountIds = new Set(accounts.map((account) => account.id));
+    setSelectedAccountIds((current) => current.filter((accountId) => accountIds.has(accountId)));
+  }, [accounts]);
+
+  useEffect(() => {
+    if (batchGroupId !== "" && !groups.some((group) => group.id === batchGroupId)) {
+      setBatchGroupId(groups[0]?.id ?? "");
+    }
+  }, [groups, batchGroupId]);
+
+  useEffect(() => {
+    if (batchTagId !== "" && !tags.some((tag) => tag.id === batchTagId)) {
+      setBatchTagId(tags[0]?.id ?? "");
+    }
+  }, [tags, batchTagId]);
 
   return (
     <section className="managementGrid">
@@ -1535,7 +1574,7 @@ function AccountsView({
           <h2>邮箱库存</h2>
           <div className="rowActions">
             <span>{visibleAccounts.length}/{accounts.length} 个账号</span>
-            <button className="iconMini" title="导出账号" disabled={accounts.length === 0 || busy} onClick={() => onExportAccounts()}>
+            <button className="iconMini" title="导出全部账号" disabled={accounts.length === 0 || busy} onClick={() => onExportAccounts()}>
               <Download size={15} />
             </button>
           </div>
@@ -1548,8 +1587,114 @@ function AccountsView({
             onChange={(event) => setAccountSearch(event.target.value)}
           />
         </label>
+        {selectedAccountCount > 0 && (
+          <div className="bulkBar accountBulkBar">
+            <span>已选择 {selectedAccountCount} 个账号</span>
+            <select
+              className="select"
+              value={batchGroupId}
+              onChange={(event) => setBatchGroupId(event.target.value ? Number(event.target.value) : "")}
+            >
+              <option value="">无分组</option>
+              {groups.map((group) => (
+                <option value={group.id} key={group.id}>
+                  {groupOptionLabel(group)}
+                </option>
+              ))}
+            </select>
+            <button
+              className="button compact secondary"
+              disabled={busy}
+              onClick={() =>
+                onBatchAccounts({
+                  account_ids: selectedAccountIds,
+                  action: "move_group",
+                  group_id: batchGroupId === "" ? null : batchGroupId
+                })
+              }
+            >
+              <FolderKanban size={14} />
+              移动
+            </button>
+            <button
+              className="button compact secondary"
+              disabled={busy}
+              onClick={() => onBatchAccounts({ account_ids: selectedAccountIds, action: "set_forward", forward_enabled: true })}
+            >
+              <CheckCircle2 size={14} />
+              转发开
+            </button>
+            <button
+              className="button compact secondary"
+              disabled={busy}
+              onClick={() => onBatchAccounts({ account_ids: selectedAccountIds, action: "set_forward", forward_enabled: false })}
+            >
+              <XCircle size={14} />
+              转发关
+            </button>
+            <select
+              className="select"
+              value={batchTagId}
+              onChange={(event) => setBatchTagId(event.target.value ? Number(event.target.value) : "")}
+            >
+              <option value="">选择标签</option>
+              {tags.map((tag) => (
+                <option value={tag.id} key={tag.id}>
+                  {tag.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="button compact secondary"
+              disabled={busy || batchTagId === ""}
+              onClick={() => onBatchAccounts({ account_ids: selectedAccountIds, action: "add_tags", tag_ids: [Number(batchTagId)] })}
+            >
+              <Plus size={14} />
+              加标签
+            </button>
+            <button
+              className="button compact secondary"
+              disabled={busy || batchTagId === ""}
+              onClick={() => onBatchAccounts({ account_ids: selectedAccountIds, action: "remove_tags", tag_ids: [Number(batchTagId)] })}
+            >
+              <XCircle size={14} />
+              移标签
+            </button>
+            <button className="button compact secondary" disabled={busy} onClick={() => onExportAccounts(null, selectedAccountIds)}>
+              <Download size={14} />
+              导出
+            </button>
+            <button
+              className="button compact danger"
+              disabled={busy}
+              onClick={() => onBatchAccounts({ account_ids: selectedAccountIds, action: "delete" })}
+            >
+              <Trash2 size={14} />
+              删除
+            </button>
+            <button className="button compact ghost" onClick={() => setSelectedAccountIds([])}>
+              清除
+            </button>
+          </div>
+        )}
         <div className="table">
           <div className="tableHeader">
+            <span className="selectCell">
+              <input
+                type="checkbox"
+                aria-label="选择当前列表账号"
+                checked={allVisibleAccountsSelected}
+                disabled={visibleAccountIds.length === 0}
+                onChange={(event) => {
+                  const visibleIdSet = new Set(visibleAccountIds);
+                  setSelectedAccountIds((current) =>
+                    event.target.checked
+                      ? Array.from(new Set([...current, ...visibleAccountIds]))
+                      : current.filter((accountId) => !visibleIdSet.has(accountId))
+                  );
+                }}
+              />
+            </span>
             <span>邮箱</span>
             <span>分组</span>
             <span>状态</span>
@@ -1562,6 +1707,21 @@ function AccountsView({
               key={account.id}
               onClick={() => setSelectedAccountId(account.id)}
             >
+              <span className="selectCell">
+                <input
+                  type="checkbox"
+                  aria-label={`选择 ${account.email}`}
+                  checked={selectedAccountIdSet.has(account.id)}
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) =>
+                    setSelectedAccountIds((current) =>
+                      event.target.checked
+                        ? Array.from(new Set([...current, account.id]))
+                        : current.filter((accountId) => accountId !== account.id)
+                    )
+                  }
+                />
+              </span>
               <span className="accountText">
                 <strong>{account.email}</strong>
                 {account.aliases.length > 0 && <small>{account.aliases.join(", ")}</small>}
@@ -3112,6 +3272,18 @@ function formatResultMessage(message: string) {
 
   const cleared = message.match(/^Cleared (\d+) automation run\(s\)$/);
   if (cleared) return `已清理 ${cleared[1]} 条自动化记录`;
+
+  const batch = message.match(/^Batch (delete|move_group|set_forward|add_tags|remove_tags) processed (\d+) account\(s\)$/);
+  if (batch) {
+    const actionMap: Record<string, string> = {
+      delete: "删除",
+      move_group: "移动",
+      set_forward: "更新转发开关",
+      add_tags: "添加标签",
+      remove_tags: "移除标签"
+    };
+    return `已批量${actionMap[batch[1]]} ${batch[2]} 个账号`;
+  }
 
   const uploaded = message.match(/^Uploaded (.+)$/);
   if (uploaded) return `已上传 ${uploaded[1]}`;

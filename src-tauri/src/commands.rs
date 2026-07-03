@@ -105,6 +105,12 @@ pub fn delete_account(state: State<'_, AppState>, account_id: i64) -> AppResult<
 }
 
 #[tauri::command]
+pub fn batch_accounts(state: State<'_, AppState>, input: AccountBatchInput) -> AppResult<JobResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.batch_accounts(input)
+}
+
+#[tauri::command]
 pub fn list_messages(
     state: State<'_, AppState>,
     account_id: Option<i64>,
@@ -170,7 +176,10 @@ pub fn export_mail_messages(state: State<'_, AppState>, input: ExportMailMessage
 #[tauri::command]
 pub fn export_accounts(state: State<'_, AppState>, input: Option<ExportAccountsInput>) -> AppResult<ExportResult> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.export_accounts(input.unwrap_or(ExportAccountsInput { group_id: None }))
+    db.export_accounts(input.unwrap_or(ExportAccountsInput {
+        group_id: None,
+        account_ids: None,
+    }))
 }
 
 #[tauri::command]

@@ -260,7 +260,57 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     case "delete_account":
       mockAccounts = mockAccounts.filter((account) => account.id !== args?.accountId);
       mockMessages = mockMessages.filter((message) => message.account_id !== args?.accountId);
+      refreshMockGroupCounts();
       return undefined as T;
+    case "batch_accounts": {
+      const input = args?.input as {
+        account_ids: number[];
+        action: string;
+        group_id?: number | null;
+        forward_enabled?: boolean;
+        tag_ids?: number[];
+      };
+      const ids = new Set(input.account_ids);
+      const targetCount = mockAccounts.filter((account) => ids.has(account.id)).length;
+      if (input.action === "delete") {
+        mockAccounts = mockAccounts.filter((account) => !ids.has(account.id));
+        mockMessages = mockMessages.filter((message) => !ids.has(message.account_id));
+      } else if (input.action === "move_group") {
+        const group = input.group_id ? mockGroups.find((item) => item.id === input.group_id) : null;
+        mockAccounts = mockAccounts.map((account) =>
+          ids.has(account.id)
+            ? {
+                ...account,
+                group_id: input.group_id ?? null,
+                group_name: group?.name ?? null
+              }
+            : account
+        );
+      } else if (input.action === "set_forward") {
+        mockAccounts = mockAccounts.map((account) =>
+          ids.has(account.id) ? { ...account, forward_enabled: Boolean(input.forward_enabled) } : account
+        );
+      } else if (input.action === "add_tags") {
+        const tagsToAdd = mockTags.filter((tag) => input.tag_ids?.includes(tag.id));
+        mockAccounts = mockAccounts.map((account) => {
+          if (!ids.has(account.id)) return account;
+          const tagMap = new Map([...account.tags, ...tagsToAdd].map((tag) => [tag.id, tag]));
+          return { ...account, tags: [...tagMap.values()] };
+        });
+      } else if (input.action === "remove_tags") {
+        const tagIds = new Set(input.tag_ids ?? []);
+        mockAccounts = mockAccounts.map((account) =>
+          ids.has(account.id) ? { ...account, tags: account.tags.filter((tag) => !tagIds.has(tag.id)) } : account
+        );
+      }
+      refreshMockGroupCounts();
+      return {
+        success: targetCount === ids.size,
+        message: `Batch ${input.action} processed ${targetCount} account(s)`,
+        refreshed: targetCount,
+        failed: Math.max(0, ids.size - targetCount)
+      } as T;
+    }
     case "list_messages":
       return filterMockMessages(args) as T;
     case "create_demo_message": {
@@ -504,8 +554,13 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       return mockExport("mail-export.html", count) as T;
     }
     case "export_accounts": {
-      const input = args?.input as { group_id?: number | null } | undefined;
-      const count = mockAccounts.filter((account) => !input?.group_id || account.group_id === input.group_id).length;
+      const input = args?.input as { group_id?: number | null; account_ids?: number[] } | undefined;
+      const selected = input?.account_ids ? new Set(input.account_ids) : null;
+      const count = mockAccounts.filter((account) => {
+        if (input?.group_id && account.group_id !== input.group_id) return false;
+        if (selected && !selected.has(account.id)) return false;
+        return true;
+      }).length;
       return mockExport("accounts-export.csv", count) as T;
     }
     case "export_project_accounts": {
@@ -580,6 +635,13 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     default:
       throw new Error(`Unknown command: ${command}`);
   }
+}
+
+function refreshMockGroupCounts() {
+  mockGroups = mockGroups.map((group) => ({
+    ...group,
+    account_count: mockAccounts.filter((account) => account.group_id === group.id).length
+  }));
 }
 
 function syncMockProject(projectId: number) {
@@ -923,6 +985,13 @@ export const api = {
   importAccounts: (input: { raw: string; group_id?: number | null }) =>
     call<ImportAccountsResult>("import_accounts", { input }),
   deleteAccount: (accountId: number) => call<void>("delete_account", { accountId }),
+  batchAccounts: (input: {
+    account_ids: number[];
+    action: "delete" | "move_group" | "set_forward" | "add_tags" | "remove_tags";
+    group_id?: number | null;
+    forward_enabled?: boolean;
+    tag_ids?: number[];
+  }) => call<JobResult>("batch_accounts", { input }),
   listMessages: (accountId?: number, folder = "all", query: MailMessageQuery = {}) =>
     call<MailMessage[]>("list_messages", {
       accountId,
@@ -940,8 +1009,8 @@ export const api = {
     call<JobResult>("delete_mail_messages", { input: { message_ids: messageIds, sync_remote: syncRemote } }),
   exportMailMessages: (messageIds: number[], title?: string) =>
     call<ExportResult>("export_mail_messages", { input: { message_ids: messageIds, title } }),
-  exportAccounts: (groupId?: number | null) =>
-    call<ExportResult>("export_accounts", { input: { group_id: groupId ?? null } }),
+  exportAccounts: (groupId?: number | null, accountIds?: number[]) =>
+    call<ExportResult>("export_accounts", { input: { group_id: groupId ?? null, account_ids: accountIds } }),
   exportProjectAccounts: (projectId: number) =>
     call<ExportResult>("export_project_accounts", { input: { project_id: projectId } }),
   getSettings: () => call<Settings>("get_settings"),

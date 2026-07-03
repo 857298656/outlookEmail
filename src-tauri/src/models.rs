@@ -590,6 +590,15 @@ pub struct UpdateAccountInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct AccountBatchInput {
+    pub account_ids: Vec<i64>,
+    pub action: String,
+    pub group_id: Option<i64>,
+    pub forward_enabled: Option<bool>,
+    pub tag_ids: Option<Vec<i64>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct OAuthAuthUrlInput {
     pub client_id: String,
     pub redirect_uri: String,
@@ -645,6 +654,7 @@ pub struct ExportMailMessagesInput {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExportAccountsInput {
     pub group_id: Option<i64>,
+    pub account_ids: Option<Vec<i64>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

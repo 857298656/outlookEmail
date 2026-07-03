@@ -620,6 +620,116 @@ impl Database {
         Ok(())
     }
 
+    pub fn batch_accounts(&self, input: AccountBatchInput) -> AppResult<JobResult> {
+        self.require_unlocked()?;
+        let mut requested_ids: Vec<i64> = input.account_ids.into_iter().filter(|id| *id > 0).collect();
+        requested_ids.sort_unstable();
+        requested_ids.dedup();
+        if requested_ids.is_empty() {
+            return Err(AppError::InvalidInput("account_ids are required".to_string()));
+        }
+
+        let mut account_ids = Vec::new();
+        let mut account_stmt = self.conn.prepare("SELECT id FROM accounts WHERE id = ?")?;
+        for id in &requested_ids {
+            if account_stmt.exists([id])? {
+                account_ids.push(*id);
+            }
+        }
+        drop(account_stmt);
+        if account_ids.is_empty() {
+            return Err(AppError::InvalidInput("no matching accounts".to_string()));
+        }
+
+        let missing = requested_ids.len().saturating_sub(account_ids.len());
+        let action = input.action.trim();
+        let affected = match action {
+            "delete" => {
+                for account_id in &account_ids {
+                    self.conn.execute("DELETE FROM accounts WHERE id = ?", [account_id])?;
+                }
+                account_ids.len()
+            }
+            "move_group" => {
+                if let Some(group_id) = input.group_id {
+                    let exists = self.conn.prepare("SELECT id FROM groups WHERE id = ?")?.exists([group_id])?;
+                    if !exists {
+                        return Err(AppError::InvalidInput("group not found".to_string()));
+                    }
+                }
+                for account_id in &account_ids {
+                    self.conn.execute(
+                        "UPDATE accounts SET group_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        params![input.group_id, account_id],
+                    )?;
+                }
+                account_ids.len()
+            }
+            "set_forward" => {
+                let enabled = input
+                    .forward_enabled
+                    .ok_or_else(|| AppError::InvalidInput("forward_enabled is required".to_string()))?;
+                for account_id in &account_ids {
+                    self.conn.execute(
+                        "UPDATE accounts SET forward_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        params![if enabled { 1 } else { 0 }, account_id],
+                    )?;
+                }
+                account_ids.len()
+            }
+            "add_tags" | "remove_tags" => {
+                let mut tag_ids: Vec<i64> = input
+                    .tag_ids
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|id| *id > 0)
+                    .collect();
+                tag_ids.sort_unstable();
+                tag_ids.dedup();
+                if tag_ids.is_empty() {
+                    return Err(AppError::InvalidInput("tag_ids are required".to_string()));
+                }
+                let mut tag_stmt = self.conn.prepare("SELECT id FROM tags WHERE id = ?")?;
+                for tag_id in &tag_ids {
+                    if !tag_stmt.exists([tag_id])? {
+                        return Err(AppError::InvalidInput("tag not found".to_string()));
+                    }
+                }
+                drop(tag_stmt);
+                for account_id in &account_ids {
+                    for tag_id in &tag_ids {
+                        if action == "add_tags" {
+                            self.conn.execute(
+                                "INSERT OR IGNORE INTO account_tags (account_id, tag_id) VALUES (?, ?)",
+                                params![account_id, tag_id],
+                            )?;
+                        } else {
+                            self.conn.execute(
+                                "DELETE FROM account_tags WHERE account_id = ? AND tag_id = ?",
+                                params![account_id, tag_id],
+                            )?;
+                        }
+                    }
+                }
+                account_ids.len()
+            }
+            _ => return Err(AppError::InvalidInput("unsupported batch action".to_string())),
+        };
+
+        self.audit(
+            "accounts.batch",
+            "account",
+            None,
+            &format!("{action}: {affected} affected, {missing} missing"),
+        )?;
+        Ok(JobResult {
+            success: missing == 0,
+            message: format!("Batch {action} processed {affected} account(s)"),
+            refreshed: affected,
+            failed: missing,
+        })
+    }
+
     pub fn list_projects(&self) -> AppResult<Vec<Project>> {
         self.require_unlocked()?;
         let mut stmt = self.conn.prepare(
@@ -1382,6 +1492,10 @@ impl Database {
         let mut accounts = self.list_accounts()?;
         if let Some(group_id) = input.group_id {
             accounts.retain(|account| account.group_id == Some(group_id));
+        }
+        if let Some(account_ids) = input.account_ids {
+            let selected: HashSet<i64> = account_ids.into_iter().collect();
+            accounts.retain(|account| selected.contains(&account.id));
         }
         let mut csv = String::new();
         csv.push_str(&csv_row(&[
@@ -5347,12 +5461,12 @@ mod project_tests {
     use super::{backup_dir, normalize_project_key, Database, MailMessageRef};
     use crate::error::AppError;
     use crate::models::{
-        AttachmentInfo, AutomationRunQuery, ClaimProjectAccountInput, ClearAutomationRunsInput,
-        CreateGroupInput, CreateProjectInput, DeleteMailMessagesInput, DownloadAttachmentInput,
-        ExportAccountsInput, ExportMailMessagesInput, MailMessageQuery,
-        MarkMailMessagesInput, ProjectAccountActionInput, RefreshInput, RestoreBackupInput,
-        RetryQueueItemInput, RetryQueueQuery, RetryQueueRunInput, UpdateAccountInput,
-        UpdateGroupInput, UpdateGroupProxyInput,
+        AccountBatchInput, AttachmentInfo, AutomationRunQuery, ClaimProjectAccountInput,
+        ClearAutomationRunsInput, CreateGroupInput, CreateProjectInput, DeleteMailMessagesInput,
+        DownloadAttachmentInput, ExportAccountsInput, ExportMailMessagesInput,
+        MailMessageQuery, MarkMailMessagesInput, ProjectAccountActionInput, RefreshInput,
+        RestoreBackupInput, RetryQueueItemInput, RetryQueueQuery, RetryQueueRunInput,
+        UpdateAccountInput, UpdateGroupInput, UpdateGroupProxyInput,
     };
     use rusqlite::{params, Connection};
     use std::path::PathBuf;
@@ -5524,6 +5638,133 @@ mod project_tests {
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].email, "core@example.com");
         assert_eq!(db.list_accounts().expect("accounts")[0].tags[0].name, "ProjectCore");
+    }
+
+    #[test]
+    fn account_batch_updates_delete_and_selected_export() {
+        let root = std::env::temp_dir().join(format!("outlook-email-account-batch-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: root.join("test.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        let batch_group = db
+            .create_group(CreateGroupInput {
+                name: "Batch".to_string(),
+                description: None,
+                color: None,
+                parent_id: None,
+                proxy_url: None,
+                fallback_proxy_url_1: None,
+                fallback_proxy_url_2: None,
+            })
+            .expect("create group");
+        db.conn
+            .execute(
+                "
+                INSERT INTO accounts (id, email, status, group_id)
+                VALUES
+                    (1, 'one@example.com', 'active', 1),
+                    (2, 'two@example.com', 'active', 1),
+                    (3, 'three@example.com', 'active', 1)
+                ",
+                [],
+            )
+            .expect("insert accounts");
+        db.conn
+            .execute(
+                "INSERT INTO tags (id, name, color) VALUES (10, 'BatchCore', '#111827'), (11, 'BatchWarmup', '#374151')",
+                [],
+            )
+            .expect("insert tags");
+
+        let moved = db
+            .batch_accounts(AccountBatchInput {
+                account_ids: vec![1, 2, 2, 999],
+                action: "move_group".to_string(),
+                group_id: Some(batch_group.id),
+                forward_enabled: None,
+                tag_ids: None,
+            })
+            .expect("move accounts");
+        assert_eq!(moved.refreshed, 2);
+        assert_eq!(moved.failed, 1);
+        assert!(!moved.success);
+        let moved_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM accounts WHERE group_id = ?",
+                [batch_group.id],
+                |row| row.get(0),
+            )
+            .expect("moved count");
+        assert_eq!(moved_count, 2);
+
+        db.batch_accounts(AccountBatchInput {
+            account_ids: vec![1, 2],
+            action: "set_forward".to_string(),
+            group_id: None,
+            forward_enabled: Some(true),
+            tag_ids: None,
+        })
+        .expect("set forward");
+        let forward_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM accounts WHERE forward_enabled = 1", [], |row| row.get(0))
+            .expect("forward count");
+        assert_eq!(forward_count, 2);
+
+        db.batch_accounts(AccountBatchInput {
+            account_ids: vec![1, 2],
+            action: "add_tags".to_string(),
+            group_id: None,
+            forward_enabled: None,
+            tag_ids: Some(vec![10, 11]),
+        })
+        .expect("add tags");
+        let tag_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM account_tags", [], |row| row.get(0))
+            .expect("tag count");
+        assert_eq!(tag_count, 4);
+
+        db.batch_accounts(AccountBatchInput {
+            account_ids: vec![1, 2],
+            action: "remove_tags".to_string(),
+            group_id: None,
+            forward_enabled: None,
+            tag_ids: Some(vec![11]),
+        })
+        .expect("remove tags");
+        let warmup_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM account_tags WHERE tag_id = 11", [], |row| row.get(0))
+            .expect("warmup tag count");
+        assert_eq!(warmup_count, 0);
+
+        let selected_export = db
+            .export_accounts(ExportAccountsInput {
+                group_id: None,
+                account_ids: Some(vec![1]),
+            })
+            .expect("export selected accounts");
+        assert_eq!(selected_export.item_count, 1);
+        let csv = std::fs::read_to_string(&selected_export.path).expect("read selected export");
+        assert!(csv.contains("one@example.com"));
+        assert!(!csv.contains("two@example.com"));
+
+        db.batch_accounts(AccountBatchInput {
+            account_ids: vec![1, 2],
+            action: "delete".to_string(),
+            group_id: None,
+            forward_enabled: None,
+            tag_ids: None,
+        })
+        .expect("delete accounts");
+        assert_eq!(db.list_accounts().expect("accounts").len(), 1);
     }
 
     #[test]
@@ -5970,7 +6211,10 @@ mod project_tests {
         assert!(html.contains("&lt;b&gt;body&lt;/b&gt;"));
 
         let accounts_export = db
-            .export_accounts(ExportAccountsInput { group_id: None })
+            .export_accounts(ExportAccountsInput {
+                group_id: None,
+                account_ids: None,
+            })
             .expect("export accounts");
         assert_eq!(accounts_export.item_count, 1);
         let csv = std::fs::read_to_string(&accounts_export.path).expect("read csv export");

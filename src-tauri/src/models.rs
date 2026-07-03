@@ -44,6 +44,7 @@ pub struct Account {
     pub forward_enabled: bool,
     pub last_refresh_status: String,
     pub last_refresh_error: Option<String>,
+    pub last_refresh_at: Option<String>,
     pub message_count: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -254,6 +255,17 @@ pub struct AutomationRun {
     pub duration_ms: i64,
     pub started_at: String,
     pub finished_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RefreshLog {
+    pub id: i64,
+    pub account_id: Option<i64>,
+    pub account_email: String,
+    pub refresh_type: String,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

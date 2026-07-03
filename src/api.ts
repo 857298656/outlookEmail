@@ -17,6 +17,7 @@ import type {
   Project,
   ProjectAccount,
   ProjectAccountEvent,
+  RefreshLog,
   RetryQueueItem,
   RetryQueueQuery,
   RestoreBackupResult,
@@ -95,6 +96,7 @@ let mockSchedulerStatus: SchedulerStatus = {
 };
 let mockAutomationRuns: AutomationRun[] = [];
 let mockRetryQueue: RetryQueueItem[] = [];
+let mockRefreshLogs: RefreshLog[] = [];
 
 function isTauriRuntime() {
   return "__TAURI_INTERNALS__" in window;
@@ -235,6 +237,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
           forward_enabled: false,
           last_refresh_status: "never",
           last_refresh_error: null,
+          last_refresh_at: null,
           message_count: 0,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -359,14 +362,35 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     case "update_settings":
       mockSettings = args?.settings as Settings;
       return mockSettings as T;
-    case "run_refresh_job":
-      mockSchedulerStatus.last_refresh_at = new Date().toISOString();
+    case "run_refresh_job": {
+      const input = args?.input as { account_id?: number | null } | undefined;
+      const refreshedAt = new Date().toISOString();
+      const targetAccounts = input?.account_id ? mockAccounts.filter((account) => account.id === input.account_id) : mockAccounts;
+      mockSchedulerStatus.last_refresh_at = refreshedAt;
+      mockAccounts = mockAccounts.map((account) =>
+        targetAccounts.some((target) => target.id === account.id)
+          ? { ...account, last_refresh_status: "success", last_refresh_error: null, last_refresh_at: refreshedAt, updated_at: refreshedAt }
+          : account
+      );
+      mockRefreshLogs = [
+        ...targetAccounts.map((account, index) => ({
+          id: Date.now() + index,
+          account_id: account.id,
+          account_email: account.email,
+          refresh_type: "manual",
+          status: "success",
+          error_message: "Mock refresh completed",
+          created_at: refreshedAt
+        })),
+        ...mockRefreshLogs
+      ];
       return recordMockAutomationRun("refresh", "manual", {
         success: true,
         message: "Refresh job accepted. Provider adapters are available in the Tauri runtime.",
-        refreshed: 1,
+        refreshed: targetAccounts.length,
         failed: 0
       }) as T;
+    }
     case "run_forwarding_job": {
       const now = new Date().toISOString();
       mockSchedulerStatus.last_forwarding_at = now;
@@ -431,6 +455,13 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       return mockBackupLogs.slice(0, (args?.limit as number | undefined) ?? 100) as T;
     case "scheduler_status":
       return mockSchedulerStatus as T;
+    case "list_refresh_logs": {
+      const accountId = args?.accountId as number | undefined;
+      const limit = (args?.limit as number | undefined) ?? 100;
+      return mockRefreshLogs
+        .filter((log) => !accountId || log.account_id === accountId)
+        .slice(0, limit) as T;
+    }
     case "list_automation_runs":
       return filterMockAutomationRuns(args) as T;
     case "clear_automation_runs": {
@@ -1023,6 +1054,8 @@ export const api = {
   listForwardingLogs: (limit = 100) => call<ForwardingLog[]>("list_forwarding_logs", { limit }),
   listBackupLogs: (limit = 100) => call<BackupLog[]>("list_backup_logs", { limit }),
   schedulerStatus: () => call<SchedulerStatus>("scheduler_status"),
+  listRefreshLogs: (accountId?: number | null, limit = 100) =>
+    call<RefreshLog[]>("list_refresh_logs", { accountId: accountId ?? null, limit }),
   listAutomationRuns: (query: AutomationRunQuery = {}, limit = 100) =>
     call<AutomationRun[]>("list_automation_runs", { limit, query: { ...query, limit: query.limit ?? limit } }),
   clearAutomationRuns: (input: AutomationRunQuery & { older_than_days?: number; clear_all?: boolean }) =>

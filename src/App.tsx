@@ -42,6 +42,7 @@ import type {
   MailMessageQuery,
   Project,
   ProjectAccount,
+  RefreshLog,
   RetryQueueItem,
   RemoteSyncFailure,
   SchedulerStatus,
@@ -52,7 +53,7 @@ import type {
   CloudflareChannel
 } from "./types";
 
-type View = "mail" | "accounts" | "temp" | "projects" | "settings";
+type View = "mail" | "accounts" | "refresh" | "temp" | "projects" | "settings";
 type MailFilters = {
   search: string;
   readState: "all" | "read" | "unread";
@@ -80,6 +81,7 @@ function App() {
   const [backupLogs, setBackupLogs] = useState<BackupLog[]>([]);
   const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
   const [retryQueue, setRetryQueue] = useState<RetryQueueItem[]>([]);
+  const [refreshLogs, setRefreshLogs] = useState<RefreshLog[]>([]);
   const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<number | "all">("all");
   const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>();
@@ -194,12 +196,13 @@ function App() {
   }
 
   async function loadAutomation() {
-    const [nextSettings, nextForwardingLogs, nextBackupLogs, nextAutomationRuns, nextRetryQueue, nextSchedulerStatus] = await Promise.all([
+    const [nextSettings, nextForwardingLogs, nextBackupLogs, nextAutomationRuns, nextRetryQueue, nextRefreshLogs, nextSchedulerStatus] = await Promise.all([
       api.getSettings(),
       api.listForwardingLogs(80),
       api.listBackupLogs(40),
       api.listAutomationRuns({}, 80),
       api.listRetryQueue({}, 80),
+      api.listRefreshLogs(null, 100),
       api.schedulerStatus()
     ]);
     setSettings(nextSettings);
@@ -207,6 +210,7 @@ function App() {
     setBackupLogs(nextBackupLogs);
     setAutomationRuns(nextAutomationRuns);
     setRetryQueue(nextRetryQueue);
+    setRefreshLogs(nextRefreshLogs);
     setSchedulerStatus(nextSchedulerStatus);
   }
 
@@ -303,6 +307,16 @@ function App() {
           }}
         >
           <Users size={20} />
+        </IconButton>
+        <IconButton
+          active={view === "refresh"}
+          title="刷新"
+          onClick={() => {
+            setView("refresh");
+            setRailMenuOpen(false);
+          }}
+        >
+          <RefreshCw size={20} />
         </IconButton>
         <IconButton
           active={view === "temp"}
@@ -591,6 +605,58 @@ function App() {
                 const result = await api.exchangeOAuthToken(input);
                 setNotice(`OAuth 已保存：${result.refresh_token_preview}`);
                 await loadWorkspace(input.account_id, folder);
+              })
+            }
+          />
+        )}
+
+        {view === "refresh" && (
+          <RefreshManagementView
+            accounts={accounts}
+            retryQueue={retryQueue}
+            refreshLogs={refreshLogs}
+            automationRuns={automationRuns}
+            schedulerStatus={schedulerStatus}
+            busy={busy}
+            onRefreshAccount={(accountId) =>
+              runAction(async () => {
+                const result = await api.runRefreshJob(accountId);
+                setNotice(formatResultMessage(result.message));
+                await loadWorkspace(accountId, folder, mailFilters, mailPage);
+                await loadAutomation();
+                await loadStatus();
+              })
+            }
+            onRefreshAll={() =>
+              runAction(async () => {
+                const result = await api.runRefreshJob(undefined);
+                setNotice(formatResultMessage(result.message));
+                await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
+                await loadAutomation();
+                await loadStatus();
+              })
+            }
+            onRunRetryQueue={() =>
+              runAction(async () => {
+                const result = await api.runRetryQueue(20);
+                setNotice(formatResultMessage(result.message));
+                await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
+                await loadAutomation();
+              })
+            }
+            onRetryQueueItem={(retryId) =>
+              runAction(async () => {
+                const result = await api.retryQueueItem(retryId);
+                setNotice(formatResultMessage(result.message));
+                await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
+                await loadAutomation();
+              })
+            }
+            onDismissRetryItem={(retryId) =>
+              runAction(async () => {
+                const result = await api.dismissRetryItem(retryId);
+                setNotice(formatResultMessage(result.message));
+                await loadAutomation();
               })
             }
           />
@@ -1747,6 +1813,312 @@ function AccountsView({
   );
 }
 
+function RefreshManagementView({
+  accounts,
+  retryQueue,
+  refreshLogs,
+  automationRuns,
+  schedulerStatus,
+  busy,
+  onRefreshAccount,
+  onRefreshAll,
+  onRunRetryQueue,
+  onRetryQueueItem,
+  onDismissRetryItem
+}: {
+  accounts: Account[];
+  retryQueue: RetryQueueItem[];
+  refreshLogs: RefreshLog[];
+  automationRuns: AutomationRun[];
+  schedulerStatus: SchedulerStatus | null;
+  busy: boolean;
+  onRefreshAccount: (accountId: number) => Promise<void> | void;
+  onRefreshAll: () => void;
+  onRunRetryQueue: () => void;
+  onRetryQueueItem: (retryId: number) => void;
+  onDismissRetryItem: (retryId: number) => void;
+}) {
+  const [accountFilter, setAccountFilter] = useState("failed");
+  const [historyFilter, setHistoryFilter] = useState("all");
+  const [accountSearch, setAccountSearch] = useState("");
+  const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const stopBatchRef = useRef(false);
+
+  const refreshRetryQueue = useMemo(() => retryQueue.filter((item) => item.task_type === "refresh_account"), [retryQueue]);
+  const refreshRuns = useMemo(() => automationRuns.filter((run) => run.job_type === "refresh"), [automationRuns]);
+  const readyCount = accounts.filter(isRefreshReady).length;
+  const failedCount = accounts.filter((account) => account.last_refresh_status === "failed").length;
+  const successCount = accounts.filter((account) => account.last_refresh_status === "success").length;
+  const neverCount = accounts.filter((account) => account.last_refresh_status === "never").length;
+  const selectedSet = useMemo(() => new Set(selectedAccountIds), [selectedAccountIds]);
+  const visibleAccounts = useMemo(() => {
+    const keyword = accountSearch.trim().toLowerCase();
+    return accounts.filter((account) => {
+      if (accountFilter === "failed" && account.last_refresh_status !== "failed") return false;
+      if (accountFilter === "success" && account.last_refresh_status !== "success") return false;
+      if (accountFilter === "never" && account.last_refresh_status !== "never") return false;
+      if (accountFilter === "ready" && !isRefreshReady(account)) return false;
+      if (accountFilter === "missing" && isRefreshReady(account)) return false;
+      if (!keyword) return true;
+      return [account.email, account.group_name ?? "", account.remark, account.last_refresh_error ?? "", ...account.aliases]
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword);
+    });
+  }, [accounts, accountFilter, accountSearch]);
+  const visibleAccountIds = useMemo(() => visibleAccounts.map((account) => account.id), [visibleAccounts]);
+  const allVisibleSelected = visibleAccountIds.length > 0 && visibleAccountIds.every((accountId) => selectedSet.has(accountId));
+  const filteredRefreshLogs = useMemo(
+    () => refreshLogs.filter((log) => historyFilter === "all" || log.status === historyFilter),
+    [refreshLogs, historyFilter]
+  );
+
+  useEffect(() => {
+    const accountIds = new Set(accounts.map((account) => account.id));
+    setSelectedAccountIds((current) => current.filter((accountId) => accountIds.has(accountId)));
+  }, [accounts]);
+
+  async function runSelectedRefreshBatch() {
+    if (selectedAccountIds.length === 0 || batchRunning) return;
+    stopBatchRef.current = false;
+    setBatchRunning(true);
+    try {
+      const batch = [...selectedAccountIds];
+      for (const accountId of batch) {
+        if (stopBatchRef.current) break;
+        await onRefreshAccount(accountId);
+      }
+    } finally {
+      setBatchRunning(false);
+      stopBatchRef.current = false;
+    }
+  }
+
+  return (
+    <section className="refreshGrid">
+      <div className="panel widePanel">
+        <div className="panelHeader">
+          <h2>刷新管理</h2>
+          <RefreshCw size={18} />
+        </div>
+        <div className="statStrip refreshStats">
+          <Stat label="账号总数" value={accounts.length} />
+          <Stat label="凭据可用" value={readyCount} />
+          <Stat label="刷新成功" value={successCount} />
+          <Stat label="刷新失败" value={failedCount} />
+          <Stat label="从未刷新" value={neverCount} />
+          <Stat label="重试队列" value={refreshRetryQueue.length} />
+        </div>
+        <div className="runStatusGrid">
+          <RunStatus label="上次定时刷新" value={schedulerStatus?.last_refresh_at} />
+        </div>
+        <div className="tableActions">
+          <button className="button primary" disabled={busy || batchRunning || accounts.length === 0} onClick={onRefreshAll}>
+            {busy && !batchRunning ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+            刷新全部
+          </button>
+          <button
+            className="button secondary"
+            disabled={busy || batchRunning || selectedAccountIds.length === 0}
+            onClick={() => void runSelectedRefreshBatch()}
+          >
+            {batchRunning ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+            刷新选中
+          </button>
+          <button className="button secondary" disabled={!batchRunning} onClick={() => (stopBatchRef.current = true)}>
+            <XCircle size={16} />
+            停止批量
+          </button>
+          <button className="button secondary" disabled={busy || batchRunning || refreshRetryQueue.length === 0} onClick={onRunRetryQueue}>
+            <RotateCcw size={16} />
+            运行到期重试
+          </button>
+        </div>
+      </div>
+
+      <div className="panel widePanel">
+        <div className="panelHeader">
+          <h2>账号刷新状态</h2>
+          <Users size={18} />
+        </div>
+        <div className="automationFilters">
+          <select className="select" value={accountFilter} onChange={(event) => setAccountFilter(event.target.value)}>
+            <option value="failed">失败账号</option>
+            <option value="ready">凭据可用</option>
+            <option value="missing">缺少凭据</option>
+            <option value="success">成功</option>
+            <option value="never">从未刷新</option>
+            <option value="all">全部账号</option>
+          </select>
+          <input
+            className="input grow"
+            value={accountSearch}
+            placeholder="搜索邮箱、别名、分组或错误"
+            onChange={(event) => setAccountSearch(event.target.value)}
+          />
+          <button className="button secondary" disabled={selectedAccountIds.length === 0} onClick={() => setSelectedAccountIds([])}>
+            清除选择
+          </button>
+        </div>
+        <div className="logTable refreshAccountTable">
+          <div className="logHeader">
+            <span className="selectCell">
+              <input
+                type="checkbox"
+                aria-label="选择当前账号"
+                checked={allVisibleSelected}
+                disabled={visibleAccountIds.length === 0}
+                onChange={(event) => {
+                  const visibleIdSet = new Set(visibleAccountIds);
+                  setSelectedAccountIds((current) =>
+                    event.target.checked
+                      ? Array.from(new Set([...current, ...visibleAccountIds]))
+                      : current.filter((accountId) => !visibleIdSet.has(accountId))
+                  );
+                }}
+              />
+            </span>
+            <span>账号</span>
+            <span>凭据</span>
+            <span>状态</span>
+            <span>上次刷新</span>
+            <span>邮件</span>
+            <span>错误</span>
+            <span>操作</span>
+          </div>
+          {visibleAccounts.map((account) => (
+            <div className="logRow" key={account.id}>
+              <span className="selectCell">
+                <input
+                  type="checkbox"
+                  aria-label={`选择 ${account.email}`}
+                  checked={selectedSet.has(account.id)}
+                  onChange={(event) =>
+                    setSelectedAccountIds((current) =>
+                      event.target.checked
+                        ? Array.from(new Set([...current, account.id]))
+                        : current.filter((accountId) => accountId !== account.id)
+                    )
+                  }
+                />
+              </span>
+              <span>{account.email}</span>
+              <span>{refreshCredentialLabel(account)}</span>
+              <StatusPill status={account.last_refresh_status} />
+              <span>{account.last_refresh_at ? formatDate(account.last_refresh_at) : "从未"}</span>
+              <span>{account.message_count}</span>
+              <span>{account.last_refresh_error ?? ""}</span>
+              <span className="rowActions">
+                <button className="iconMini" title="刷新账号" disabled={busy || batchRunning} onClick={() => onRefreshAccount(account.id)}>
+                  <RefreshCw size={14} />
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+        {visibleAccounts.length === 0 && <EmptyState icon={<RefreshCw size={24} />} text="没有匹配账号。" />}
+      </div>
+
+      <div className="panel widePanel">
+        <div className="panelHeader">
+          <h2>刷新重试队列</h2>
+          <RotateCcw size={18} />
+        </div>
+        <div className="logTable refreshRetryTable">
+          <div className="logHeader">
+            <span>时间</span>
+            <span>账号</span>
+            <span>次数</span>
+            <span>下次</span>
+            <span>错误</span>
+            <span>操作</span>
+          </div>
+          {refreshRetryQueue.map((item) => (
+            <div className="logRow" key={item.id}>
+              <span>{formatDate(item.updated_at)}</span>
+              <span>{item.account_email}</span>
+              <span>{item.attempts} / {item.max_attempts}</span>
+              <span>{item.next_attempt_at ? formatDate(item.next_attempt_at) : "-"}</span>
+              <span>{item.error_message}</span>
+              <span className="rowActions">
+                <button className="iconMini" title="立即重试" disabled={busy || batchRunning} onClick={() => onRetryQueueItem(item.id)}>
+                  <RotateCcw size={14} />
+                </button>
+                <button className="iconMini danger" title="忽略" disabled={busy || batchRunning} onClick={() => onDismissRetryItem(item.id)}>
+                  <Trash2 size={14} />
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+        {refreshRetryQueue.length === 0 && <EmptyState icon={<RotateCcw size={24} />} text="暂无刷新重试项。" />}
+      </div>
+
+      <div className="panel widePanel">
+        <div className="panelHeader">
+          <h2>刷新历史</h2>
+          <RefreshCw size={18} />
+        </div>
+        <div className="automationFilters">
+          <select className="select" value={historyFilter} onChange={(event) => setHistoryFilter(event.target.value)}>
+            <option value="all">全部结果</option>
+            <option value="success">成功</option>
+            <option value="failed">失败</option>
+          </select>
+        </div>
+        <div className="logTable refreshHistoryTable">
+          <div className="logHeader">
+            <span>时间</span>
+            <span>账号</span>
+            <span>类型</span>
+            <span>状态</span>
+            <span>详情</span>
+          </div>
+          {filteredRefreshLogs.map((log) => (
+            <div className="logRow" key={log.id}>
+              <span>{formatDate(log.created_at)}</span>
+              <span>{log.account_email}</span>
+              <span>{log.refresh_type}</span>
+              <StatusPill status={log.status} />
+              <span>{log.error_message ?? ""}</span>
+            </div>
+          ))}
+        </div>
+        {filteredRefreshLogs.length === 0 && <EmptyState icon={<RefreshCw size={24} />} text="暂无刷新历史。" />}
+      </div>
+
+      <div className="panel widePanel">
+        <div className="panelHeader">
+          <h2>刷新任务历史</h2>
+          <RefreshCw size={18} />
+        </div>
+        <div className="logTable refreshRunTable">
+          <div className="logHeader">
+            <span>时间</span>
+            <span>触发</span>
+            <span>状态</span>
+            <span>数量</span>
+            <span>耗时</span>
+            <span>详情</span>
+          </div>
+          {refreshRuns.map((run) => (
+            <div className="logRow" key={run.id}>
+              <span>{formatDate(run.finished_at)}</span>
+              <span>{formatAutomationTrigger(run.trigger_type)}</span>
+              <StatusPill status={run.status} />
+              <span>{run.refreshed} 成功 / {run.failed} 失败</span>
+              <span>{formatDuration(run.duration_ms)}</span>
+              <span>{formatResultMessage(run.message)}</span>
+            </div>
+          ))}
+        </div>
+        {refreshRuns.length === 0 && <EmptyState icon={<RefreshCw size={24} />} text="暂无刷新任务记录。" />}
+      </div>
+    </section>
+  );
+}
+
 function TempEmailsView({
   tempEmails,
   messages,
@@ -2304,6 +2676,17 @@ function Stat({ label, value }: { label: string; value: number }) {
 
 function StatusPill({ status }: { status: string }) {
   return <span className={`statusPill status-${status}`}>{formatStatus(status)}</span>;
+}
+
+function isRefreshReady(account: Account) {
+  return account.has_refresh_token || account.has_imap_password || account.has_password;
+}
+
+function refreshCredentialLabel(account: Account) {
+  if (account.has_refresh_token) return "Graph";
+  if (account.has_imap_password) return "IMAP 密码";
+  if (account.has_password) return "账号密码";
+  return "缺少凭据";
 }
 
 function AccountEditor({

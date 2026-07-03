@@ -736,6 +736,7 @@ button:disabled {
 }
 
 .managementGrid,
+.refreshGrid,
 .settingsGrid,
 .projectsGrid,
 .tempGrid {
@@ -1052,6 +1053,18 @@ button:disabled {
 .status-removed {
   background: #e5e7eb;
   color: #4b5563;
+}
+
+.status-never,
+.status-authorized,
+.status-active {
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+.status-pending {
+  background: #fef3c7;
+  color: #92400e;
 }
 
 .rowActions {
@@ -1427,6 +1440,26 @@ button:disabled {
 .automationLogTable .logHeader,
 .automationLogTable .logRow {
   grid-template-columns: 150px 100px 90px 100px 130px 90px minmax(260px, 1fr);
+}
+
+.refreshAccountTable .logHeader,
+.refreshAccountTable .logRow {
+  grid-template-columns: 32px minmax(190px, 1.2fr) 100px 90px 120px 70px minmax(220px, 1.4fr) 60px;
+}
+
+.refreshRetryTable .logHeader,
+.refreshRetryTable .logRow {
+  grid-template-columns: 150px minmax(180px, 1fr) 90px 140px minmax(260px, 1.4fr) 80px;
+}
+
+.refreshHistoryTable .logHeader,
+.refreshHistoryTable .logRow {
+  grid-template-columns: 150px minmax(180px, 1fr) 90px 90px minmax(280px, 1.5fr);
+}
+
+.refreshRunTable .logHeader,
+.refreshRunTable .logRow {
+  grid-template-columns: 150px 90px 90px 130px 90px minmax(280px, 1fr);
 }
 
 .logHeader {

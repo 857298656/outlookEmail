@@ -426,7 +426,7 @@ impl Database {
             "
             SELECT a.id, a.email, a.group_id, g.name, COALESCE(a.remark, ''), a.status,
                    a.provider, a.account_type, a.forward_enabled, a.last_refresh_status,
-                   a.last_refresh_error, COUNT(m.id) AS message_count, a.created_at, a.updated_at,
+                   a.last_refresh_error, a.last_refresh_at, COUNT(m.id) AS message_count, a.created_at, a.updated_at,
                    a.password_enc, a.refresh_token_enc, a.imap_password_enc, COALESCE(a.imap_host, ''),
                    a.imap_port, COALESCE(a.proxy_url, ''), COALESCE(a.fallback_proxy_url_1, ''),
                    COALESCE(a.fallback_proxy_url_2, '')
@@ -451,19 +451,20 @@ impl Database {
                 forward_enabled: row.get::<_, i64>(8)? == 1,
                 last_refresh_status: row.get(9)?,
                 last_refresh_error: row.get(10)?,
-                message_count: row.get(11)?,
-                created_at: row.get(12)?,
-                updated_at: row.get(13)?,
+                last_refresh_at: row.get(11)?,
+                message_count: row.get(12)?,
+                created_at: row.get(13)?,
+                updated_at: row.get(14)?,
                 tags: Vec::new(),
                 aliases: Vec::new(),
-                has_password: !row.get::<_, String>(14)?.is_empty(),
-                has_refresh_token: !row.get::<_, String>(15)?.is_empty(),
-                has_imap_password: !row.get::<_, String>(16)?.is_empty(),
-                imap_host: row.get(17)?,
-                imap_port: row.get(18)?,
-                proxy_url: row.get(19)?,
-                fallback_proxy_url_1: row.get(20)?,
-                fallback_proxy_url_2: row.get(21)?,
+                has_password: !row.get::<_, String>(15)?.is_empty(),
+                has_refresh_token: !row.get::<_, String>(16)?.is_empty(),
+                has_imap_password: !row.get::<_, String>(17)?.is_empty(),
+                imap_host: row.get(18)?,
+                imap_port: row.get(19)?,
+                proxy_url: row.get(20)?,
+                fallback_proxy_url_1: row.get(21)?,
+                fallback_proxy_url_2: row.get(22)?,
             })
         })?;
 
@@ -2098,6 +2099,22 @@ impl Database {
             last_forwarding_at: self.get_config("scheduler_last_forwarding_at")?,
             last_backup_at: self.get_config("scheduler_last_backup_at")?,
         })
+    }
+
+    pub fn list_refresh_logs(&self, account_id: Option<i64>, limit: Option<i64>) -> AppResult<Vec<RefreshLog>> {
+        self.require_unlocked()?;
+        let limit = limit.unwrap_or(100).clamp(1, 500);
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT id, account_id, account_email, refresh_type, status, error_message, created_at
+            FROM refresh_logs
+            WHERE (?1 IS NULL OR account_id = ?1)
+            ORDER BY id DESC
+            LIMIT ?2
+            ",
+        )?;
+        let rows = stmt.query_map(params![account_id, limit], refresh_log_from_row)?;
+        collect_rows(rows)
     }
 
     pub fn run_due_scheduled_jobs(&self) -> AppResult<()> {
@@ -5401,6 +5418,18 @@ fn backup_log_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BackupLog> {
     })
 }
 
+fn refresh_log_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RefreshLog> {
+    Ok(RefreshLog {
+        id: row.get(0)?,
+        account_id: row.get(1)?,
+        account_email: row.get(2)?,
+        refresh_type: row.get(3)?,
+        status: row.get(4)?,
+        error_message: row.get(5)?,
+        created_at: row.get(6)?,
+    })
+}
+
 fn automation_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AutomationRun> {
     Ok(AutomationRun {
         id: row.get(0)?,
@@ -6680,6 +6709,12 @@ mod project_tests {
         assert_eq!(queued[0].task_type, "refresh_account");
         assert_eq!(queued[0].account_id, Some(1));
         assert_eq!(queued[0].message_id, "inbox");
+        let refresh_logs = db
+            .list_refresh_logs(Some(1), Some(10))
+            .expect("refresh logs");
+        assert_eq!(refresh_logs.len(), 1);
+        assert_eq!(refresh_logs[0].account_email, "refresh@example.com");
+        assert_eq!(refresh_logs[0].status, "failed");
 
         let retried = db
             .run_retry_queue(Some(RetryQueueRunInput {

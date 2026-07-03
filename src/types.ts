@@ -38,6 +38,7 @@ export type Account = {
   forward_enabled: boolean;
   last_refresh_status: string;
   last_refresh_error: string | null;
+  last_refresh_at: string | null;
   message_count: number;
   created_at: string;
   updated_at: string;
@@ -205,6 +206,16 @@ export type AutomationRun = {
   duration_ms: number;
   started_at: string;
   finished_at: string;
+};
+
+export type RefreshLog = {
+  id: number;
+  account_id: number | null;
+  account_email: string;
+  refresh_type: string;
+  status: string;
+  error_message: string | null;
+  created_at: string;
 };
 
 export type AutomationRunQuery = {

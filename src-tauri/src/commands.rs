@@ -309,6 +309,16 @@ pub fn scheduler_status(state: State<'_, AppState>) -> AppResult<SchedulerStatus
 }
 
 #[tauri::command]
+pub fn list_refresh_logs(
+    state: State<'_, AppState>,
+    account_id: Option<i64>,
+    limit: Option<i64>,
+) -> AppResult<Vec<RefreshLog>> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.list_refresh_logs(account_id, limit)
+}
+
+#[tauri::command]
 pub fn list_automation_runs(
     state: State<'_, AppState>,
     limit: Option<i64>,

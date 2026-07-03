@@ -61,34 +61,28 @@ button:disabled {
 }
 
 .railHeader {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
   align-items: center;
-  justify-content: flex-start;
   gap: 10px;
   width: 100%;
   min-height: 44px;
+  margin-bottom: 8px;
   overflow: hidden;
-  padding-left: 2px;
 }
 
-.brandMark {
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #111827;
-  font-weight: 800;
-  flex: 0 0 44px;
+.rail:not(.expanded) .railHeader {
+  grid-template-columns: 44px;
+  justify-content: center;
 }
 
 .brandName {
   min-width: 0;
   overflow: hidden;
   color: #f8fafc;
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 700;
+  line-height: 1.2;
   opacity: 0;
   text-overflow: ellipsis;
   transform: translateX(-4px);
@@ -101,6 +95,31 @@ button:disabled {
 .rail.expanded .brandName {
   opacity: 1;
   transform: translateX(0);
+}
+
+.rail:not(.expanded) .brandName {
+  display: none;
+}
+
+.railHeaderToggle {
+  display: inline-grid;
+  place-items: center;
+  justify-self: end;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #cbd5e1;
+}
+
+.rail:not(.expanded) .railHeaderToggle {
+  justify-self: center;
+}
+
+.railHeaderToggle:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #f8fafc;
 }
 
 .railButton,
@@ -150,10 +169,6 @@ button:disabled {
 .rail.expanded .railLabel {
   opacity: 1;
   transform: translateX(0);
-}
-
-.railToggle {
-  color: #cbd5e1;
 }
 
 .railButton:hover,

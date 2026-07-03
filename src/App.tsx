@@ -1,8 +1,6 @@
 import {
   Archive,
   CheckCircle2,
-  ChevronsLeft,
-  ChevronsRight,
   Cloud,
   Download,
   FolderKanban,
@@ -11,6 +9,8 @@ import {
   Loader2,
   Lock,
   Mail,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -248,18 +248,16 @@ function App() {
     <div className={railExpanded ? "appShell railExpanded" : "appShell"}>
       <aside className={railExpanded ? "rail expanded" : "rail"}>
         <div className="railHeader">
-          <div className="brandMark">OE</div>
           <span className="brandName">OutlookEmail</span>
+          <button
+            className="railHeaderToggle"
+            title={railExpanded ? "收起侧边栏" : "展开侧边栏"}
+            aria-label={railExpanded ? "收起侧边栏" : "展开侧边栏"}
+            onClick={() => setRailExpanded((current) => !current)}
+          >
+            {railExpanded ? <PanelLeftClose size={19} /> : <PanelLeftOpen size={19} />}
+          </button>
         </div>
-        <button
-          className="railButton railToggle"
-          title={railExpanded ? "收起侧边栏" : "展开侧边栏"}
-          aria-label={railExpanded ? "收起侧边栏" : "展开侧边栏"}
-          onClick={() => setRailExpanded((current) => !current)}
-        >
-          {railExpanded ? <ChevronsLeft size={20} /> : <ChevronsRight size={20} />}
-          <span className="railLabel">{railExpanded ? "收起侧边栏" : "展开侧边栏"}</span>
-        </button>
         <IconButton active={view === "mail"} title="邮箱" onClick={() => setView("mail")}>
           <Inbox size={20} />
         </IconButton>

@@ -731,6 +731,44 @@ impl Database {
         })
     }
 
+    pub fn reveal_account_secrets(&self, input: RevealAccountSecretsInput) -> AppResult<AccountSecretsPreview> {
+        self.require_unlocked()?;
+        let hash = self
+            .get_config("password_hash")?
+            .ok_or_else(|| AppError::InvalidInput("app is not initialized".to_string()))?;
+        if !crypto::verify_password(&input.password, &hash)? {
+            return Err(AppError::Unauthorized);
+        }
+        let salt = self
+            .get_config("crypto_salt")?
+            .ok_or_else(|| AppError::Crypto("missing crypto salt".to_string()))?;
+        let key = crypto::derive_key(&input.password, &salt);
+        let (password_enc, client_id_enc, refresh_token_enc, imap_password_enc): (String, String, String, String) = self
+            .conn
+            .query_row(
+                "
+                SELECT password_enc, client_id_enc, refresh_token_enc, imap_password_enc
+                FROM accounts
+                WHERE id = ?
+                ",
+                [input.account_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?
+            .ok_or_else(|| AppError::InvalidInput("account not found".to_string()))?;
+        let password = crypto::decrypt_text(&password_enc, &key)?;
+        let client_id = crypto::decrypt_text(&client_id_enc, &key)?;
+        let refresh_token = crypto::decrypt_text(&refresh_token_enc, &key)?;
+        let imap_password = crypto::decrypt_text(&imap_password_enc, &key)?;
+        self.audit("account.secrets_viewed", "account", Some(input.account_id), "local password verified")?;
+        Ok(AccountSecretsPreview {
+            password,
+            client_id,
+            refresh_token_preview: preview_secret(&refresh_token),
+            imap_password,
+        })
+    }
+
     pub fn list_projects(&self) -> AppResult<Vec<Project>> {
         self.require_unlocked()?;
         let mut stmt = self.conn.prepare(
@@ -5489,13 +5527,14 @@ fn remote_sync_failure_from_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Re
 mod project_tests {
     use super::{backup_dir, normalize_project_key, Database, MailMessageRef};
     use crate::error::AppError;
+    use crate::import::ImportedAccount;
     use crate::models::{
         AccountBatchInput, AttachmentInfo, AutomationRunQuery, ClaimProjectAccountInput,
         ClearAutomationRunsInput, CreateGroupInput, CreateProjectInput, DeleteMailMessagesInput,
         DownloadAttachmentInput, ExportAccountsInput, ExportMailMessagesInput,
         MailMessageQuery, MarkMailMessagesInput, ProjectAccountActionInput, RefreshInput,
-        RestoreBackupInput, RetryQueueItemInput, RetryQueueQuery, RetryQueueRunInput,
-        UpdateAccountInput, UpdateGroupInput, UpdateGroupProxyInput,
+        RestoreBackupInput, RevealAccountSecretsInput, RetryQueueItemInput, RetryQueueQuery,
+        RetryQueueRunInput, UpdateAccountInput, UpdateGroupInput, UpdateGroupProxyInput,
     };
     use rusqlite::{params, Connection};
     use std::path::PathBuf;
@@ -5794,6 +5833,46 @@ mod project_tests {
         })
         .expect("delete accounts");
         assert_eq!(db.list_accounts().expect("accounts").len(), 1);
+    }
+
+    #[test]
+    fn account_secrets_require_local_password() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: None,
+        };
+        db.initialize_schema().expect("schema");
+        db.initialize_app("local-password").expect("initialize app");
+        db.import_accounts(
+            vec![ImportedAccount {
+                email: "secret@example.com".to_string(),
+                password: "account-password".to_string(),
+                client_id: "client-id-value".to_string(),
+                refresh_token: "refresh-token-value".to_string(),
+                remark: "secret".to_string(),
+            }],
+            Some(1),
+        )
+        .expect("import account");
+
+        let secrets = db
+            .reveal_account_secrets(RevealAccountSecretsInput {
+                account_id: 1,
+                password: "local-password".to_string(),
+            })
+            .expect("reveal secrets");
+        assert_eq!(secrets.password, "account-password");
+        assert_eq!(secrets.client_id, "client-id-value");
+        assert_eq!(secrets.refresh_token_preview, "refr...alue");
+        assert_eq!(secrets.imap_password, "");
+
+        let denied = db.reveal_account_secrets(RevealAccountSecretsInput {
+            account_id: 1,
+            password: "wrong-password".to_string(),
+        });
+        assert!(matches!(denied, Err(AppError::Unauthorized)));
     }
 
     #[test]

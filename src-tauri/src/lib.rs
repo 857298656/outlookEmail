@@ -45,6 +45,7 @@ pub fn run() {
             import_accounts,
             delete_account,
             batch_accounts,
+            reveal_account_secrets,
             list_messages,
             create_demo_message,
             mark_mail_messages,

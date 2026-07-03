@@ -599,6 +599,7 @@ function App() {
                 await loadWorkspace(input.id, folder);
               }, "账号已保存")
             }
+            onRevealAccountSecrets={(input) => api.revealAccountSecrets(input)}
             onGenerateOAuthUrl={(input) => api.generateOAuthAuthUrl(input)}
             onExchangeOAuthToken={(input) =>
               runAction(async () => {
@@ -1279,6 +1280,7 @@ function AccountsView({
   onBatchAccounts,
   onExportAccounts,
   onUpdateAccount,
+  onRevealAccountSecrets,
   onGenerateOAuthUrl,
   onExchangeOAuthToken
 }: {
@@ -1296,6 +1298,7 @@ function AccountsView({
   onBatchAccounts: (input: Parameters<typeof api.batchAccounts>[0]) => void;
   onExportAccounts: (groupId?: number | null, accountIds?: number[]) => void;
   onUpdateAccount: (input: Parameters<typeof api.updateAccount>[0]) => void;
+  onRevealAccountSecrets: (input: Parameters<typeof api.revealAccountSecrets>[0]) => Promise<Awaited<ReturnType<typeof api.revealAccountSecrets>>>;
   onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string }) => Promise<string>;
   onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string }) => void;
 }) {
@@ -1628,6 +1631,7 @@ function AccountsView({
         oauthCallback={oauthCallback}
         onOauthCallbackChange={setOauthCallback}
         onSave={(input) => onUpdateAccount(input)}
+        onRevealAccountSecrets={(input) => onRevealAccountSecrets(input)}
         onGenerateOAuthUrl={async (input) => {
           const url = await onGenerateOAuthUrl(input);
           setOauthUrl(url);
@@ -2699,6 +2703,7 @@ function AccountEditor({
   oauthCallback,
   onOauthCallbackChange,
   onSave,
+  onRevealAccountSecrets,
   onGenerateOAuthUrl,
   onExchangeOAuthToken
 }: {
@@ -2711,6 +2716,7 @@ function AccountEditor({
   oauthCallback: string;
   onOauthCallbackChange: (value: string) => void;
   onSave: (input: Parameters<typeof api.updateAccount>[0]) => void;
+  onRevealAccountSecrets: (input: Parameters<typeof api.revealAccountSecrets>[0]) => Promise<Awaited<ReturnType<typeof api.revealAccountSecrets>>>;
   onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string }) => void;
   onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string }) => void;
 }) {
@@ -2733,6 +2739,10 @@ function AccountEditor({
     tag_ids: [] as number[],
     aliasesText: ""
   });
+  const [revealPassword, setRevealPassword] = useState("");
+  const [revealedSecrets, setRevealedSecrets] = useState<Awaited<ReturnType<typeof api.revealAccountSecrets>> | null>(null);
+  const [revealError, setRevealError] = useState<string | null>(null);
+  const [revealing, setRevealing] = useState(false);
 
   useEffect(() => {
     if (!account) return;
@@ -2756,6 +2766,9 @@ function AccountEditor({
       aliasesText: account.aliases.join("\n")
     });
     onOauthCallbackChange("");
+    setRevealPassword("");
+    setRevealedSecrets(null);
+    setRevealError(null);
   }, [account?.id, account?.updated_at, settings?.graph_client_id]);
 
   if (!account) {
@@ -2925,6 +2938,68 @@ function AccountEditor({
           placeholder="IMAP 密码，可选"
           onChange={(event) => setDraft({ ...draft, imap_password: event.target.value })}
         />
+      </div>
+      <div className="secretRevealBox">
+        <div className="formLine">
+          <input
+            className="input grow"
+            type="password"
+            value={revealPassword}
+            placeholder="本地应用密码"
+            onChange={(event) => setRevealPassword(event.target.value)}
+          />
+          <button
+            className="button secondary"
+            disabled={revealing || revealPassword.length < 8}
+            onClick={async () => {
+              setRevealError(null);
+              setRevealing(true);
+              try {
+                setRevealedSecrets(await onRevealAccountSecrets({ account_id: account.id, password: revealPassword }));
+              } catch (err) {
+                setRevealedSecrets(null);
+                setRevealError(readError(err));
+              } finally {
+                setRevealing(false);
+              }
+            }}
+          >
+            {revealing ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />}
+            查看敏感信息
+          </button>
+          <button
+            className="button ghost"
+            disabled={!revealedSecrets && !revealPassword}
+            onClick={() => {
+              setRevealPassword("");
+              setRevealedSecrets(null);
+              setRevealError(null);
+            }}
+          >
+            清除
+          </button>
+        </div>
+        {revealError && <div className="formError">{revealError}</div>}
+        {revealedSecrets && (
+          <div className="secretPreviewGrid">
+            <label className="field">
+              账号密码
+              <input className="input" readOnly value={revealedSecrets.password} />
+            </label>
+            <label className="field">
+              Client ID
+              <input className="input" readOnly value={revealedSecrets.client_id} />
+            </label>
+            <label className="field">
+              Refresh Token 预览
+              <input className="input" readOnly value={revealedSecrets.refresh_token_preview} />
+            </label>
+            <label className="field">
+              IMAP 密码
+              <input className="input" readOnly value={revealedSecrets.imap_password} />
+            </label>
+          </div>
+        )}
       </div>
       <button
         className="button primary fullWidth"

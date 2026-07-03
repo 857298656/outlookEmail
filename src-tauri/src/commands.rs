@@ -111,6 +111,15 @@ pub fn batch_accounts(state: State<'_, AppState>, input: AccountBatchInput) -> A
 }
 
 #[tauri::command]
+pub fn reveal_account_secrets(
+    state: State<'_, AppState>,
+    input: RevealAccountSecretsInput,
+) -> AppResult<AccountSecretsPreview> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.reveal_account_secrets(input)
+}
+
+#[tauri::command]
 pub fn list_messages(
     state: State<'_, AppState>,
     account_id: Option<i64>,

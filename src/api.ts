@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Account,
+  AccountSecretsPreview,
   AppStatus,
   AutomationRun,
   AutomationRunQuery,
@@ -312,6 +313,18 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         message: `Batch ${input.action} processed ${targetCount} account(s)`,
         refreshed: targetCount,
         failed: Math.max(0, ids.size - targetCount)
+      } as T;
+    }
+    case "reveal_account_secrets": {
+      const input = args?.input as { account_id: number; password: string };
+      if (!input.password || input.password.length < 8) throw new Error("local password verification failed");
+      const account = mockAccounts.find((item) => item.id === input.account_id);
+      if (!account) throw new Error("account not found");
+      return {
+        password: account.has_password ? "********" : "",
+        client_id: mockSettings.graph_client_id,
+        refresh_token_preview: account.has_refresh_token ? "mock...oken" : "",
+        imap_password: account.has_imap_password ? "********" : ""
       } as T;
     }
     case "list_messages":
@@ -1023,6 +1036,8 @@ export const api = {
     forward_enabled?: boolean;
     tag_ids?: number[];
   }) => call<JobResult>("batch_accounts", { input }),
+  revealAccountSecrets: (input: { account_id: number; password: string }) =>
+    call<AccountSecretsPreview>("reveal_account_secrets", { input }),
   listMessages: (accountId?: number, folder = "all", query: MailMessageQuery = {}) =>
     call<MailMessage[]>("list_messages", {
       accountId,

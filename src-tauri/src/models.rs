@@ -611,6 +611,20 @@ pub struct AccountBatchInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct RevealAccountSecretsInput {
+    pub account_id: i64,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountSecretsPreview {
+    pub password: String,
+    pub client_id: String,
+    pub refresh_token_preview: String,
+    pub imap_password: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct OAuthAuthUrlInput {
     pub client_id: String,
     pub redirect_uri: String,

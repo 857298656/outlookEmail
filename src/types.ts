@@ -54,6 +54,13 @@ export type Account = {
   fallback_proxy_url_2: string;
 };
 
+export type AccountSecretsPreview = {
+  password: string;
+  client_id: string;
+  refresh_token_preview: string;
+  imap_password: string;
+};
+
 export type MailMessage = {
   id: number;
   account_id: number;

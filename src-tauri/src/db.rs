@@ -6846,7 +6846,7 @@ mod project_tests {
         ClearAutomationRunsInput, ClearLocalDataInput, CreateGroupInput, CreateMailShareInput,
         CreateProjectInput, DeleteMailMessagesInput,
         DownloadAllAttachmentsInput, DownloadAttachmentInput, ExportAccountsInput, ExportMailMessagesInput,
-        MailMessageQuery, MarkMailMessagesInput, ProjectAccountActionInput, RefreshInput,
+        ImportTempEmailsInput, MailMessageQuery, MarkMailMessagesInput, ProjectAccountActionInput, RefreshInput,
         RestoreBackupInput, RevealAccountSecretsInput, RevokeMailShareInput, RetryQueueItemInput, RetryQueueQuery,
         RetryQueueRunInput, UpdateAccountInput, UpdateGroupInput, UpdateGroupProxyInput,
         UpdateTempEmailInput, Settings,
@@ -6858,6 +6858,129 @@ mod project_tests {
     fn normalizes_project_key() {
         assert_eq!(normalize_project_key(" My Project 01 "), "my-project-01");
         assert_eq!(normalize_project_key("中文项目"), "");
+    }
+
+    #[test]
+    fn local_desktop_workflow_covers_core_e2e_paths() {
+        let root = std::env::temp_dir().join(format!("outlook-email-e2e-workflow-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let db_path = root.join("workflow.sqlite");
+        let conn = Connection::open(&db_path).expect("open db");
+        let mut db = Database {
+            conn,
+            db_path,
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+
+        let imported = db
+            .import_accounts(
+                vec![ImportedAccount {
+                    email: "flow@example.com".to_string(),
+                    password: "password".to_string(),
+                    client_id: String::new(),
+                    refresh_token: String::new(),
+                    remark: "workflow".to_string(),
+                }],
+                None,
+            )
+            .expect("import account");
+        assert_eq!(imported.imported, 1);
+        let account = db.list_accounts().expect("accounts").remove(0);
+
+        let refresh = db
+            .refresh_accounts(RefreshInput {
+                account_id: Some(account.id),
+                folder: Some("inbox".to_string()),
+                top: Some(1),
+            })
+            .expect("refresh result");
+        assert_eq!(refresh.failed, 1);
+        assert!(db
+            .list_retry_queue(RetryQueueQuery {
+                task_type: Some("refresh_account".to_string()),
+                ..RetryQueueQuery::default()
+            })
+            .expect("refresh retry")
+            .len()
+            >= 1);
+
+        let message = db.create_demo_message(account.id).expect("demo message");
+        let marked = db
+            .mark_mail_messages(MarkMailMessagesInput {
+                message_ids: vec![message.id],
+                is_read: true,
+                sync_remote: Some(false),
+            })
+            .expect("mark read");
+        assert_eq!(marked.refreshed, 1);
+        let target = MailMessageRef {
+            id: message.id,
+            account_id: account.id,
+            account_email: account.email.clone(),
+            folder: message.folder.clone(),
+            provider_message_id: message.provider_message_id.clone(),
+        };
+        db.enqueue_mail_delete_retry(&target, "workflow remote delete failed")
+            .expect("enqueue delete retry");
+        let delete_retry = db
+            .list_retry_queue(RetryQueueQuery {
+                task_type: Some("mail_delete".to_string()),
+                ..RetryQueueQuery::default()
+            })
+            .expect("delete retry")
+            .remove(0);
+        let retried = db
+            .run_retry_queue(Some(RetryQueueRunInput {
+                retry_id: Some(delete_retry.id),
+                limit: None,
+            }))
+            .expect("retry delete");
+        assert_eq!(retried.refreshed, 1);
+        assert!(db
+            .list_messages(Some(account.id), Some("all".to_string()))
+            .expect("messages after delete retry")
+            .is_empty());
+
+        let temp_imported = db
+            .import_temp_emails(ImportTempEmailsInput {
+                raw: "temp@example.com".to_string(),
+                provider: "gptmail".to_string(),
+                channel_id: None,
+            })
+            .expect("import temp email");
+        assert_eq!(temp_imported.imported, 1);
+        db.update_temp_email(UpdateTempEmailInput {
+            email: "temp@example.com".to_string(),
+            tags: vec!["Workflow".to_string()],
+        })
+        .expect("tag temp email");
+
+        let backup_dir = backup_dir(&db.db_path).expect("backup dir");
+        std::fs::create_dir_all(&backup_dir).expect("create backup dir");
+        let backup_file = "workflow-backup.sqlite";
+        let backup_path = backup_dir.join(backup_file);
+        let backup_path_text = backup_path.to_string_lossy().to_string();
+        db.conn
+            .execute("VACUUM INTO ?", [backup_path_text.as_str()])
+            .expect("vacuum backup");
+        let size = backup_path.metadata().expect("backup metadata").len() as i64;
+        db.insert_backup_log("local-workflow", "success", backup_file, size, None)
+            .expect("backup log");
+
+        db.delete_temp_email("temp@example.com".to_string())
+            .expect("delete temp before restore");
+        assert!(db.list_temp_emails().expect("temp deleted").is_empty());
+        let restored = db
+            .restore_backup(RestoreBackupInput {
+                backup_log_id: 1,
+                confirm: true,
+            })
+            .expect("restore backup");
+        assert!(std::path::Path::new(&restored.safety_backup_path).exists());
+        let restored_temp = db.list_temp_emails().expect("restored temp").remove(0);
+        assert_eq!(restored_temp.email, "temp@example.com");
+        assert_eq!(restored_temp.tags, vec!["Workflow".to_string()]);
     }
 
     #[test]

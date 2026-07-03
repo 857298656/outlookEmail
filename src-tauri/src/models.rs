@@ -561,6 +561,7 @@ pub struct DownloadAttachmentInput {
     pub account_id: i64,
     pub message_id: String,
     pub attachment_id: String,
+    pub folder: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -638,4 +639,5 @@ pub struct ProviderMessage {
     pub body: Option<String>,
     pub body_type: String,
     pub attachments: Vec<AttachmentInfo>,
+    pub raw_mime: Option<Vec<u8>>,
 }

@@ -1101,12 +1101,17 @@ impl Database {
             .into_iter()
             .next()
             .ok_or_else(|| AppError::InvalidInput("account not found".to_string()))?;
-        if !should_use_graph(&account) {
-            return Err(AppError::InvalidInput(
-                "attachment download is currently implemented for Graph accounts".to_string(),
-            ));
-        }
-        let attachment = providers::download_graph_attachment(&account, &input.message_id, &input.attachment_id)?;
+        let attachment = if should_use_graph(&account) {
+            providers::download_graph_attachment(&account, &input.message_id, &input.attachment_id)?
+        } else {
+            let folder = input
+                .folder
+                .as_deref()
+                .map(normalize_mail_folder)
+                .filter(|value| value != "all");
+            let raw_mime = self.cached_imap_raw_mime(account.id, &input.message_id, folder.as_deref())?;
+            providers::download_imap_attachment_from_raw(&raw_mime, &input.attachment_id)?
+        };
         let file_name = safe_file_name(&attachment.name);
         let dir = attachment_dir(&self.db_path)?;
         std::fs::create_dir_all(&dir).map_err(|err| AppError::Internal(err.to_string()))?;
@@ -2227,6 +2232,7 @@ impl Database {
                 body TEXT,
                 body_type TEXT NOT NULL DEFAULT 'text',
                 attachments_json TEXT NOT NULL DEFAULT '[]',
+                raw_mime BLOB,
                 list_cached INTEGER NOT NULL DEFAULT 1,
                 body_cached INTEGER NOT NULL DEFAULT 0,
                 list_cached_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -2397,6 +2403,7 @@ impl Database {
         self.ensure_default_data()?;
         self.ensure_account_columns()?;
         self.ensure_temp_columns()?;
+        self.ensure_message_columns()?;
         Ok(())
     }
 
@@ -2453,6 +2460,16 @@ impl Database {
                 "ALTER TABLE temp_emails ADD COLUMN last_refresh_error TEXT",
             ),
         ] {
+            if !columns.iter().any(|column| column == name) {
+                self.conn.execute(ddl, [])?;
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_message_columns(&self) -> AppResult<()> {
+        let columns = table_columns(&self.conn, "retained_mail_messages")?;
+        for (name, ddl) in [("raw_mime", "ALTER TABLE retained_mail_messages ADD COLUMN raw_mime BLOB")] {
             if !columns.iter().any(|column| column == name) {
                 self.conn.execute(ddl, [])?;
             }
@@ -2851,8 +2868,8 @@ impl Database {
                 INSERT INTO retained_mail_messages
                 (account_id, folder, provider_message_id, subject, sender, recipients, cc,
                  received_at, received_at_sort, is_read, has_attachments, body_preview, body,
-                 body_type, attachments_json, body_cached, last_synced_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                 body_type, attachments_json, raw_mime, body_cached, last_synced_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ON CONFLICT(account_id, folder, provider_message_id) DO UPDATE SET
                     subject = excluded.subject,
                     sender = excluded.sender,
@@ -2866,6 +2883,7 @@ impl Database {
                     body = COALESCE(excluded.body, retained_mail_messages.body),
                     body_type = excluded.body_type,
                     attachments_json = excluded.attachments_json,
+                    raw_mime = COALESCE(excluded.raw_mime, retained_mail_messages.raw_mime),
                     body_cached = CASE WHEN excluded.body IS NULL THEN retained_mail_messages.body_cached ELSE 1 END,
                     last_synced_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP
@@ -2886,11 +2904,54 @@ impl Database {
                     message.body,
                     message.body_type,
                     serde_json::to_string(&message.attachments).unwrap_or_else(|_| "[]".to_string()),
+                    message.raw_mime.as_deref(),
                     if message.body.is_some() { 1 } else { 0 },
                 ],
             )?;
         }
         Ok(())
+    }
+
+    fn cached_imap_raw_mime(&self, account_id: i64, message_id: &str, folder: Option<&str>) -> AppResult<Vec<u8>> {
+        let raw_mime: Option<Vec<u8>> = match folder {
+            Some(folder) => self
+                .conn
+                .query_row(
+                    "
+                    SELECT raw_mime
+                    FROM retained_mail_messages
+                    WHERE account_id = ? AND provider_message_id = ? AND folder = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    ",
+                    params![account_id, message_id, folder],
+                    |row| row.get::<_, Option<Vec<u8>>>(0),
+                )
+                .optional()?
+                .flatten(),
+            None => self
+                .conn
+                .query_row(
+                    "
+                    SELECT raw_mime
+                    FROM retained_mail_messages
+                    WHERE account_id = ? AND provider_message_id = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    ",
+                    params![account_id, message_id],
+                    |row| row.get::<_, Option<Vec<u8>>>(0),
+                )
+                .optional()?
+                .flatten(),
+        };
+        let raw_mime = raw_mime.ok_or_else(|| AppError::InvalidInput("cached IMAP message not found".to_string()))?;
+        if raw_mime.is_empty() {
+            return Err(AppError::InvalidInput(
+                "cached IMAP raw MIME is missing; refresh the account before downloading this attachment".to_string(),
+            ));
+        }
+        Ok(raw_mime)
     }
 
     fn mark_account_refresh_success(&self, account_id: i64, email: &str, count: usize) -> AppResult<()> {
@@ -4492,12 +4553,13 @@ mod project_tests {
     use super::{backup_dir, normalize_project_key, Database};
     use crate::models::{
         AutomationRunQuery, ClaimProjectAccountInput, ClearAutomationRunsInput,
-        CreateProjectInput, DeleteMailMessagesInput, ExportAccountsInput,
+        AttachmentInfo, CreateProjectInput, DeleteMailMessagesInput, DownloadAttachmentInput,
+        ExportAccountsInput,
         ExportMailMessagesInput, MarkMailMessagesInput, ProjectAccountActionInput,
         RefreshInput, RestoreBackupInput, RetryQueueItemInput, RetryQueueQuery,
         RetryQueueRunInput,
     };
-    use rusqlite::Connection;
+    use rusqlite::{params, Connection};
     use std::path::PathBuf;
 
     #[test]
@@ -4649,6 +4711,78 @@ mod project_tests {
         assert_eq!(accounts_export.item_count, 1);
         let csv = std::fs::read_to_string(&accounts_export.path).expect("read csv export");
         assert!(csv.contains("one@example.com"));
+    }
+
+    #[test]
+    fn downloads_imap_attachment_from_cached_raw_mime() {
+        let root = std::env::temp_dir().join(format!("outlook-email-imap-attachment-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: root.join("test.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "
+                INSERT INTO accounts (id, email, status, group_id, provider, account_type)
+                VALUES (1, 'imap@example.com', 'active', 1, 'imap', 'imap')
+                ",
+                [],
+            )
+            .expect("insert account");
+        let raw_mime = concat!(
+            "From: sender@example.com\r\n",
+            "To: imap@example.com\r\n",
+            "Subject: Attachment test\r\n",
+            "MIME-Version: 1.0\r\n",
+            "Content-Type: multipart/mixed; boundary=\"mix\"\r\n",
+            "\r\n",
+            "--mix\r\n",
+            "Content-Type: text/plain; charset=utf-8\r\n",
+            "\r\n",
+            "Body\r\n",
+            "--mix\r\n",
+            "Content-Type: text/plain; name=\"note.txt\"\r\n",
+            "Content-Disposition: attachment; filename=\"note.txt\"\r\n",
+            "Content-Transfer-Encoding: base64\r\n",
+            "\r\n",
+            "SGVsbG8gSU1BUCBhdHRhY2htZW50\r\n",
+            "--mix--\r\n"
+        );
+        let attachments = serde_json::to_string(&vec![AttachmentInfo {
+            id: "note.txt".to_string(),
+            name: "note.txt".to_string(),
+            content_type: "text/plain".to_string(),
+            size: 21,
+        }])
+        .expect("attachments json");
+        db.conn
+            .execute(
+                "
+                INSERT INTO retained_mail_messages
+                (id, account_id, folder, provider_message_id, subject, received_at, received_at_sort,
+                 has_attachments, attachments_json, raw_mime)
+                VALUES (10, 1, 'inbox', '42', 'Attachment test', '2026-01-01T00:00:00Z', 1,
+                        1, ?, ?)
+                ",
+                params![attachments, raw_mime.as_bytes()],
+            )
+            .expect("insert message");
+
+        let result = db
+            .download_attachment(DownloadAttachmentInput {
+                account_id: 1,
+                message_id: "42".to_string(),
+                attachment_id: "note.txt".to_string(),
+                folder: Some("inbox".to_string()),
+            })
+            .expect("download attachment");
+
+        assert_eq!(result.file_name, "note.txt");
+        assert_eq!(std::fs::read(&result.path).expect("read attachment"), b"Hello IMAP attachment");
     }
 
     #[test]

@@ -773,7 +773,7 @@ export const api = {
     call<string>("generate_oauth_auth_url", { input }),
   exchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string }) =>
     call<{ success: boolean; account_id?: number; scope: string; expires_in: number; refresh_token_preview: string }>("exchange_oauth_token", { input }),
-  downloadAttachment: (input: { account_id: number; message_id: string; attachment_id: string }) =>
+  downloadAttachment: (input: { account_id: number; message_id: string; attachment_id: string; folder?: string }) =>
     call<{ path: string; file_name: string; size: number }>("download_attachment", { input }),
   listProjects: () => call<Project[]>("list_projects"),
   createProject: (input: { name: string; project_key?: string; description?: string; scope_mode?: string; group_ids?: number[] }) =>

@@ -43,6 +43,7 @@
 - Graph 邮箱刷新和本地缓存。
 - Graph 附件元数据同步和附件下载。
 - 基础 IMAP TLS 登录、UID search/fetch、MIME 解析。
+- IMAP 原始 MIME 本地缓存和附件解析下载。
 - 邮件列表、邮件详情、附件入口。
 - 刷新日志和账号刷新状态记录。
 - 账号刷新失败会按账号、文件夹和拉取数量进入重试队列。
@@ -126,6 +127,7 @@
   - `feat: add failed operation retry queue`
   - `feat: retry failed temp mail refreshes`
   - `feat: retry failed refresh and backup jobs`
+  - `feat: download cached IMAP attachments`
 
 ## 未完成
 
@@ -139,7 +141,6 @@
 
 ### IMAP 完整能力
 
-- IMAP 附件从缓存 raw MIME 中解析并下载。
 - IMAP XOAUTH2。
 - 更完整的文件夹发现和特殊文件夹映射。
 
@@ -191,7 +192,7 @@
 - 还原原项目账号导入格式。
 - 完成 Graph OAuth 和 Graph 邮箱同步。
 - 完成基础 IMAP 邮箱同步。
-- 完成邮件缓存、邮件列表、详情和 Graph 附件下载。
+- 完成邮件缓存、邮件列表、详情、Graph 附件下载和 IMAP 缓存 MIME 附件下载。
 
 ### M3：项目账号池，已完成
 
@@ -221,7 +222,8 @@
 - 已交付：标记已读/未读、删除、批量操作、搜索、筛选、分页。
 - 已交付：Graph `PATCH`/`DELETE` 和 IMAP UID flag 远端同步尝试。
 - 已交付：Graph/IMAP 远端标记和删除失败重试队列。
-- 剩余增强：IMAP 附件下载、HTML 安全渲染、高级搜索排序、远端失败回滚提示。
+- 已交付：IMAP 同步缓存 raw MIME，并支持从缓存 MIME 中解析下载附件。
+- 剩余增强：HTML 安全渲染、高级搜索排序、远端失败回滚提示。
 
 ### M7：本地导出核心，已完成
 

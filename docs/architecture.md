@@ -22,7 +22,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Cached message workspace
 - Settings persistence
 - Microsoft Graph OAuth and mailbox refresh
-- Basic TLS IMAP mailbox refresh
+- Basic TLS IMAP mailbox refresh with cached-MIME attachment download
 - Cached message search, filters, pagination, and batch read/unread/delete actions
 - Local HTML/CSV exports for cached mail, account inventory, and project account pools
 - GPTMail, DuckMail, and Cloudflare temp-mail management
@@ -40,6 +40,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Graph attachments are listed during sync and downloaded to the local app data `attachments` directory on demand.
 - Graph message read/unread and delete actions update the local cache and attempt Microsoft Graph `PATCH`/`DELETE` synchronization. Failed remote actions are stored in `retry_queue` with the original account, folder, provider message id, action, error, attempt count, and next attempt time.
 - IMAP uses TLS login, UID search/fetch, and MIME parsing.
+- IMAP sync stores the raw RFC822 MIME for cached messages so attachment downloads can be resolved locally from SQLite-backed cache data without another network fetch.
 - IMAP message read/unread and delete actions use UID flag updates; delete applies `\Deleted` and expunges the selected mailbox. Failed IMAP flag/delete operations use the same retry queue.
 - Temp-mail providers use configurable GPTMail and DuckMail HTTP APIs plus Cloudflare Worker admin channels.
 - Temp-mail messages are normalized and cached in `temp_email_messages` for local browsing. GPTMail, DuckMail, and Cloudflare refresh failures update the temp mailbox status and queue a `temp_refresh` retry item.
@@ -55,7 +56,6 @@ The application is a single-user local desktop app. It does not expose a public 
 
 ## Next provider work
 
-- IMAP attachment extraction/download from cached raw MIME
 - IMAP XOAUTH2 login
 - More provider-specific folder discovery
 - Safer HTML body rendering policy for cached messages

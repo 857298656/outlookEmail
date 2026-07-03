@@ -12,7 +12,7 @@ This version is intentionally local-first:
 
 ## Current implementation
 
-The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag management, local retained-mail workspace, message search/filter/pagination, batch read/unread/delete actions, local mail/account/project exports, settings storage, Microsoft Graph OAuth, Graph mailbox sync, Graph attachment metadata/download, basic TLS IMAP sync, GPTMail/DuckMail/Cloudflare temp-mail management, SMTP/Telegram/WeCom forwarding, failed-operation retry queue, WebDAV backup and local restore, in-app scheduling with unified task history, desktop project account pools, and Windows desktop bundling.
+The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag management, local retained-mail workspace, message search/filter/pagination, batch read/unread/delete actions, local mail/account/project exports, settings storage, Microsoft Graph OAuth, Graph mailbox sync, Graph attachment metadata/download, basic TLS IMAP sync with cached-MIME attachment download, GPTMail/DuckMail/Cloudflare temp-mail management, SMTP/Telegram/WeCom forwarding, failed-operation retry queue, WebDAV backup and local restore, in-app scheduling with unified task history, desktop project account pools, and Windows desktop bundling.
 
 See [`docs/requirements-milestones.md`](docs/requirements-milestones.md) for the full requirement record, completed scope, unfinished scope, and milestone plan.
 
@@ -61,7 +61,7 @@ Sensitive fields are encrypted with a key derived from the local app password.
 
 Graph accounts need a Microsoft client ID and OAuth callback URL. Generate the auth URL in the account authorization panel, paste the callback URL or code back into the app, then refresh the account.
 
-IMAP accounts need host, port, and password fields. The first IMAP implementation supports TLS password login and caches recent messages in SQLite. IMAP attachment metadata is parsed from MIME messages; direct IMAP attachment extraction is still pending.
+IMAP accounts need host, port, and password fields. The IMAP implementation supports TLS password login, caches recent messages in SQLite, stores raw RFC822 MIME for synced messages, and downloads attachments by extracting them from the local cached MIME.
 
 The Mailbox view supports cached-message search, read/unread filtering, attachment filtering, pagination, single-message actions, and batch read/unread/delete actions. Graph and IMAP message actions update the local SQLite cache and attempt remote synchronization. Failed remote mark/delete attempts are queued for manual or scheduled retry.
 

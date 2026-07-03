@@ -379,7 +379,8 @@ function App() {
                 const result = await api.downloadAttachment({
                   account_id: message.account_id,
                   message_id: message.provider_message_id,
-                  attachment_id: attachmentId
+                  attachment_id: attachmentId,
+                  folder: message.folder
                 });
                 setNotice(`Downloaded ${result.file_name}`);
               })

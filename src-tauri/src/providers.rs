@@ -156,6 +156,26 @@ pub fn download_graph_attachment(
     })
 }
 
+pub fn download_imap_attachment_from_raw(raw_mime: &[u8], attachment_id: &str) -> AppResult<DownloadedAttachment> {
+    let requested_id = attachment_id.trim();
+    if requested_id.is_empty() {
+        return Err(AppError::InvalidInput("attachment id is required".to_string()));
+    }
+    let parsed = mailparse::parse_mail(raw_mime)
+        .map_err(|err| AppError::InvalidInput(format!("cached IMAP MIME could not be parsed: {err}")))?;
+    let mut attachments = Vec::new();
+    collect_downloadable_parts(&parsed, &mut attachments);
+    attachments
+        .into_iter()
+        .find(|attachment| attachment.id == requested_id || attachment.name == requested_id)
+        .map(|attachment| DownloadedAttachment {
+            name: attachment.name,
+            content_type: attachment.content_type,
+            bytes: attachment.bytes,
+        })
+        .ok_or_else(|| AppError::InvalidInput("attachment was not found in cached IMAP MIME".to_string()))
+}
+
 pub fn mark_graph_message_read(account: &AccountCredentials, message_id: &str, is_read: bool) -> AppResult<()> {
     let token = refresh_graph_access_token(account)?;
     let client = http_client()?;
@@ -901,6 +921,7 @@ fn parse_imap_message(folder: &str, uid: u32, body: &[u8]) -> ProviderMessage {
         body: Some(body_text),
         body_type,
         attachments,
+        raw_mime: Some(body.to_vec()),
     }
 }
 
@@ -923,12 +944,8 @@ fn collect_parts(
     attachments: &mut Vec<AttachmentInfo>,
 ) {
     let disposition = mail.get_content_disposition();
-    if disposition.disposition == mailparse::DispositionType::Attachment {
-        let name = disposition
-            .params
-            .get("filename")
-            .cloned()
-            .unwrap_or_else(|| "attachment".to_string());
+    if is_downloadable_part(mail, &disposition) {
+        let name = attachment_part_name(mail, &disposition);
         attachments.push(AttachmentInfo {
             id: name.clone(),
             name,
@@ -948,6 +965,48 @@ fn collect_parts(
     for part in &mail.subparts {
         collect_parts(part, text_body, html_body, attachments);
     }
+}
+
+struct RawAttachment {
+    id: String,
+    name: String,
+    content_type: String,
+    bytes: Vec<u8>,
+}
+
+fn collect_downloadable_parts(mail: &mailparse::ParsedMail<'_>, attachments: &mut Vec<RawAttachment>) {
+    let disposition = mail.get_content_disposition();
+    if is_downloadable_part(mail, &disposition) {
+        let name = attachment_part_name(mail, &disposition);
+        let bytes = mail.get_body_raw().unwrap_or_default();
+        attachments.push(RawAttachment {
+            id: name.clone(),
+            name,
+            content_type: mail.ctype.mimetype.clone(),
+            bytes,
+        });
+        return;
+    }
+    for part in &mail.subparts {
+        collect_downloadable_parts(part, attachments);
+    }
+}
+
+fn is_downloadable_part(mail: &mailparse::ParsedMail<'_>, disposition: &mailparse::ParsedContentDisposition) -> bool {
+    disposition.disposition == mailparse::DispositionType::Attachment
+        || disposition.params.contains_key("filename")
+        || mail.ctype.params.contains_key("name")
+}
+
+fn attachment_part_name(mail: &mailparse::ParsedMail<'_>, disposition: &mailparse::ParsedContentDisposition) -> String {
+    disposition
+        .params
+        .get("filename")
+        .or_else(|| mail.ctype.params.get("name"))
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("attachment")
+        .to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -1030,6 +1089,7 @@ impl GraphMessage {
             body: body_content,
             body_type,
             attachments: Vec::new(),
+            raw_mime: None,
         }
     }
 }

@@ -714,6 +714,14 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       }).length;
       return mockExport("accounts-export.csv", count) as T;
     }
+    case "export_account_secrets": {
+      const input = args?.input as { account_ids: number[]; password: string; confirm: string };
+      if (!input.password) throw new Error("local password is required");
+      if (input.confirm !== "EXPORT ACCOUNT SECRETS") throw new Error("type EXPORT ACCOUNT SECRETS to confirm secret export");
+      const selected = new Set(input.account_ids);
+      const count = mockAccounts.filter((account) => selected.has(account.id)).length;
+      return mockExport("account-secrets.csv", count) as T;
+    }
     case "export_project_accounts": {
       const input = args?.input as { project_id: number };
       const count = mockProjectAccounts.filter((account) => account.project_id === input.project_id).length;
@@ -1307,6 +1315,8 @@ export const api = {
   revokeMailShare: (shareId: number) => call<MailShareRecord>("revoke_mail_share", { input: { share_id: shareId } }),
   exportAccounts: (groupId?: number | null, accountIds?: number[]) =>
     call<ExportResult>("export_accounts", { input: { group_id: groupId ?? null, account_ids: accountIds } }),
+  exportAccountSecrets: (accountIds: number[], password: string, confirm: string) =>
+    call<ExportResult>("export_account_secrets", { input: { account_ids: accountIds, password, confirm } }),
   exportProjectAccounts: (projectId: number) =>
     call<ExportResult>("export_project_accounts", { input: { project_id: projectId } }),
   getSettings: () => call<Settings>("get_settings"),

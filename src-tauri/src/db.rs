@@ -1827,6 +1827,123 @@ impl Database {
         })
     }
 
+    pub fn export_account_secrets(&self, input: ExportAccountSecretsInput) -> AppResult<ExportResult> {
+        self.require_unlocked()?;
+        if input.confirm.trim() != "EXPORT ACCOUNT SECRETS" {
+            return Err(AppError::InvalidInput(
+                "type EXPORT ACCOUNT SECRETS to confirm secret export".to_string(),
+            ));
+        }
+        let mut seen = HashSet::new();
+        let account_ids = input
+            .account_ids
+            .into_iter()
+            .filter(|id| *id > 0 && seen.insert(*id))
+            .collect::<Vec<_>>();
+        if account_ids.is_empty() {
+            return Err(AppError::InvalidInput("select at least one account".to_string()));
+        }
+        let hash = self
+            .get_config("password_hash")?
+            .ok_or_else(|| AppError::InvalidInput("app is not initialized".to_string()))?;
+        if !crypto::verify_password(&input.password, &hash)? {
+            return Err(AppError::Unauthorized);
+        }
+        let salt = self
+            .get_config("crypto_salt")?
+            .ok_or_else(|| AppError::Crypto("missing crypto salt".to_string()))?;
+        let key = crypto::derive_key(&input.password, &salt);
+        let placeholders = repeat_placeholders(account_ids.len());
+        let sql = format!(
+            "
+            SELECT id, email, provider, account_type, remark,
+                   COALESCE(imap_host, ''), imap_port,
+                   password_enc, client_id_enc, refresh_token_enc, imap_password_enc
+            FROM accounts
+            WHERE id IN ({placeholders})
+            ORDER BY email ASC
+            "
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(account_ids.iter()), |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+            ))
+        })?;
+        let rows = collect_rows(rows)?;
+        if rows.is_empty() {
+            return Err(AppError::InvalidInput("no matching accounts found".to_string()));
+        }
+        let exported_count = rows.len();
+
+        let mut csv = String::new();
+        csv.push_str(&csv_row(&[
+            "id",
+            "email",
+            "provider",
+            "account_type",
+            "remark",
+            "imap_host",
+            "imap_port",
+            "password",
+            "client_id",
+            "refresh_token",
+            "imap_password",
+        ]));
+        for (
+            id,
+            email,
+            provider,
+            account_type,
+            remark,
+            imap_host,
+            imap_port,
+            password_enc,
+            client_id_enc,
+            refresh_token_enc,
+            imap_password_enc,
+        ) in rows
+        {
+            csv.push_str(&csv_row(&[
+                id.to_string(),
+                email,
+                provider,
+                account_type,
+                remark,
+                imap_host,
+                imap_port.to_string(),
+                crypto::decrypt_text(&password_enc, &key)?,
+                crypto::decrypt_text(&client_id_enc, &key)?,
+                crypto::decrypt_text(&refresh_token_enc, &key)?,
+                crypto::decrypt_text(&imap_password_enc, &key)?,
+            ]));
+        }
+        let file_name = timestamped_file_name("account-secrets", "csv");
+        let (path, size) = self.write_export_file("account-secrets", &file_name, csv.as_bytes())?;
+        self.audit(
+            "account_secrets.exported",
+            "account",
+            None,
+            &format!("{} account(s)", exported_count),
+        )?;
+        Ok(ExportResult {
+            path,
+            file_name,
+            size,
+            item_count: exported_count,
+        })
+    }
+
     pub fn export_project_accounts(&self, input: ExportProjectAccountsInput) -> AppResult<ExportResult> {
         self.require_unlocked()?;
         let project = self.get_project(input.project_id)?;
@@ -6314,6 +6431,13 @@ fn push_like_values(values: &mut Vec<SqlValue>, value: &str, count: usize) {
     }
 }
 
+fn repeat_placeholders(count: usize) -> String {
+    std::iter::repeat("?")
+        .take(count)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn mail_sort_clause(sort_by: Option<&str>, sort_order: Option<&str>) -> AppResult<String> {
     let order = match sort_order.unwrap_or("desc").trim().to_ascii_lowercase().as_str() {
         "" | "desc" => "DESC",
@@ -6845,7 +6969,7 @@ mod project_tests {
         AccountBatchInput, AttachmentInfo, AutomationRunQuery, ClaimProjectAccountInput,
         ClearAutomationRunsInput, ClearLocalDataInput, CreateGroupInput, CreateMailShareInput,
         CreateProjectInput, DeleteMailMessagesInput,
-        DownloadAllAttachmentsInput, DownloadAttachmentInput, ExportAccountsInput, ExportMailMessagesInput,
+        DownloadAllAttachmentsInput, DownloadAttachmentInput, ExportAccountSecretsInput, ExportAccountsInput, ExportMailMessagesInput,
         ImportTempEmailsInput, MailMessageQuery, MarkMailMessagesInput, ProjectAccountActionInput, RefreshInput,
         RestoreBackupInput, RevealAccountSecretsInput, RevokeMailShareInput, RetryQueueItemInput, RetryQueueQuery,
         RetryQueueRunInput, UpdateAccountInput, UpdateGroupInput, UpdateGroupProxyInput,
@@ -7275,10 +7399,12 @@ mod project_tests {
 
     #[test]
     fn account_secrets_require_local_password() {
+        let root = std::env::temp_dir().join(format!("outlook-email-secret-export-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp dir");
         let conn = Connection::open_in_memory().expect("open memory db");
         let mut db = Database {
             conn,
-            db_path: PathBuf::from("memory.sqlite"),
+            db_path: root.join("test.sqlite"),
             crypto_key: None,
         };
         db.initialize_schema().expect("schema");
@@ -7311,6 +7437,34 @@ mod project_tests {
             password: "wrong-password".to_string(),
         });
         assert!(matches!(denied, Err(AppError::Unauthorized)));
+
+        let bad_confirm = db.export_account_secrets(ExportAccountSecretsInput {
+            account_ids: vec![1],
+            password: "local-password".to_string(),
+            confirm: "EXPORT".to_string(),
+        });
+        assert!(matches!(bad_confirm, Err(AppError::InvalidInput(_))));
+
+        let bad_password = db.export_account_secrets(ExportAccountSecretsInput {
+            account_ids: vec![1],
+            password: "wrong-password".to_string(),
+            confirm: "EXPORT ACCOUNT SECRETS".to_string(),
+        });
+        assert!(matches!(bad_password, Err(AppError::Unauthorized)));
+
+        let exported = db
+            .export_account_secrets(ExportAccountSecretsInput {
+                account_ids: vec![1],
+                password: "local-password".to_string(),
+                confirm: "EXPORT ACCOUNT SECRETS".to_string(),
+            })
+            .expect("export account secrets");
+        assert_eq!(exported.item_count, 1);
+        let csv = std::fs::read_to_string(&exported.path).expect("read secret export");
+        assert!(csv.contains("secret@example.com"));
+        assert!(csv.contains("account-password"));
+        assert!(csv.contains("client-id-value"));
+        assert!(csv.contains("refresh-token-value"));
     }
 
     #[test]

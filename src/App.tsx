@@ -731,6 +731,12 @@ function App() {
                 setNotice(exportNotice(result));
               })
             }
+            onExportAccountSecrets={(accountIds, password, confirm) =>
+              runAction(async () => {
+                const result = await api.exportAccountSecrets(accountIds, password, confirm);
+                setNotice(exportNotice(result));
+              })
+            }
             onUpdateAccount={(input) =>
               runAction(async () => {
                 await api.updateAccount(input);
@@ -1617,6 +1623,7 @@ function AccountsView({
   onDeleteAccount,
   onBatchAccounts,
   onExportAccounts,
+  onExportAccountSecrets,
   onUpdateAccount,
   onRevealAccountSecrets,
   onGenerateOAuthUrl,
@@ -1635,6 +1642,7 @@ function AccountsView({
   onDeleteAccount: (accountId: number) => void;
   onBatchAccounts: (input: Parameters<typeof api.batchAccounts>[0]) => void;
   onExportAccounts: (groupId?: number | null, accountIds?: number[]) => void;
+  onExportAccountSecrets: (accountIds: number[], password: string, confirm: string) => void;
   onUpdateAccount: (input: Parameters<typeof api.updateAccount>[0]) => void;
   onRevealAccountSecrets: (input: Parameters<typeof api.revealAccountSecrets>[0]) => Promise<Awaited<ReturnType<typeof api.revealAccountSecrets>>>;
   onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => Promise<string>;
@@ -1661,6 +1669,8 @@ function AccountsView({
   const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
   const [batchGroupId, setBatchGroupId] = useState<number | "">(groups[0]?.id ?? "");
   const [batchTagId, setBatchTagId] = useState<number | "">(tags[0]?.id ?? "");
+  const [secretExportPassword, setSecretExportPassword] = useState("");
+  const [secretExportConfirm, setSecretExportConfirm] = useState("");
   const [oauthUrl, setOauthUrl] = useState("");
   const [oauthCallback, setOauthCallback] = useState("");
   const visibleAccounts = useMemo(() => {
@@ -2072,6 +2082,33 @@ function AccountsView({
               <Download size={14} />
               导出
             </button>
+            <div className="secretExportInputs">
+              <input
+                className="input"
+                type="password"
+                value={secretExportPassword}
+                placeholder="本地密码"
+                onChange={(event) => setSecretExportPassword(event.target.value)}
+              />
+              <input
+                className="input"
+                value={secretExportConfirm}
+                placeholder="EXPORT ACCOUNT SECRETS"
+                onChange={(event) => setSecretExportConfirm(event.target.value)}
+              />
+              <button
+                className="button compact danger"
+                disabled={busy || !secretExportPassword || secretExportConfirm !== "EXPORT ACCOUNT SECRETS"}
+                onClick={() => {
+                  onExportAccountSecrets(selectedAccountIds, secretExportPassword, secretExportConfirm);
+                  setSecretExportPassword("");
+                  setSecretExportConfirm("");
+                }}
+              >
+                <KeyRound size={14} />
+                密钥
+              </button>
+            </div>
             <button
               className="button compact danger"
               disabled={busy}

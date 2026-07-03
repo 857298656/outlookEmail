@@ -858,6 +858,13 @@ pub struct ExportAccountsInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct ExportAccountSecretsInput {
+    pub account_ids: Vec<i64>,
+    pub password: String,
+    pub confirm: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ExportProjectAccountsInput {
     pub project_id: i64,
 }

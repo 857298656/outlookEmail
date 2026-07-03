@@ -27,6 +27,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Cached message field-token search, filters, multi-field sorting, pagination, batch read/unread/delete actions, and remote failure surfacing
 - Sandboxed HTML body rendering for cached mailbox and temp-mail messages
 - Local HTML/CSV exports for cached mail, account inventory, and project account pools
+- Confirmed CSV export for selected account secrets after local password verification
 - Local mail share records with generated HTML files, expiration, and revocation
 - GPTMail, DuckMail, and Cloudflare temp-mail management
 - SMTP, Telegram, and WeCom forwarding for cached messages

@@ -60,6 +60,7 @@ pub fn run() {
             list_mail_share_records,
             revoke_mail_share,
             export_accounts,
+            export_account_secrets,
             export_project_accounts,
             list_projects,
             create_project,

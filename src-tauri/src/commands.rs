@@ -222,6 +222,12 @@ pub fn export_accounts(state: State<'_, AppState>, input: Option<ExportAccountsI
 }
 
 #[tauri::command]
+pub fn export_account_secrets(state: State<'_, AppState>, input: ExportAccountSecretsInput) -> AppResult<ExportResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.export_account_secrets(input)
+}
+
+#[tauri::command]
 pub fn export_project_accounts(state: State<'_, AppState>, input: ExportProjectAccountsInput) -> AppResult<ExportResult> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.export_project_accounts(input)

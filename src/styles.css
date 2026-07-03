@@ -3,7 +3,7 @@
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
-  background: #fff;
+  background: #fafafa;
   color: #17202a;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -18,7 +18,7 @@ body {
   min-width: 1100px;
   min-height: 720px;
   overflow: hidden;
-  background: #fff;
+  background: #fafafa;
 }
 
 button,
@@ -41,7 +41,7 @@ button:disabled {
   display: grid;
   grid-template-columns: 72px 1fr;
   height: 100vh;
-  background: #fff;
+  background: #fafafa;
 }
 
 .rail {
@@ -50,7 +50,7 @@ button:disabled {
   align-items: center;
   gap: 12px;
   padding: 18px 12px;
-  background: #1d2733;
+  background: #111827;
   color: #f8fafc;
 }
 
@@ -61,7 +61,7 @@ button:disabled {
   height: 44px;
   border-radius: 8px;
   background: #f8fafc;
-  color: #1d2733;
+  color: #111827;
   font-weight: 800;
 }
 
@@ -189,7 +189,7 @@ button:disabled {
 .accountRow.active,
 .messageRow:hover,
 .messageRow.active {
-  background: #edf5ff;
+  background: #f3f4f6;
 }
 
 .dot {
@@ -214,8 +214,8 @@ button:disabled {
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  background: #e0f2fe;
-  color: #075985;
+  background: #f3f4f6;
+  color: #111827;
   font-size: 12px;
   font-weight: 700;
 }
@@ -362,7 +362,7 @@ button:disabled {
   height: 7px;
   margin-right: 7px;
   border-radius: 999px;
-  background: #2563eb;
+  background: #111827;
   vertical-align: 1px;
 }
 
@@ -583,8 +583,8 @@ button:disabled {
 
 .tempEmailRow:hover,
 .tempEmailRow.active {
-  border-color: #93c5fd;
-  background: #eff6ff;
+  border-color: #9ca3af;
+  background: #f3f4f6;
 }
 
 .tempEmailRow strong,
@@ -664,8 +664,8 @@ button:disabled {
 
 .projectRow:hover,
 .projectRow.active {
-  border-color: #93c5fd;
-  background: #eff6ff;
+  border-color: #9ca3af;
+  background: #f3f4f6;
 }
 
 .projectRow strong,
@@ -807,8 +807,8 @@ button:disabled {
 }
 
 .status-toClaim {
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: #f3f4f6;
+  color: #111827;
 }
 
 .status-claimed {
@@ -902,14 +902,25 @@ button:disabled {
 }
 
 .button.primary {
-  background: #2563eb;
+  background: #111827;
   color: #fff;
+}
+
+.button.primary:hover:not(:disabled) {
+  background: #030712;
 }
 
 .button.secondary {
   border-color: #cfd8e3;
   background: #fff;
   color: #1f2937;
+}
+
+.button.secondary:hover:not(:disabled),
+.button.ghost:hover:not(:disabled) {
+  border-color: #9ca3af;
+  background: #f3f4f6;
+  color: #111827;
 }
 
 .button.compact {
@@ -998,7 +1009,7 @@ button:disabled {
 }
 
 .tableRow.active {
-  background: #edf5ff;
+  background: #f3f4f6;
 }
 
 .storageLine {
@@ -1140,7 +1151,7 @@ code {
   place-items: center;
   width: 100vw;
   height: 100vh;
-  background: #fff;
+  background: #fafafa;
 }
 
 .lockPanel {
@@ -1158,8 +1169,16 @@ code {
   width: 56px;
   height: 56px;
   border-radius: 8px;
-  background: #1d2733;
+  background: #111827;
   color: #fff;
+}
+
+.lockPanel .button {
+  margin-top: 14px;
+}
+
+.lockPanel .formError + .button {
+  margin-top: 8px;
 }
 
 .lockPanel h1 {

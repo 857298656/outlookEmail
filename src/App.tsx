@@ -57,7 +57,7 @@ type MailFilters = {
   sortOrder: "asc" | "desc";
 };
 
-const colors = ["#2563eb", "#16a34a", "#dc2626", "#7c3aed", "#0f766e", "#b45309"];
+const colors = ["#111827", "#374151", "#4b5563", "#64748b", "#0f172a", "#52525b"];
 const mailPageSize = 100;
 
 function App() {

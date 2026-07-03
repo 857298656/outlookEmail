@@ -62,7 +62,7 @@ let mockGroups: Group[] = [
     id: 1,
     name: "Default",
     description: "Default mailbox group",
-    color: "#3b82f6",
+    color: "#111827",
     parent_id: null,
     level: 1,
     sort_order: 0,
@@ -70,9 +70,9 @@ let mockGroups: Group[] = [
   }
 ];
 let mockTags: Tag[] = [
-  { id: 1, name: "Core", color: "#2563eb" },
-  { id: 2, name: "Warmup", color: "#16a34a" },
-  { id: 3, name: "Issue", color: "#dc2626" }
+  { id: 1, name: "Core", color: "#111827" },
+  { id: 2, name: "Warmup", color: "#374151" },
+  { id: 3, name: "Issue", color: "#64748b" }
 ];
 let mockAccounts: Account[] = [];
 let mockMessages: MailMessage[] = [];

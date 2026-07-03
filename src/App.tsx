@@ -2386,6 +2386,7 @@ function formatRetryTask(item: RetryQueueItem) {
   if (item.task_type === "mail_mark") return item.action === "mark_read" ? "Mark read" : "Mark unread";
   if (item.task_type === "mail_delete") return "Delete mail";
   if (item.task_type === "forward_message") return "Forward mail";
+  if (item.task_type === "temp_refresh") return "Refresh temp mail";
   return item.task_type;
 }
 

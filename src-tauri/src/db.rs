@@ -89,6 +89,12 @@ struct ForwardRetryPayload {
     channel: String,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+struct TempRefreshRetryPayload {
+    email: String,
+    provider: String,
+}
+
 impl Database {
     pub fn open() -> AppResult<Self> {
         let db_path = resolve_db_path();
@@ -1638,7 +1644,7 @@ impl Database {
         let status = normalize_retry_value(query.status.as_deref(), &["pending", "failed"], "status")?;
         let task_type = normalize_retry_value(
             query.task_type.as_deref(),
-            &["mail_mark", "mail_delete", "forward_message"],
+            &["mail_mark", "mail_delete", "forward_message", "temp_refresh"],
             "task_type",
         )?;
         let limit = query.limit.unwrap_or(100).clamp(1, 500);
@@ -1910,47 +1916,12 @@ impl Database {
     pub fn refresh_temp_email_messages(&self, email: String) -> AppResult<JobResult> {
         self.require_unlocked()?;
         let credential = self.temp_email_credential(&email)?;
-        let settings = self.get_settings()?;
-        let channel = if credential.provider == "cloudflare" {
-            Some(self.cloudflare_channel_credential(credential.channel_id)?)
-        } else {
-            None
-        };
-        match providers::fetch_temp_messages(&settings, &credential, channel.as_ref(), 50) {
-            Ok(messages) => {
-                let saved = self.upsert_temp_messages(&credential.email, &messages)?;
-                self.conn.execute(
-                    "
-                    UPDATE temp_emails
-                    SET last_refresh_at = CURRENT_TIMESTAMP,
-                        last_refresh_status = 'success',
-                        last_refresh_error = NULL,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                    ",
-                    [credential.id],
-                )?;
-                self.audit("temp_email.refreshed", "temp_email", Some(credential.id), &credential.email)?;
-                Ok(JobResult {
-                    success: true,
-                    message: format!("Refreshed {} temp message(s)", messages.len()),
-                    refreshed: saved,
-                    failed: 0,
-                })
-            }
+        match self.refresh_temp_email_credential(&credential) {
+            Ok(result) => Ok(result),
             Err(err) => {
                 let message = err.to_string();
-                self.conn.execute(
-                    "
-                    UPDATE temp_emails
-                    SET last_refresh_at = CURRENT_TIMESTAMP,
-                        last_refresh_status = 'failed',
-                        last_refresh_error = ?,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                    ",
-                    params![message, credential.id],
-                )?;
+                self.mark_temp_email_refresh_failed(&credential, &message)?;
+                self.enqueue_temp_refresh_retry(&credential, &message)?;
                 Err(err)
             }
         }
@@ -3102,6 +3073,10 @@ impl Database {
                 let payload = parse_retry_payload::<ForwardRetryPayload>(&item.payload_json)?;
                 self.retry_forward_message(&payload)
             }
+            "temp_refresh" => {
+                let payload = parse_retry_payload::<TempRefreshRetryPayload>(&item.payload_json)?;
+                self.retry_temp_refresh(&payload)
+            }
             _ => Err(AppError::InvalidInput(format!(
                 "unsupported retry task type: {}",
                 item.task_type
@@ -3191,6 +3166,22 @@ impl Database {
                 "account_id": account_id,
                 "message_id": message.message_id.as_str(),
                 "channel": channel
+            }),
+            error,
+        )
+    }
+
+    fn enqueue_temp_refresh_retry(&self, credential: &TempEmailCredential, error: &str) -> AppResult<()> {
+        self.enqueue_retry_item(
+            "temp_refresh",
+            None,
+            "",
+            &credential.email,
+            &credential.provider,
+            "refresh",
+            serde_json::json!({
+                "email": credential.email.as_str(),
+                "provider": credential.provider.as_str()
             }),
             error,
         )
@@ -3695,6 +3686,82 @@ impl Database {
             &payload.channel,
             "success",
             None,
+        )?;
+        Ok(())
+    }
+
+    fn retry_temp_refresh(&self, payload: &TempRefreshRetryPayload) -> AppResult<()> {
+        let credential = self.temp_email_credential(&payload.email)?;
+        if credential.provider != payload.provider {
+            return Err(AppError::InvalidInput(format!(
+                "temp email provider changed from {} to {}",
+                payload.provider, credential.provider
+            )));
+        }
+        match self.refresh_temp_email_credential(&credential) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                let message = err.to_string();
+                self.mark_temp_email_refresh_failed(&credential, &message)?;
+                Err(err)
+            }
+        }
+    }
+
+    fn refresh_temp_email_credential(&self, credential: &TempEmailCredential) -> AppResult<JobResult> {
+        let settings = self.get_settings()?;
+        let channel = if credential.provider == "cloudflare" {
+            Some(self.cloudflare_channel_credential(credential.channel_id)?)
+        } else {
+            None
+        };
+        let messages = providers::fetch_temp_messages(&settings, credential, channel.as_ref(), 50)?;
+        let saved = self.upsert_temp_messages(&credential.email, &messages)?;
+        self.conn.execute(
+            "
+            UPDATE temp_emails
+            SET last_refresh_at = CURRENT_TIMESTAMP,
+                last_refresh_status = 'success',
+                last_refresh_error = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            ",
+            [credential.id],
+        )?;
+        self.clear_temp_refresh_retry(&credential.email)?;
+        self.audit("temp_email.refreshed", "temp_email", Some(credential.id), &credential.email)?;
+        Ok(JobResult {
+            success: true,
+            message: format!("Refreshed {} temp message(s)", messages.len()),
+            refreshed: saved,
+            failed: 0,
+        })
+    }
+
+    fn mark_temp_email_refresh_failed(&self, credential: &TempEmailCredential, error: &str) -> AppResult<()> {
+        self.conn.execute(
+            "
+            UPDATE temp_emails
+            SET last_refresh_at = CURRENT_TIMESTAMP,
+                last_refresh_status = 'failed',
+                last_refresh_error = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            ",
+            params![error, credential.id],
+        )?;
+        Ok(())
+    }
+
+    fn clear_temp_refresh_retry(&self, email: &str) -> AppResult<()> {
+        self.conn.execute(
+            "
+            DELETE FROM retry_queue
+            WHERE task_type = 'temp_refresh'
+              AND message_id = ?
+              AND action = 'refresh'
+            ",
+            [email],
         )?;
         Ok(())
     }
@@ -4595,6 +4662,54 @@ mod project_tests {
             .list_retry_queue(RetryQueueQuery::default())
             .expect("empty queue")
             .is_empty());
+    }
+
+    #[test]
+    fn queues_failed_temp_mail_refresh() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "
+                INSERT INTO temp_emails
+                (email, provider, status, channel_id, provider_token_enc, provider_account_id, provider_password_enc)
+                VALUES ('temp@example.com', 'cloudflare', 'active', NULL, '', '', '')
+                ",
+                [],
+            )
+            .expect("insert temp email");
+
+        let result = db.refresh_temp_email_messages("temp@example.com".to_string());
+        assert!(result.is_err());
+
+        let temp_email = db.list_temp_emails().expect("temp emails").remove(0);
+        assert_eq!(temp_email.last_refresh_status, "failed");
+        assert!(temp_email.last_refresh_error.is_some());
+
+        let queued = db
+            .list_retry_queue(RetryQueueQuery::default())
+            .expect("retry queue");
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].task_type, "temp_refresh");
+        assert_eq!(queued[0].message_id, "temp@example.com");
+        assert_eq!(queued[0].channel, "cloudflare");
+
+        let retried = db
+            .run_retry_queue(Some(RetryQueueRunInput {
+                retry_id: Some(queued[0].id),
+                limit: None,
+            }))
+            .expect("retry temp refresh");
+        assert_eq!(retried.failed, 1);
+        let queued = db
+            .list_retry_queue(RetryQueueQuery::default())
+            .expect("retry queue after retry");
+        assert_eq!(queued[0].attempts, 1);
     }
 
     #[test]

@@ -21,6 +21,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Group and tag management with account tag assignment
 - Cached message workspace
 - Settings persistence
+- Local appearance themes with preset skins and an accent color
 - Microsoft Graph OAuth and mailbox refresh
 - Basic TLS IMAP mailbox refresh with cached-MIME attachment download
 - Cached message field-token search, filters, multi-field sorting, pagination, batch read/unread/delete actions, and remote failure surfacing

@@ -154,6 +154,8 @@ pub struct Settings {
     pub forward_telegram_bot_token: String,
     pub forward_telegram_chat_id: String,
     pub forward_wecom_webhook: String,
+    pub appearance_theme: String,
+    pub accent_color: String,
 }
 
 impl Default for Settings {
@@ -184,6 +186,8 @@ impl Default for Settings {
             forward_telegram_bot_token: String::new(),
             forward_telegram_chat_id: String::new(),
             forward_wecom_webhook: String::new(),
+            appearance_theme: "default".to_string(),
+            accent_color: "#2563eb".to_string(),
         }
     }
 }

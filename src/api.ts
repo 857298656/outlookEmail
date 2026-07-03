@@ -60,7 +60,9 @@ const defaultSettings: Settings = {
   forward_smtp_to: "",
   forward_telegram_bot_token: "",
   forward_telegram_chat_id: "",
-  forward_wecom_webhook: ""
+  forward_wecom_webhook: "",
+  appearance_theme: "default",
+  accent_color: "#2563eb"
 };
 
 let mockInitialized = false;

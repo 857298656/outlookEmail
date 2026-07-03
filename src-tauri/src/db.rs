@@ -1347,6 +1347,16 @@ impl Database {
         settings.forward_telegram_bot_token = self.get_config_secret("forward_telegram_bot_token")?;
         settings.forward_telegram_chat_id = self.get_config("forward_telegram_chat_id")?.unwrap_or_default();
         settings.forward_wecom_webhook = self.get_config_secret("forward_wecom_webhook")?;
+        settings.appearance_theme = normalize_theme_setting(
+            self.get_config("appearance_theme")?
+                .as_deref()
+                .unwrap_or(&settings.appearance_theme),
+        );
+        settings.accent_color = normalize_accent_color(
+            self.get_config("accent_color")?
+                .as_deref()
+                .unwrap_or(&settings.accent_color),
+        );
         Ok(settings)
     }
 
@@ -1380,6 +1390,8 @@ impl Database {
         self.set_config_secret("forward_telegram_bot_token", &settings.forward_telegram_bot_token)?;
         self.set_config("forward_telegram_chat_id", &settings.forward_telegram_chat_id)?;
         self.set_config_secret("forward_wecom_webhook", &settings.forward_wecom_webhook)?;
+        self.set_config("appearance_theme", &normalize_theme_setting(&settings.appearance_theme))?;
+        self.set_config("accent_color", &normalize_accent_color(&settings.accent_color))?;
         self.audit("settings.updated", "settings", None, "")?;
         self.get_settings()
     }
@@ -5601,6 +5613,25 @@ fn normalize_retry_value(value: Option<&str>, allowed: &[&str], field: &str) -> 
     )))
 }
 
+fn normalize_theme_setting(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "default" | "graphite" | "ocean" | "forest" | "rose" => value.trim().to_ascii_lowercase(),
+        _ => "default".to_string(),
+    }
+}
+
+fn normalize_accent_color(value: &str) -> String {
+    let trimmed = value.trim();
+    let Some(hex) = trimmed.strip_prefix('#') else {
+        return "#2563eb".to_string();
+    };
+    if hex.len() == 6 && hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        format!("#{hex}")
+    } else {
+        "#2563eb".to_string()
+    }
+}
+
 fn automation_job_summary(runs: &[AutomationRun], job_type: &str) -> AutomationJobSummary {
     let matching = runs
         .iter()
@@ -7938,6 +7969,37 @@ mod project_tests {
             .expect("clear failed");
         assert_eq!(cleared.refreshed, 1);
         assert_eq!(db.list_automation_runs(Some(10)).expect("remaining").len(), 1);
+    }
+
+    #[test]
+    fn settings_persist_theme_values_with_fallbacks() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+
+        let saved = db
+            .update_settings(Settings {
+                appearance_theme: "forest".to_string(),
+                accent_color: "#0f766e".to_string(),
+                ..Settings::default()
+            })
+            .expect("save theme");
+        assert_eq!(saved.appearance_theme, "forest");
+        assert_eq!(saved.accent_color, "#0f766e");
+
+        let saved = db
+            .update_settings(Settings {
+                appearance_theme: "unexpected".to_string(),
+                accent_color: "red".to_string(),
+                ..Settings::default()
+            })
+            .expect("save fallback theme");
+        assert_eq!(saved.appearance_theme, "default");
+        assert_eq!(saved.accent_color, "#2563eb");
     }
 
     #[test]

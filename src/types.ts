@@ -144,6 +144,8 @@ export type Settings = {
   forward_telegram_bot_token: string;
   forward_telegram_chat_id: string;
   forward_wecom_webhook: string;
+  appearance_theme: string;
+  accent_color: string;
 };
 
 export type ImportAccountsResult = {

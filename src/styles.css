@@ -5,6 +5,13 @@
     sans-serif;
   background: #fafafa;
   color: #17202a;
+  --skin-rail: #111827;
+  --skin-rail-text: #f8fafc;
+  --skin-surface: #ffffff;
+  --skin-subtle: #f8fafc;
+  --skin-accent: #2563eb;
+  --skin-accent-soft: #2563eb18;
+  --skin-accent-border: #2563eb40;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -18,7 +25,7 @@ body {
   min-width: 1100px;
   min-height: 720px;
   overflow: hidden;
-  background: #fafafa;
+  background: var(--skin-subtle);
 }
 
 button,
@@ -41,7 +48,7 @@ button:disabled {
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
   height: 100vh;
-  background: #fafafa;
+  background: var(--skin-subtle);
   transition: grid-template-columns 160ms ease;
 }
 
@@ -57,8 +64,8 @@ button:disabled {
   overflow: visible;
   padding: 18px 12px;
   position: relative;
-  background: #111827;
-  color: #f8fafc;
+  background: var(--skin-rail);
+  color: var(--skin-rail-text);
 }
 
 .railHeader {
@@ -80,7 +87,7 @@ button:disabled {
 .brandName {
   min-width: 0;
   overflow: hidden;
-  color: #f8fafc;
+  color: var(--skin-rail-text);
   font-size: 16px;
   font-weight: 700;
   line-height: 1.2;
@@ -120,7 +127,7 @@ button:disabled {
 
 .railHeaderToggle:hover {
   background: rgba(255, 255, 255, 0.14);
-  color: #f8fafc;
+  color: var(--skin-rail-text);
 }
 
 .railButton,
@@ -211,8 +218,8 @@ button:disabled {
   width: 36px;
   height: 36px;
   border-radius: 999px;
-  background: #e5e7eb;
-  color: #111827;
+  background: var(--skin-accent-soft);
+  color: var(--skin-accent);
   font-weight: 800;
 }
 
@@ -312,7 +319,7 @@ button:disabled {
   gap: 20px;
   padding: 16px 24px;
   border-bottom: 1px solid #d7dde4;
-  background: #fff;
+  background: var(--skin-surface);
 }
 
 .topBar h1 {
@@ -346,7 +353,7 @@ button:disabled {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  background: #fff;
+  background: var(--skin-surface);
 }
 
 .paneHeader,
@@ -364,7 +371,7 @@ button:disabled {
   height: 52px;
   padding: 0 16px;
   border-bottom: 1px solid #e5e7eb;
-  background: #fff;
+  background: var(--skin-surface);
 }
 
 .paneHeader h2,
@@ -398,7 +405,7 @@ button:disabled {
 .accountRow.active,
 .messageRow:hover,
 .messageRow.active {
-  background: #f3f4f6;
+  background: var(--skin-accent-soft);
 }
 
 .dot {
@@ -423,8 +430,8 @@ button:disabled {
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  background: #f3f4f6;
-  color: #111827;
+  background: var(--skin-accent-soft);
+  color: var(--skin-accent);
   font-size: 12px;
   font-weight: 700;
 }
@@ -481,7 +488,7 @@ button:disabled {
   gap: 8px;
   padding: 12px 14px;
   border-bottom: 1px solid #edf0f3;
-  background: #fbfdff;
+  background: var(--skin-subtle);
 }
 
 .messageSearch {
@@ -539,7 +546,7 @@ button:disabled {
   min-height: 46px;
   padding: 0 14px;
   border-bottom: 1px solid #edf0f3;
-  background: #f8fafc;
+  background: var(--skin-subtle);
   color: #475569;
   font-size: 12px;
 }
@@ -923,7 +930,7 @@ button:disabled {
   min-width: 0;
   border: 1px solid #dfe5ec;
   border-radius: 8px;
-  background: #fff;
+  background: var(--skin-surface);
   padding: 18px;
 }
 
@@ -1369,6 +1376,91 @@ button:disabled {
   margin-top: 12px;
 }
 
+.themePresetGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.themePreset {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  border: 1px solid #dfe5ec;
+  border-radius: 8px;
+  background: var(--skin-surface);
+  padding: 8px;
+  color: #17202a;
+  text-align: left;
+}
+
+.themePreset.active {
+  border-color: var(--skin-accent);
+  box-shadow: 0 0 0 2px var(--skin-accent-soft);
+}
+
+.themePreview {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 32px;
+  border-radius: 8px;
+}
+
+.themePreview i {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.72);
+}
+
+.accentPicker {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.accentPicker label,
+.accentSwatches {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.accentPicker label {
+  justify-content: space-between;
+  color: #475569;
+  font-size: 13px;
+}
+
+.accentPicker input[type="color"] {
+  width: 48px;
+  height: 32px;
+  border: 1px solid #dfe5ec;
+  border-radius: 8px;
+  padding: 2px;
+  background: var(--skin-surface);
+}
+
+.accentSwatches {
+  flex-wrap: wrap;
+}
+
+.accentSwatch {
+  width: 28px;
+  height: 28px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px #cbd5e1;
+}
+
+.accentSwatch.active {
+  box-shadow: 0 0 0 2px var(--skin-accent);
+}
+
 .grow {
   flex: 1;
   min-width: 0;
@@ -1391,24 +1483,24 @@ button:disabled {
 }
 
 .button.primary {
-  background: #111827;
+  background: var(--skin-accent);
   color: #fff;
 }
 
 .button.primary:hover:not(:disabled) {
-  background: #030712;
+  filter: brightness(0.9);
 }
 
 .button.secondary {
   border-color: #cfd8e3;
-  background: #fff;
+  background: var(--skin-surface);
   color: #1f2937;
 }
 
 .button.secondary:hover:not(:disabled),
 .button.ghost:hover:not(:disabled) {
-  border-color: #9ca3af;
-  background: #f3f4f6;
+  border-color: var(--skin-accent-border);
+  background: var(--skin-accent-soft);
   color: #111827;
 }
 

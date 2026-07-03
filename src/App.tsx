@@ -29,7 +29,7 @@ import {
   XCircle
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { api } from "./api";
 import { buildSandboxedEmailHtml } from "./lib/emailHtml";
 import { parseAccountRows } from "./lib/importParser";
@@ -74,6 +74,36 @@ type MailFilters = {
 
 const colors = ["#111827", "#374151", "#4b5563", "#64748b", "#0f172a", "#52525b"];
 const mailPageSize = 100;
+const themePresets = [
+  { id: "default", label: "默认", rail: "#111827", railText: "#f8fafc", surface: "#ffffff", subtle: "#f8fafc" },
+  { id: "graphite", label: "石墨", rail: "#242833", railText: "#f8fafc", surface: "#ffffff", subtle: "#f6f7f9" },
+  { id: "ocean", label: "海蓝", rail: "#0f3b57", railText: "#f4fbff", surface: "#ffffff", subtle: "#f2f8fb" },
+  { id: "forest", label: "森林", rail: "#173b2f", railText: "#f4fff8", surface: "#ffffff", subtle: "#f3faf6" },
+  { id: "rose", label: "玫瑰", rail: "#4a1f32", railText: "#fff7fb", surface: "#ffffff", subtle: "#fff7fa" }
+];
+
+type SkinStyle = CSSProperties & Record<`--${string}`, string>;
+
+function buildSkin(settings: Settings | null): { className: string; style: SkinStyle } {
+  const preset = themePresets.find((item) => item.id === settings?.appearance_theme) ?? themePresets[0];
+  const accent = normalizeAccent(settings?.accent_color);
+  return {
+    className: `skin-${preset.id}`,
+    style: {
+      "--skin-rail": preset.rail,
+      "--skin-rail-text": preset.railText,
+      "--skin-surface": preset.surface,
+      "--skin-subtle": preset.subtle,
+      "--skin-accent": accent,
+      "--skin-accent-soft": `${accent}18`,
+      "--skin-accent-border": `${accent}40`
+    }
+  };
+}
+
+function normalizeAccent(value?: string) {
+  return /^#[0-9a-fA-F]{6}$/.test(value ?? "") ? value! : "#2563eb";
+}
 
 function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
@@ -128,6 +158,7 @@ function App() {
     if (selectedGroupId === "all") return accounts;
     return accounts.filter((account) => account.group_id === selectedGroupId);
   }, [accounts, selectedGroupId]);
+  const skin = buildSkin(settings);
 
   useEffect(() => {
     if (!railMenuOpen) return;
@@ -318,7 +349,7 @@ function App() {
   }
 
   return (
-    <div className={railExpanded ? "appShell railExpanded" : "appShell"}>
+    <div className={`${railExpanded ? "appShell railExpanded" : "appShell"} ${skin.className}`} style={skin.style}>
       <aside className={railExpanded ? "rail expanded" : "rail"}>
         <div className="railHeader">
           <span className="brandName">OutlookEmail</span>
@@ -3870,6 +3901,48 @@ function SettingsView({
 
   return (
     <section className="settingsGrid">
+      <div className="panel">
+        <div className="panelHeader">
+          <h2>外观</h2>
+          <WandSparkles size={18} />
+        </div>
+        <div className="themePresetGrid">
+          {themePresets.map((preset) => (
+            <button
+              key={preset.id}
+              className={draft.appearance_theme === preset.id ? "themePreset active" : "themePreset"}
+              onClick={() => setField("appearance_theme", preset.id)}
+            >
+              <span className="themePreview" style={{ background: preset.rail }}>
+                <i style={{ background: draft.accent_color }} />
+              </span>
+              <strong>{preset.label}</strong>
+            </button>
+          ))}
+        </div>
+        <div className="accentPicker">
+          <label>
+            <span>强调色</span>
+            <input
+              type="color"
+              value={normalizeAccent(draft.accent_color)}
+              onChange={(event) => setField("accent_color", event.target.value)}
+            />
+          </label>
+          <div className="accentSwatches">
+            {["#2563eb", "#0f766e", "#7c3aed", "#be123c", "#ca8a04", "#111827"].map((accent) => (
+              <button
+                key={accent}
+                className={normalizeAccent(draft.accent_color).toLowerCase() === accent ? "accentSwatch active" : "accentSwatch"}
+                style={{ background: accent }}
+                title={accent}
+                onClick={() => setField("accent_color", accent)}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
       <div className="panel">
         <div className="panelHeader">
           <h2>服务商设置</h2>

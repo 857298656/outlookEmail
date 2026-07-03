@@ -24,7 +24,7 @@ import {
   Users,
   XCircle
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { api } from "./api";
 import { buildSandboxedEmailHtml } from "./lib/emailHtml";
@@ -99,6 +99,7 @@ function App() {
   const [view, setView] = useState<View>("mail");
   const [railExpanded, setRailExpanded] = useState(false);
   const [railMenuOpen, setRailMenuOpen] = useState(false);
+  const railMenuRef = useRef<HTMLDivElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -112,6 +113,26 @@ function App() {
     if (selectedGroupId === "all") return accounts;
     return accounts.filter((account) => account.group_id === selectedGroupId);
   }, [accounts, selectedGroupId]);
+
+  useEffect(() => {
+    if (!railMenuOpen) return;
+
+    function handlePointerDown(event: PointerEvent) {
+      if (railMenuRef.current?.contains(event.target as Node)) return;
+      setRailMenuOpen(false);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setRailMenuOpen(false);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [railMenuOpen]);
 
   function buildMailQuery(accountId = selectedAccountId, nextFolder = folder, filters = mailFilters, page = mailPage): MailMessageQuery {
     return {
@@ -304,7 +325,7 @@ function App() {
           <FolderKanban size={20} />
         </IconButton>
         <div className="railSpacer" />
-        <div className="railAccountArea">
+        <div className="railAccountArea" ref={railMenuRef}>
           {railMenuOpen && (
             <div className="railAccountMenu">
               <div className="railMenuHeader">{railIdentity}</div>
@@ -342,7 +363,6 @@ function App() {
             <span className="railAvatar">{railInitial}</span>
             <span className="railAccountText">
               <strong>{railIdentity}</strong>
-              <small>设置</small>
             </span>
             {railMenuOpen ? <ChevronDown className="railAccountChevron" size={16} /> : <ChevronUp className="railAccountChevron" size={16} />}
           </button>

@@ -90,6 +90,18 @@ struct ForwardRetryPayload {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+struct RefreshRetryPayload {
+    account_id: i64,
+    folder: String,
+    top: usize,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct BackupRetryPayload {
+    target: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
 struct TempRefreshRetryPayload {
     email: String,
     provider: String,
@@ -1055,22 +1067,7 @@ impl Database {
         let mut errors = Vec::new();
 
         for account in credentials {
-            let result = if should_use_graph(&account) {
-                providers::fetch_graph_messages(&account, &folder, top).and_then(|(next_refresh_token, messages)| {
-                    if !next_refresh_token.is_empty() && next_refresh_token != account.refresh_token {
-                        self.save_refresh_token(account.id, &next_refresh_token)?;
-                    }
-                    self.upsert_provider_messages(account.id, &messages)?;
-                    Ok(messages.len())
-                })
-            } else {
-                providers::fetch_imap_messages(&account, &folder, top).and_then(|messages| {
-                    self.upsert_provider_messages(account.id, &messages)?;
-                    Ok(messages.len())
-                })
-            };
-
-            match result {
+            match self.refresh_account_credential(&account, &folder, top) {
                 Ok(count) => {
                     refreshed += 1;
                     self.mark_account_refresh_success(account.id, &account.email, count)?;
@@ -1080,6 +1077,7 @@ impl Database {
                     let message = err.to_string();
                     errors.push(format!("{}: {}", account.email, message));
                     self.mark_account_refresh_failed(account.id, &account.email, &message)?;
+                    self.enqueue_refresh_retry(&account, &folder, top, &message)?;
                 }
             }
         }
@@ -1364,6 +1362,10 @@ impl Database {
         let started_at = Utc::now();
         let result = self.run_backup_job_inner();
         let _ = self.record_backup_result(trigger_type, started_at, &result);
+        if let Err(err) = &result {
+            let settings = self.get_settings().unwrap_or_default();
+            let _ = self.enqueue_backup_retry(settings.webdav_url.trim(), &err.to_string());
+        }
         result
     }
 
@@ -1644,7 +1646,14 @@ impl Database {
         let status = normalize_retry_value(query.status.as_deref(), &["pending", "failed"], "status")?;
         let task_type = normalize_retry_value(
             query.task_type.as_deref(),
-            &["mail_mark", "mail_delete", "forward_message", "temp_refresh"],
+            &[
+                "mail_mark",
+                "mail_delete",
+                "forward_message",
+                "temp_refresh",
+                "refresh_account",
+                "backup_job",
+            ],
             "task_type",
         )?;
         let limit = query.limit.unwrap_or(100).clamp(1, 500);
@@ -3073,6 +3082,14 @@ impl Database {
                 let payload = parse_retry_payload::<ForwardRetryPayload>(&item.payload_json)?;
                 self.retry_forward_message(&payload)
             }
+            "refresh_account" => {
+                let payload = parse_retry_payload::<RefreshRetryPayload>(&item.payload_json)?;
+                self.retry_refresh_account(&payload)
+            }
+            "backup_job" => {
+                let payload = parse_retry_payload::<BackupRetryPayload>(&item.payload_json)?;
+                self.retry_backup_job(&payload)
+            }
             "temp_refresh" => {
                 let payload = parse_retry_payload::<TempRefreshRetryPayload>(&item.payload_json)?;
                 self.retry_temp_refresh(&payload)
@@ -3166,6 +3183,45 @@ impl Database {
                 "account_id": account_id,
                 "message_id": message.message_id.as_str(),
                 "channel": channel
+            }),
+            error,
+        )
+    }
+
+    fn enqueue_refresh_retry(
+        &self,
+        account: &AccountCredentials,
+        folder: &str,
+        top: usize,
+        error: &str,
+    ) -> AppResult<()> {
+        self.enqueue_retry_item(
+            "refresh_account",
+            Some(account.id),
+            &account.email,
+            folder,
+            "mailbox",
+            "refresh",
+            serde_json::json!({
+                "account_id": account.id,
+                "account_email": account.email.as_str(),
+                "folder": folder,
+                "top": top
+            }),
+            error,
+        )
+    }
+
+    fn enqueue_backup_retry(&self, target: &str, error: &str) -> AppResult<()> {
+        self.enqueue_retry_item(
+            "backup_job",
+            None,
+            "",
+            if target.trim().is_empty() { "webdav" } else { target.trim() },
+            "backup",
+            "backup",
+            serde_json::json!({
+                "target": target.trim()
             }),
             error,
         )
@@ -3634,6 +3690,23 @@ impl Database {
         }
     }
 
+    fn refresh_account_credential(&self, account: &AccountCredentials, folder: &str, top: usize) -> AppResult<usize> {
+        if should_use_graph(account) {
+            providers::fetch_graph_messages(account, folder, top).and_then(|(next_refresh_token, messages)| {
+                if !next_refresh_token.is_empty() && next_refresh_token != account.refresh_token {
+                    self.save_refresh_token(account.id, &next_refresh_token)?;
+                }
+                self.upsert_provider_messages(account.id, &messages)?;
+                Ok(messages.len())
+            })
+        } else {
+            providers::fetch_imap_messages(account, folder, top).and_then(|messages| {
+                self.upsert_provider_messages(account.id, &messages)?;
+                Ok(messages.len())
+            })
+        }
+    }
+
     fn retry_remote_mark_message(&self, payload: &MailRetryPayload, is_read: bool) -> AppResult<()> {
         let target = MailMessageRef {
             id: 0,
@@ -3688,6 +3761,36 @@ impl Database {
             None,
         )?;
         Ok(())
+    }
+
+    fn retry_refresh_account(&self, payload: &RefreshRetryPayload) -> AppResult<()> {
+        let account = self
+            .account_credentials(Some(payload.account_id))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::InvalidInput("account not found".to_string()))?;
+        let folder = normalize_mail_folder(&payload.folder);
+        let top = payload.top.clamp(1, 50);
+        match self.refresh_account_credential(&account, &folder, top) {
+            Ok(count) => {
+                self.mark_account_refresh_success(account.id, &account.email, count)?;
+                self.clear_refresh_retry(account.id, &folder)?;
+                Ok(())
+            }
+            Err(err) => {
+                let message = err.to_string();
+                self.mark_account_refresh_failed(account.id, &account.email, &message)?;
+                Err(err)
+            }
+        }
+    }
+
+    fn retry_backup_job(&self, payload: &BackupRetryPayload) -> AppResult<()> {
+        let result = self.run_backup_job_inner();
+        if result.is_ok() {
+            self.clear_backup_retry(payload.target.as_str())?;
+        }
+        result.map(|_| ())
     }
 
     fn retry_temp_refresh(&self, payload: &TempRefreshRetryPayload) -> AppResult<()> {
@@ -3749,6 +3852,34 @@ impl Database {
             WHERE id = ?
             ",
             params![error, credential.id],
+        )?;
+        Ok(())
+    }
+
+    fn clear_refresh_retry(&self, account_id: i64, folder: &str) -> AppResult<()> {
+        self.conn.execute(
+            "
+            DELETE FROM retry_queue
+            WHERE task_type = 'refresh_account'
+              AND account_id = ?
+              AND message_id = ?
+              AND action = 'refresh'
+            ",
+            params![account_id, folder],
+        )?;
+        Ok(())
+    }
+
+    fn clear_backup_retry(&self, target: &str) -> AppResult<()> {
+        let message_id = if target.trim().is_empty() { "webdav" } else { target.trim() };
+        self.conn.execute(
+            "
+            DELETE FROM retry_queue
+            WHERE task_type = 'backup_job'
+              AND message_id = ?
+              AND action = 'backup'
+            ",
+            [message_id],
         )?;
         Ok(())
     }
@@ -4705,6 +4836,89 @@ mod project_tests {
                 limit: None,
             }))
             .expect("retry temp refresh");
+        assert_eq!(retried.failed, 1);
+        let queued = db
+            .list_retry_queue(RetryQueueQuery::default())
+            .expect("retry queue after retry");
+        assert_eq!(queued[0].attempts, 1);
+    }
+
+    #[test]
+    fn queues_failed_account_refresh_retry() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "
+                INSERT INTO accounts (id, email, status, group_id, provider, account_type)
+                VALUES (1, 'refresh@example.com', 'active', 1, 'imap', 'imap')
+                ",
+                [],
+            )
+            .expect("insert account");
+
+        let result = db
+            .refresh_accounts(RefreshInput {
+                account_id: Some(1),
+                folder: Some("inbox".to_string()),
+                top: Some(10),
+            })
+            .expect("refresh result");
+        assert!(!result.success);
+        assert_eq!(result.failed, 1);
+
+        let queued = db
+            .list_retry_queue(RetryQueueQuery::default())
+            .expect("retry queue");
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].task_type, "refresh_account");
+        assert_eq!(queued[0].account_id, Some(1));
+        assert_eq!(queued[0].message_id, "inbox");
+
+        let retried = db
+            .run_retry_queue(Some(RetryQueueRunInput {
+                retry_id: Some(queued[0].id),
+                limit: None,
+            }))
+            .expect("retry refresh");
+        assert_eq!(retried.failed, 1);
+        let queued = db
+            .list_retry_queue(RetryQueueQuery::default())
+            .expect("retry queue after retry");
+        assert_eq!(queued[0].attempts, 1);
+    }
+
+    #[test]
+    fn queues_failed_backup_retry() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+
+        let result = db.run_backup_job();
+        assert!(result.is_err());
+
+        let queued = db
+            .list_retry_queue(RetryQueueQuery::default())
+            .expect("retry queue");
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].task_type, "backup_job");
+        assert_eq!(queued[0].message_id, "webdav");
+
+        let retried = db
+            .run_retry_queue(Some(RetryQueueRunInput {
+                retry_id: Some(queued[0].id),
+                limit: None,
+            }))
+            .expect("retry backup");
         assert_eq!(retried.failed, 1);
         let queued = db
             .list_retry_queue(RetryQueueQuery::default())

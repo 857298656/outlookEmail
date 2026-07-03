@@ -2387,6 +2387,8 @@ function formatRetryTask(item: RetryQueueItem) {
   if (item.task_type === "mail_delete") return "Delete mail";
   if (item.task_type === "forward_message") return "Forward mail";
   if (item.task_type === "temp_refresh") return "Refresh temp mail";
+  if (item.task_type === "refresh_account") return "Refresh account";
+  if (item.task_type === "backup_job") return "Run backup";
   return item.task_type;
 }
 

@@ -27,7 +27,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Local HTML/CSV exports for cached mail, account inventory, and project account pools
 - GPTMail, DuckMail, and Cloudflare temp-mail management
 - SMTP, Telegram, and WeCom forwarding for cached messages
-- Retry queue for failed remote mail actions, failed forwarding sends, and temp-mail refresh failures
+- Retry queue for failed account refreshes, remote mail actions, forwarding sends, temp-mail refreshes, and WebDAV backups
 - WebDAV backup from a consistent SQLite snapshot with local restore
 - Background scheduler inside the desktop process
 - Unified automation run history with filtering and clearing for manual and scheduled refresh/forwarding/backup jobs
@@ -44,11 +44,11 @@ The application is a single-user local desktop app. It does not expose a public 
 - Temp-mail providers use configurable GPTMail and DuckMail HTTP APIs plus Cloudflare Worker admin channels.
 - Temp-mail messages are normalized and cached in `temp_email_messages` for local browsing. GPTMail, DuckMail, and Cloudflare refresh failures update the temp mailbox status and queue a `temp_refresh` retry item.
 - Refreshed messages are upserted into SQLite and read by the workspace UI.
-- Refresh failures are recorded on the account and in `refresh_logs`.
+- Refresh failures are recorded on the account and in `refresh_logs`; failed account refreshes queue a `refresh_account` retry item with account, folder, and page size.
 - Forwarding is controlled by a per-account `forward_enabled` flag and deduplicated through `forwarding_logs`. Failed SMTP/Telegram/WeCom sends are queued with message id and channel for later replay.
-- Backups are created with SQLite `VACUUM INTO`, stored locally under the app data backup directory, then uploaded with WebDAV `PUT`.
+- Backups are created with SQLite `VACUUM INTO`, stored locally under the app data backup directory, then uploaded with WebDAV `PUT`. Failed backup attempts queue a `backup_job` retry item.
 - Restores are limited to successful backup log entries that resolve to local `.sqlite` snapshots under the app backup directory. The restore command validates the snapshot with SQLite `integrity_check`, creates a pre-restore safety snapshot, replaces the current database file set, reopens SQLite, and audits the restore.
-- Scheduled jobs only run while the local workspace is unlocked. Each scheduler tick also retries due pending retry queue items with backoff, including temp-mail refresh retries.
+- Scheduled jobs only run while the local workspace is unlocked. Each scheduler tick also retries due pending retry queue items with backoff, including account refresh, temp-mail refresh, and backup retries.
 - Manual and scheduled automation jobs append status, counts, duration, and detail into `automation_runs`; the Settings UI can filter by job, trigger, status, and detail text before clearing matching rows. Retry jobs are recorded as `retry`.
 - Projects synchronize account scope into `project_accounts` and record claim/result events in `project_account_events`.
 - Exports are generated from local SQLite data under the app data `exports` directory. Mail HTML export escapes message content rather than executing raw message HTML.
@@ -60,5 +60,5 @@ The application is a single-user local desktop app. It does not expose a public 
 - More provider-specific folder discovery
 - Safer HTML body rendering policy for cached messages
 - Revocable share-link workflow and optional local HTTP API
-- Task-level retry policies for mailbox refresh and backup failures
+- Scheduler history dashboard and richer retry observability
 - Cloudflare AI username generation and advanced batch generation

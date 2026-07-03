@@ -77,6 +77,8 @@ pub struct MailMessageQuery {
     pub search: Option<String>,
     pub read_state: Option<String>,
     pub has_attachments: Option<bool>,
+    pub sort_by: Option<String>,
+    pub sort_order: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }

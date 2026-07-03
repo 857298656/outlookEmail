@@ -23,7 +23,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Settings persistence
 - Microsoft Graph OAuth and mailbox refresh
 - Basic TLS IMAP mailbox refresh with cached-MIME attachment download
-- Cached message search, filters, pagination, and batch read/unread/delete actions
+- Cached message field-token search, filters, multi-field sorting, pagination, and batch read/unread/delete actions
 - Sandboxed HTML body rendering for cached mailbox and temp-mail messages
 - Local HTML/CSV exports for cached mail, account inventory, and project account pools
 - GPTMail, DuckMail, and Cloudflare temp-mail management
@@ -46,6 +46,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Temp-mail providers use configurable GPTMail and DuckMail HTTP APIs plus Cloudflare Worker admin channels.
 - Temp-mail messages are normalized and cached in `temp_email_messages` for local browsing. GPTMail, DuckMail, and Cloudflare refresh failures update the temp mailbox status and queue a `temp_refresh` retry item.
 - HTML message bodies are sanitized for active content and rendered in a no-script sandboxed iframe with a restrictive content security policy instead of being inserted into the main React DOM.
+- Mailbox search runs against the local SQLite cache and supports free text plus field tokens for sender, recipients, subject, body, folder, read state, attachments, and provider message id. Sorting is validated server-side before being applied to SQL.
 - Refreshed messages are upserted into SQLite and read by the workspace UI.
 - Refresh failures are recorded on the account and in `refresh_logs`; failed account refreshes queue a `refresh_account` retry item with account, folder, and page size.
 - Forwarding is controlled by a per-account `forward_enabled` flag and deduplicated through `forwarding_logs`. Failed SMTP/Telegram/WeCom sends are queued with message id and channel for later replay.

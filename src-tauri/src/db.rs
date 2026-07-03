@@ -6,6 +6,7 @@ use crate::models::*;
 use crate::providers;
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, Utc};
 use directories::ProjectDirs;
+use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -755,6 +756,8 @@ impl Database {
             search: None,
             read_state: None,
             has_attachments: None,
+            sort_by: None,
+            sort_order: None,
             limit: None,
             offset: None,
         })
@@ -762,51 +765,72 @@ impl Database {
 
     pub fn list_messages_query(&self, query: MailMessageQuery) -> AppResult<Vec<MailMessage>> {
         self.require_unlocked()?;
-        let folder = normalize_mail_folder(query.folder.as_deref().unwrap_or("all"));
-        let read_state = normalize_read_state(query.read_state.as_deref())?;
-        let search = query.search.unwrap_or_default().trim().to_string();
-        let search_like = format!("%{}%", search);
-        let has_attachments = query.has_attachments.map(|value| if value { 1_i64 } else { 0_i64 });
+        let search = parse_mail_search(query.search.as_deref().unwrap_or_default());
+        let folder = match normalize_mail_folder(query.folder.as_deref().unwrap_or("all")).as_str() {
+            "all" => search.folder.unwrap_or_else(|| "all".to_string()),
+            value => value.to_string(),
+        };
+        let read_state = match normalize_read_state(query.read_state.as_deref())?.as_str() {
+            "all" => search.read_state.unwrap_or_else(|| "all".to_string()),
+            value => value.to_string(),
+        };
+        let has_attachments = query.has_attachments.or(search.has_attachments);
+        let order_clause = mail_sort_clause(query.sort_by.as_deref(), query.sort_order.as_deref())?;
         let limit = query.limit.unwrap_or(200).clamp(1, 500);
         let offset = query.offset.unwrap_or(0).max(0);
-        let sql = String::from(
-            "
+        let mut sql = String::from(
+            r#"
             SELECT id, account_id, folder, provider_message_id, subject, sender, recipients,
                    received_at, is_read, has_attachments, body_preview, body, body_type,
                    attachments_json
             FROM retained_mail_messages
-            WHERE (?1 IS NULL OR account_id = ?1)
-              AND (?2 = 'all' OR folder = ?2)
-              AND (?3 = '' OR subject LIKE ?4 OR sender LIKE ?4 OR recipients LIKE ?4 OR body_preview LIKE ?4 OR COALESCE(body, '') LIKE ?4)
-              AND (?5 = 'all' OR (?5 = 'read' AND is_read = 1) OR (?5 = 'unread' AND is_read = 0))
-              AND (?6 IS NULL OR has_attachments = ?6)
-            ORDER BY received_at_sort DESC, id DESC
-            LIMIT ?7 OFFSET ?8
-            ",
+            WHERE 1 = 1
+            "#,
         );
+        let mut values = Vec::new();
+        if let Some(account_id) = query.account_id {
+            sql.push_str(" AND account_id = ?");
+            values.push(SqlValue::Integer(account_id));
+        }
+        if folder != "all" {
+            sql.push_str(" AND folder = ?");
+            values.push(SqlValue::Text(folder));
+        }
+        match read_state.as_str() {
+            "read" => sql.push_str(" AND is_read = 1"),
+            "unread" => sql.push_str(" AND is_read = 0"),
+            _ => {}
+        }
+        if let Some(has_attachments) = has_attachments {
+            sql.push_str(" AND has_attachments = ?");
+            values.push(SqlValue::Integer(if has_attachments { 1 } else { 0 }));
+        }
+        append_mail_search_terms(&mut sql, &mut values, &search.terms);
+        sql.push_str(" ORDER BY ");
+        sql.push_str(&order_clause);
+        sql.push_str(" LIMIT ? OFFSET ?");
+        values.push(SqlValue::Integer(limit));
+        values.push(SqlValue::Integer(offset));
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(
-            params![query.account_id, folder, search, search_like, read_state, has_attachments, limit, offset],
-            |row| {
-                Ok(MailMessage {
-                    id: row.get(0)?,
-                    account_id: row.get(1)?,
-                    folder: row.get(2)?,
-                    provider_message_id: row.get(3)?,
-                    subject: row.get(4)?,
-                    sender: row.get(5)?,
-                    recipients: row.get(6)?,
-                    received_at: row.get(7)?,
-                    is_read: row.get::<_, i64>(8)? == 1,
-                    has_attachments: row.get::<_, i64>(9)? == 1,
-                    body_preview: row.get(10)?,
-                    body: row.get(11)?,
-                    body_type: row.get(12)?,
-                    attachments: parse_attachments_json(row.get::<_, String>(13)?.as_str()),
-                })
-            },
-        )?;
+        let rows = stmt.query_map(params_from_iter(values), |row| {
+            Ok(MailMessage {
+                id: row.get(0)?,
+                account_id: row.get(1)?,
+                folder: row.get(2)?,
+                provider_message_id: row.get(3)?,
+                subject: row.get(4)?,
+                sender: row.get(5)?,
+                recipients: row.get(6)?,
+                received_at: row.get(7)?,
+                is_read: row.get::<_, i64>(8)? == 1,
+                has_attachments: row.get::<_, i64>(9)? == 1,
+                body_preview: row.get(10)?,
+                body: row.get(11)?,
+                body_type: row.get(12)?,
+                attachments: parse_attachments_json(row.get::<_, String>(13)?.as_str()),
+            })
+        })?;
         collect_rows(rows)
     }
 
@@ -4306,6 +4330,141 @@ fn parse_attachments_json(value: &str) -> Vec<AttachmentInfo> {
     serde_json::from_str(value).unwrap_or_default()
 }
 
+#[derive(Default)]
+struct ParsedMailSearch {
+    terms: Vec<MailSearchTerm>,
+    read_state: Option<String>,
+    has_attachments: Option<bool>,
+    folder: Option<String>,
+}
+
+enum MailSearchTerm {
+    Any(String),
+    Subject(String),
+    Sender(String),
+    Recipient(String),
+    Body(String),
+    ProviderId(String),
+}
+
+fn parse_mail_search(value: &str) -> ParsedMailSearch {
+    let mut search = ParsedMailSearch::default();
+    for token in tokenize_search(value) {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let Some((key, raw_value)) = token.split_once(':') else {
+            search.terms.push(MailSearchTerm::Any(token.to_string()));
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let raw_value = raw_value.trim();
+        if key.is_empty() || raw_value.is_empty() {
+            search.terms.push(MailSearchTerm::Any(token.to_string()));
+            continue;
+        }
+        match key.as_str() {
+            "subject" | "sub" => search.terms.push(MailSearchTerm::Subject(raw_value.to_string())),
+            "from" | "sender" => search.terms.push(MailSearchTerm::Sender(raw_value.to_string())),
+            "to" | "recipient" | "recipients" | "cc" => search.terms.push(MailSearchTerm::Recipient(raw_value.to_string())),
+            "body" | "content" | "text" => search.terms.push(MailSearchTerm::Body(raw_value.to_string())),
+            "id" | "message" | "message_id" => search.terms.push(MailSearchTerm::ProviderId(raw_value.to_string())),
+            "folder" | "mailbox" => search.folder = Some(normalize_mail_folder(raw_value)),
+            "is" | "status" => match raw_value.to_ascii_lowercase().as_str() {
+                "read" => search.read_state = Some("read".to_string()),
+                "unread" => search.read_state = Some("unread".to_string()),
+                _ => search.terms.push(MailSearchTerm::Any(token.to_string())),
+            },
+            "has" => match raw_value.to_ascii_lowercase().as_str() {
+                "attachment" | "attachments" | "file" | "files" => search.has_attachments = Some(true),
+                "noattachment" | "noattachments" | "nofile" | "nofiles" => search.has_attachments = Some(false),
+                _ => search.terms.push(MailSearchTerm::Any(token.to_string())),
+            },
+            _ => search.terms.push(MailSearchTerm::Any(token.to_string())),
+        }
+    }
+    search
+}
+
+fn tokenize_search(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut token = String::new();
+    let mut in_quote = false;
+    for ch in value.chars() {
+        match ch {
+            '"' => in_quote = !in_quote,
+            ch if ch.is_whitespace() && !in_quote => {
+                if !token.trim().is_empty() {
+                    tokens.push(token.trim().to_string());
+                    token.clear();
+                }
+            }
+            ch => token.push(ch),
+        }
+    }
+    if !token.trim().is_empty() {
+        tokens.push(token.trim().to_string());
+    }
+    tokens
+}
+
+fn append_mail_search_terms(sql: &mut String, values: &mut Vec<SqlValue>, terms: &[MailSearchTerm]) {
+    for term in terms {
+        match term {
+            MailSearchTerm::Any(value) => {
+                sql.push_str(" AND (subject LIKE ? OR sender LIKE ? OR recipients LIKE ? OR cc LIKE ? OR body_preview LIKE ? OR COALESCE(body, '') LIKE ?)");
+                push_like_values(values, value, 6);
+            }
+            MailSearchTerm::Subject(value) => {
+                sql.push_str(" AND subject LIKE ?");
+                push_like_values(values, value, 1);
+            }
+            MailSearchTerm::Sender(value) => {
+                sql.push_str(" AND sender LIKE ?");
+                push_like_values(values, value, 1);
+            }
+            MailSearchTerm::Recipient(value) => {
+                sql.push_str(" AND (recipients LIKE ? OR cc LIKE ?)");
+                push_like_values(values, value, 2);
+            }
+            MailSearchTerm::Body(value) => {
+                sql.push_str(" AND (body_preview LIKE ? OR COALESCE(body, '') LIKE ?)");
+                push_like_values(values, value, 2);
+            }
+            MailSearchTerm::ProviderId(value) => {
+                sql.push_str(" AND provider_message_id LIKE ?");
+                push_like_values(values, value, 1);
+            }
+        }
+    }
+}
+
+fn push_like_values(values: &mut Vec<SqlValue>, value: &str, count: usize) {
+    let pattern = format!("%{}%", value);
+    for _ in 0..count {
+        values.push(SqlValue::Text(pattern.clone()));
+    }
+}
+
+fn mail_sort_clause(sort_by: Option<&str>, sort_order: Option<&str>) -> AppResult<String> {
+    let order = match sort_order.unwrap_or("desc").trim().to_ascii_lowercase().as_str() {
+        "" | "desc" => "DESC",
+        "asc" => "ASC",
+        value => return Err(AppError::InvalidInput(format!("unsupported mail sort_order: {value}"))),
+    };
+    let clause = match sort_by.unwrap_or("date").trim().to_ascii_lowercase().as_str() {
+        "" | "date" | "received" | "received_at" => format!("received_at_sort {order}, id {order}"),
+        "subject" => format!("LOWER(subject) {order}, received_at_sort DESC, id DESC"),
+        "sender" | "from" => format!("LOWER(sender) {order}, received_at_sort DESC, id DESC"),
+        "read" | "status" => format!("is_read {order}, received_at_sort DESC, id DESC"),
+        "attachments" | "files" => format!("has_attachments {order}, received_at_sort DESC, id DESC"),
+        "folder" => format!("folder {order}, received_at_sort DESC, id DESC"),
+        value => return Err(AppError::InvalidInput(format!("unsupported mail sort_by: {value}"))),
+    };
+    Ok(clause)
+}
+
 fn preview_secret(value: &str) -> String {
     if value.len() <= 10 {
         return "*".repeat(value.len());
@@ -4554,7 +4713,7 @@ mod project_tests {
     use crate::models::{
         AutomationRunQuery, ClaimProjectAccountInput, ClearAutomationRunsInput,
         AttachmentInfo, CreateProjectInput, DeleteMailMessagesInput, DownloadAttachmentInput,
-        ExportAccountsInput,
+        ExportAccountsInput, MailMessageQuery,
         ExportMailMessagesInput, MarkMailMessagesInput, ProjectAccountActionInput,
         RefreshInput, RestoreBackupInput, RetryQueueItemInput, RetryQueueQuery,
         RetryQueueRunInput,
@@ -4665,6 +4824,90 @@ mod project_tests {
             .list_messages(Some(1), Some("all".to_string()))
             .expect("messages")
             .is_empty());
+    }
+
+    #[test]
+    fn searches_messages_with_field_tokens_and_sorting() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "INSERT INTO accounts (id, email, status, group_id) VALUES (1, 'one@example.com', 'active', 1)",
+                [],
+            )
+            .expect("insert account");
+        db.conn
+            .execute(
+                "
+                INSERT INTO retained_mail_messages
+                (id, account_id, folder, provider_message_id, subject, sender, recipients, cc,
+                 received_at, received_at_sort, is_read, has_attachments, body_preview, body)
+                VALUES
+                (10, 1, 'inbox', 'a', 'Alpha notice', 'noreply@example.com', 'one@example.com', '',
+                 '2026-01-01T00:00:00Z', 1, 1, 0, 'alpha preview', 'plain body'),
+                (11, 1, 'junkemail', 'b', 'Beta invoice', 'billing@example.com', 'one@example.com', '',
+                 '2026-01-02T00:00:00Z', 2, 0, 0, 'invoice preview', 'invoice body'),
+                (12, 1, 'inbox', 'c', 'Reset Password', 'alice@example.com', 'one@example.com', '',
+                 '2026-01-03T00:00:00Z', 3, 0, 1, 'security preview', 'reset body')
+                ",
+                [],
+            )
+            .expect("insert messages");
+
+        let filtered = db
+            .list_messages_query(MailMessageQuery {
+                account_id: Some(1),
+                folder: Some("all".to_string()),
+                search: Some("from:alice subject:\"Reset Password\" is:unread has:attachment".to_string()),
+                read_state: None,
+                has_attachments: None,
+                sort_by: Some("date".to_string()),
+                sort_order: Some("desc".to_string()),
+                limit: Some(10),
+                offset: Some(0),
+            })
+            .expect("advanced search");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider_message_id, "c");
+
+        let junk = db
+            .list_messages_query(MailMessageQuery {
+                account_id: Some(1),
+                folder: Some("all".to_string()),
+                search: Some("folder:junk body:invoice".to_string()),
+                read_state: None,
+                has_attachments: None,
+                sort_by: None,
+                sort_order: None,
+                limit: Some(10),
+                offset: Some(0),
+            })
+            .expect("folder search");
+        assert_eq!(junk.len(), 1);
+        assert_eq!(junk[0].folder, "junkemail");
+
+        let sorted = db
+            .list_messages_query(MailMessageQuery {
+                account_id: Some(1),
+                folder: Some("all".to_string()),
+                search: None,
+                read_state: None,
+                has_attachments: None,
+                sort_by: Some("subject".to_string()),
+                sort_order: Some("asc".to_string()),
+                limit: Some(10),
+                offset: Some(0),
+            })
+            .expect("sort messages");
+        assert_eq!(
+            sorted.into_iter().map(|message| message.subject).collect::<Vec<_>>(),
+            vec!["Alpha notice", "Beta invoice", "Reset Password"]
+        );
     }
 
     #[test]

@@ -52,6 +52,8 @@ type MailFilters = {
   search: string;
   readState: "all" | "read" | "unread";
   attachmentFilter: "all" | "attachments" | "plain";
+  sortBy: "date" | "subject" | "sender" | "read" | "attachments" | "folder";
+  sortOrder: "asc" | "desc";
 };
 
 const colors = ["#2563eb", "#16a34a", "#dc2626", "#7c3aed", "#0f766e", "#b45309"];
@@ -80,7 +82,13 @@ function App() {
   const [selectedTempEmail, setSelectedTempEmail] = useState<string | undefined>();
   const [selectedTempMessageId, setSelectedTempMessageId] = useState<string | undefined>();
   const [folder, setFolder] = useState("all");
-  const [mailFilters, setMailFilters] = useState<MailFilters>({ search: "", readState: "all", attachmentFilter: "all" });
+  const [mailFilters, setMailFilters] = useState<MailFilters>({
+    search: "",
+    readState: "all",
+    attachmentFilter: "all",
+    sortBy: "date",
+    sortOrder: "desc"
+  });
   const [mailPage, setMailPage] = useState(0);
   const [selectedMessageIds, setSelectedMessageIds] = useState<number[]>([]);
   const [view, setView] = useState<View>("mail");
@@ -108,6 +116,8 @@ function App() {
           : filters.attachmentFilter === "plain"
             ? false
             : undefined,
+      sort_by: filters.sortBy,
+      sort_order: filters.sortOrder,
       limit: mailPageSize,
       offset: page * mailPageSize
     };
@@ -591,7 +601,13 @@ function App() {
             onRestoreBackup={(backupLogId) =>
               runAction(async () => {
                 const result = await api.restoreBackup(backupLogId);
-                const restoredFilters: MailFilters = { search: "", readState: "all", attachmentFilter: "all" };
+                const restoredFilters: MailFilters = {
+                  search: "",
+                  readState: "all",
+                  attachmentFilter: "all",
+                  sortBy: "date",
+                  sortOrder: "desc"
+                };
                 setFolder("all");
                 setMailFilters(restoredFilters);
                 setMailPage(0);
@@ -842,6 +858,26 @@ function MailWorkspace({
               <option value="all">Any files</option>
               <option value="attachments">Has files</option>
               <option value="plain">No files</option>
+            </select>
+            <select
+              className="select"
+              value={draftFilters.sortBy}
+              onChange={(event) => setDraftFilters({ ...draftFilters, sortBy: event.target.value as MailFilters["sortBy"] })}
+            >
+              <option value="date">Date</option>
+              <option value="subject">Subject</option>
+              <option value="sender">Sender</option>
+              <option value="read">Status</option>
+              <option value="attachments">Files</option>
+              <option value="folder">Folder</option>
+            </select>
+            <select
+              className="select"
+              value={draftFilters.sortOrder}
+              onChange={(event) => setDraftFilters({ ...draftFilters, sortOrder: event.target.value as MailFilters["sortOrder"] })}
+            >
+              <option value="desc">Desc</option>
+              <option value="asc">Asc</option>
             </select>
             <button className="button compact secondary" onClick={() => onFilterApply(draftFilters)}>
               <Search size={14} />

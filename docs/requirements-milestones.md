@@ -51,7 +51,9 @@
 ### 邮件操作
 
 - 邮件搜索：支持按主题、发件人、收件人、摘要、正文搜索本地缓存。
+- 高级搜索语法：支持 `from:`、`to:`、`subject:`、`body:`、`folder:`、`is:`、`has:`、`id:` 字段 token。
 - 邮件筛选：支持按文件夹、已读/未读、是否有附件筛选。
+- 邮件排序：支持按日期、主题、发件人、已读状态、附件和文件夹升降序排序。
 - 邮件分页：支持固定页大小分页浏览缓存邮件。
 - 邮件正文 HTML 通过清理和沙箱 iframe 安全渲染，不插入主应用 DOM 执行。
 - 单封和批量标记已读/未读。
@@ -130,6 +132,7 @@
   - `feat: retry failed refresh and backup jobs`
   - `feat: download cached IMAP attachments`
   - `feat: sandbox HTML message rendering`
+  - `feat: add advanced mail search and sorting`
 
 ## 未完成
 
@@ -148,7 +151,6 @@
 
 ### 邮件操作增强
 
-- 高级搜索语法和多字段排序。
 - 远端操作失败的回滚提示和更细的错误可视化。
 
 ### 分享与外部集成增强
@@ -225,7 +227,8 @@
 - 已交付：Graph/IMAP 远端标记和删除失败重试队列。
 - 已交付：IMAP 同步缓存 raw MIME，并支持从缓存 MIME 中解析下载附件。
 - 已交付：邮箱和临时邮箱 HTML 正文使用清理后的沙箱 iframe 渲染。
-- 剩余增强：高级搜索排序、远端失败回滚提示。
+- 已交付：高级搜索语法和多字段升降序排序。
+- 剩余增强：远端失败回滚提示。
 
 ### M7：本地导出核心，已完成
 

@@ -622,8 +622,10 @@ function filterMockMessages(args?: Record<string, unknown>) {
   const query = (args?.query ?? {}) as MailMessageQuery;
   const accountId = query.account_id ?? (args?.accountId as number | undefined);
   const folder = query.folder ?? (args?.folder as string | undefined);
-  const search = query.search?.trim().toLowerCase() ?? "";
-  const readState = query.read_state ?? "all";
+  const parsedSearch = parseMockMailSearch(query.search ?? "");
+  const effectiveFolder = (!folder || folder === "all") && parsedSearch.folder ? parsedSearch.folder : folder;
+  const readState = query.read_state && query.read_state !== "all" ? query.read_state : parsedSearch.read_state ?? "all";
+  const hasAttachments = query.has_attachments ?? parsedSearch.has_attachments;
   const limit = query.limit ?? 200;
   const offset = query.offset ?? 0;
   return mockMessages
@@ -637,13 +639,104 @@ function filterMockMessages(args?: Record<string, unknown>) {
       ].join(" ").toLowerCase();
       return (
         (!accountId || message.account_id === accountId) &&
-        (!folder || folder === "all" || message.folder === folder) &&
-        (!search || haystack.includes(search)) &&
+        (!effectiveFolder || effectiveFolder === "all" || message.folder === effectiveFolder) &&
+        parsedSearch.terms.every((term) => matchesMockSearchTerm(message, term, haystack)) &&
         (readState === "all" || (readState === "read" ? message.is_read : !message.is_read)) &&
-        (query.has_attachments === undefined || message.has_attachments === query.has_attachments)
+        (hasAttachments === undefined || message.has_attachments === hasAttachments)
       );
     })
+    .sort((left, right) => compareMockMessages(left, right, query.sort_by ?? "date", query.sort_order ?? "desc"))
     .slice(offset, offset + limit);
+}
+
+type MockMailSearchTerm = {
+  field: "any" | "subject" | "sender" | "recipient" | "body" | "id";
+  value: string;
+};
+
+function parseMockMailSearch(value: string) {
+  const result: {
+    terms: MockMailSearchTerm[];
+    read_state?: "read" | "unread";
+    has_attachments?: boolean;
+    folder?: string;
+  } = { terms: [] };
+  for (const token of tokenizeMockSearch(value)) {
+    const separator = token.indexOf(":");
+    if (separator <= 0) {
+      result.terms.push({ field: "any", value: token.toLowerCase() });
+      continue;
+    }
+    const key = token.slice(0, separator).trim().toLowerCase();
+    const raw = token.slice(separator + 1).trim();
+    if (!raw) {
+      result.terms.push({ field: "any", value: token.toLowerCase() });
+      continue;
+    }
+    const normalized = raw.toLowerCase();
+    if (key === "subject" || key === "sub") result.terms.push({ field: "subject", value: normalized });
+    else if (key === "from" || key === "sender") result.terms.push({ field: "sender", value: normalized });
+    else if (key === "to" || key === "recipient" || key === "recipients" || key === "cc") result.terms.push({ field: "recipient", value: normalized });
+    else if (key === "body" || key === "content" || key === "text") result.terms.push({ field: "body", value: normalized });
+    else if (key === "id" || key === "message" || key === "message_id") result.terms.push({ field: "id", value: normalized });
+    else if (key === "folder" || key === "mailbox") result.folder = normalizeMockFolder(normalized);
+    else if ((key === "is" || key === "status") && (normalized === "read" || normalized === "unread")) result.read_state = normalized;
+    else if (key === "has" && ["attachment", "attachments", "file", "files"].includes(normalized)) result.has_attachments = true;
+    else if (key === "has" && ["noattachment", "noattachments", "nofile", "nofiles"].includes(normalized)) result.has_attachments = false;
+    else result.terms.push({ field: "any", value: token.toLowerCase() });
+  }
+  return result;
+}
+
+function tokenizeMockSearch(value: string) {
+  const tokens: string[] = [];
+  let token = "";
+  let inQuote = false;
+  for (const char of value) {
+    if (char === '"') inQuote = !inQuote;
+    else if (/\s/.test(char) && !inQuote) {
+      if (token.trim()) tokens.push(token.trim());
+      token = "";
+    } else {
+      token += char;
+    }
+  }
+  if (token.trim()) tokens.push(token.trim());
+  return tokens;
+}
+
+function matchesMockSearchTerm(message: MailMessage, term: MockMailSearchTerm, haystack: string) {
+  if (term.field === "any") return haystack.includes(term.value);
+  if (term.field === "subject") return message.subject.toLowerCase().includes(term.value);
+  if (term.field === "sender") return message.sender.toLowerCase().includes(term.value);
+  if (term.field === "recipient") return message.recipients.toLowerCase().includes(term.value);
+  if (term.field === "body") return [message.body_preview, message.body ?? ""].join(" ").toLowerCase().includes(term.value);
+  return message.provider_message_id.toLowerCase().includes(term.value);
+}
+
+function compareMockMessages(left: MailMessage, right: MailMessage, sortBy: string, sortOrder: string) {
+  const direction = sortOrder === "asc" ? 1 : -1;
+  const leftValue = mockSortValue(left, sortBy);
+  const rightValue = mockSortValue(right, sortBy);
+  if (leftValue < rightValue) return -1 * direction;
+  if (leftValue > rightValue) return 1 * direction;
+  return (new Date(right.received_at).getTime() - new Date(left.received_at).getTime()) || right.id - left.id;
+}
+
+function mockSortValue(message: MailMessage, sortBy: string) {
+  if (sortBy === "subject") return message.subject.toLowerCase();
+  if (sortBy === "sender") return message.sender.toLowerCase();
+  if (sortBy === "read") return message.is_read ? 1 : 0;
+  if (sortBy === "attachments") return message.has_attachments ? 1 : 0;
+  if (sortBy === "folder") return message.folder;
+  return new Date(message.received_at).getTime();
+}
+
+function normalizeMockFolder(value: string) {
+  if (value === "junk" || value === "junkemail") return "junkemail";
+  if (value === "deleted" || value === "deleteditems" || value === "trash") return "deleteditems";
+  if (value === "inbox") return "inbox";
+  return "all";
 }
 
 function mockTempEmail(email: string, provider: string, channelId: number | null): TempEmail {

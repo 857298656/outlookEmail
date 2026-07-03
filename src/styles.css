@@ -288,8 +288,12 @@ button:disabled {
   min-width: 0;
 }
 
+.filterRow {
+  flex-wrap: wrap;
+}
+
 .filterRow .select {
-  flex: 1;
+  flex: 1 1 110px;
   min-width: 0;
 }
 

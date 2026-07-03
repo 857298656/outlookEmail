@@ -69,6 +69,8 @@ export type MailMessageQuery = {
   search?: string;
   read_state?: "all" | "read" | "unread";
   has_attachments?: boolean;
+  sort_by?: "date" | "subject" | "sender" | "read" | "attachments" | "folder";
+  sort_order?: "asc" | "desc";
   limit?: number;
   offset?: number;
 };

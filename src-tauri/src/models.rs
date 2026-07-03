@@ -15,6 +15,9 @@ pub struct Group {
     pub name: String,
     pub description: String,
     pub color: String,
+    pub proxy_url: String,
+    pub fallback_proxy_url_1: String,
+    pub fallback_proxy_url_2: String,
     pub parent_id: Option<i64>,
     pub level: i64,
     pub sort_order: i64,
@@ -51,6 +54,9 @@ pub struct Account {
     pub has_imap_password: bool,
     pub imap_host: String,
     pub imap_port: i64,
+    pub proxy_url: String,
+    pub fallback_proxy_url_1: String,
+    pub fallback_proxy_url_2: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -427,6 +433,17 @@ pub struct CreateGroupInput {
     pub description: Option<String>,
     pub color: Option<String>,
     pub parent_id: Option<i64>,
+    pub proxy_url: Option<String>,
+    pub fallback_proxy_url_1: Option<String>,
+    pub fallback_proxy_url_2: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateGroupProxyInput {
+    pub id: i64,
+    pub proxy_url: Option<String>,
+    pub fallback_proxy_url_1: Option<String>,
+    pub fallback_proxy_url_2: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -547,6 +564,9 @@ pub struct UpdateAccountInput {
     pub account_type: Option<String>,
     pub imap_host: Option<String>,
     pub imap_port: Option<i64>,
+    pub proxy_url: Option<String>,
+    pub fallback_proxy_url_1: Option<String>,
+    pub fallback_proxy_url_2: Option<String>,
     pub forward_enabled: Option<bool>,
     pub password: Option<String>,
     pub client_id: Option<String>,
@@ -645,6 +665,7 @@ pub struct AccountCredentials {
     pub imap_host: String,
     pub imap_port: i64,
     pub imap_password: String,
+    pub proxy_chain: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -11,6 +11,9 @@ export type Group = {
   name: string;
   description: string;
   color: string;
+  proxy_url: string;
+  fallback_proxy_url_1: string;
+  fallback_proxy_url_2: string;
   parent_id: number | null;
   level: number;
   sort_order: number;
@@ -45,6 +48,9 @@ export type Account = {
   has_imap_password: boolean;
   imap_host: string;
   imap_port: number;
+  proxy_url: string;
+  fallback_proxy_url_1: string;
+  fallback_proxy_url_2: string;
 };
 
 export type MailMessage = {

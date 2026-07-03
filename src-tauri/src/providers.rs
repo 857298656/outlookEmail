@@ -8,9 +8,11 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use mailparse::MailHeaderMap;
-use reqwest::blocking::Client;
+use reqwest::{blocking::Client, Proxy};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::time::Duration;
 
 const GRAPH_SCOPE: &str = "offline_access Mail.ReadWrite User.Read";
@@ -62,13 +64,12 @@ pub fn exchange_graph_code(client_id: &str, redirect_uri: &str, code_or_url: &st
     parse_token_response(response)
 }
 
-pub fn refresh_graph_access_token(account: &AccountCredentials) -> AppResult<OAuthTokenResponse> {
+fn refresh_graph_access_token_with_client(account: &AccountCredentials, client: &Client) -> AppResult<OAuthTokenResponse> {
     if account.client_id.trim().is_empty() || account.refresh_token.trim().is_empty() {
         return Err(AppError::InvalidInput(
             "Graph account is missing client id or refresh token".to_string(),
         ));
     }
-    let client = http_client()?;
     let response = client
         .post("https://login.microsoftonline.com/common/oauth2/v2.0/token")
         .form(&[
@@ -83,39 +84,40 @@ pub fn refresh_graph_access_token(account: &AccountCredentials) -> AppResult<OAu
 }
 
 pub fn fetch_graph_messages(account: &AccountCredentials, folder: &str, top: usize) -> AppResult<(String, Vec<ProviderMessage>)> {
-    let token = refresh_graph_access_token(account)?;
-    let folders = folders_for(folder);
-    let client = http_client()?;
-    let mut all = Vec::new();
-    for folder_name in folders {
-        let url = format!(
-            "https://graph.microsoft.com/v1.0/me/mailFolders/{}/messages?$top={}&$orderby=receivedDateTime%20desc&$select=id,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,hasAttachments,bodyPreview,body",
-            folder_name,
-            top.clamp(1, 50)
-        );
-        let response = client
-            .get(url)
-            .bearer_auth(&token.access_token)
-            .send()
-            .map_err(network_error)?;
-        if !response.status().is_success() {
-            return Err(AppError::Internal(format!(
-                "Graph list messages failed: HTTP {} {}",
-                response.status(),
-                response.text().unwrap_or_default()
-            )));
-        }
-        let page: GraphMessagePage = response.json().map_err(network_error)?;
-        for item in page.value {
-            let mut message = item.into_provider_message(folder_name);
-            if message.has_attachments {
-                message.attachments = fetch_graph_attachments_metadata(&client, &token.access_token, &message.provider_message_id)?;
+    with_account_http_client(account, |client| {
+        let token = refresh_graph_access_token_with_client(account, client)?;
+        let folders = folders_for(folder);
+        let mut all = Vec::new();
+        for folder_name in folders {
+            let url = format!(
+                "https://graph.microsoft.com/v1.0/me/mailFolders/{}/messages?$top={}&$orderby=receivedDateTime%20desc&$select=id,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,hasAttachments,bodyPreview,body",
+                folder_name,
+                top.clamp(1, 50)
+            );
+            let response = client
+                .get(url)
+                .bearer_auth(&token.access_token)
+                .send()
+                .map_err(network_error)?;
+            if !response.status().is_success() {
+                return Err(AppError::Internal(format!(
+                    "Graph list messages failed: HTTP {} {}",
+                    response.status(),
+                    response.text().unwrap_or_default()
+                )));
             }
-            all.push(message);
+            let page: GraphMessagePage = response.json().map_err(network_error)?;
+            for item in page.value {
+                let mut message = item.into_provider_message(folder_name);
+                if message.has_attachments {
+                    message.attachments = fetch_graph_attachments_metadata(client, &token.access_token, &message.provider_message_id)?;
+                }
+                all.push(message);
+            }
         }
-    }
-    all.sort_by(|a, b| b.received_at_sort.total_cmp(&a.received_at_sort));
-    Ok((token.refresh_token, all))
+        all.sort_by(|a, b| b.received_at_sort.total_cmp(&a.received_at_sort));
+        Ok((token.refresh_token, all))
+    })
 }
 
 pub fn download_graph_attachment(
@@ -123,36 +125,37 @@ pub fn download_graph_attachment(
     message_id: &str,
     attachment_id: &str,
 ) -> AppResult<DownloadedAttachment> {
-    let token = refresh_graph_access_token(account)?;
-    let client = http_client()?;
-    let url = format!(
-        "https://graph.microsoft.com/v1.0/me/messages/{}/attachments/{}",
-        urlencoding::encode(message_id),
-        urlencoding::encode(attachment_id)
-    );
-    let response = client
-        .get(url)
-        .bearer_auth(token.access_token)
-        .send()
-        .map_err(network_error)?;
-    if !response.status().is_success() {
-        return Err(AppError::Internal(format!(
-            "Graph attachment download failed: HTTP {} {}",
-            response.status(),
-            response.text().unwrap_or_default()
-        )));
-    }
-    let attachment: GraphAttachment = response.json().map_err(network_error)?;
-    let content = attachment
-        .content_bytes
-        .ok_or_else(|| AppError::InvalidInput("Graph attachment has no inline content bytes".to_string()))?;
-    let bytes = STANDARD
-        .decode(content)
-        .map_err(|err| AppError::Internal(format!("attachment base64 decode failed: {err}")))?;
-    Ok(DownloadedAttachment {
-        name: attachment.name.unwrap_or_else(|| "attachment.bin".to_string()),
-        content_type: attachment.content_type.unwrap_or_default(),
-        bytes,
+    with_account_http_client(account, |client| {
+        let token = refresh_graph_access_token_with_client(account, client)?;
+        let url = format!(
+            "https://graph.microsoft.com/v1.0/me/messages/{}/attachments/{}",
+            urlencoding::encode(message_id),
+            urlencoding::encode(attachment_id)
+        );
+        let response = client
+            .get(url)
+            .bearer_auth(token.access_token)
+            .send()
+            .map_err(network_error)?;
+        if !response.status().is_success() {
+            return Err(AppError::Internal(format!(
+                "Graph attachment download failed: HTTP {} {}",
+                response.status(),
+                response.text().unwrap_or_default()
+            )));
+        }
+        let attachment: GraphAttachment = response.json().map_err(network_error)?;
+        let content = attachment
+            .content_bytes
+            .ok_or_else(|| AppError::InvalidInput("Graph attachment has no inline content bytes".to_string()))?;
+        let bytes = STANDARD
+            .decode(content)
+            .map_err(|err| AppError::Internal(format!("attachment base64 decode failed: {err}")))?;
+        Ok(DownloadedAttachment {
+            name: attachment.name.unwrap_or_else(|| "attachment.bin".to_string()),
+            content_type: attachment.content_type.unwrap_or_default(),
+            bytes,
+        })
     })
 }
 
@@ -177,115 +180,92 @@ pub fn download_imap_attachment_from_raw(raw_mime: &[u8], attachment_id: &str) -
 }
 
 pub fn mark_graph_message_read(account: &AccountCredentials, message_id: &str, is_read: bool) -> AppResult<()> {
-    let token = refresh_graph_access_token(account)?;
-    let client = http_client()?;
-    let url = format!(
-        "https://graph.microsoft.com/v1.0/me/messages/{}",
-        urlencoding::encode(message_id)
-    );
-    let response = client
-        .patch(url)
-        .bearer_auth(token.access_token)
-        .json(&json!({ "isRead": is_read }))
-        .send()
-        .map_err(network_error)?;
-    if !response.status().is_success() {
-        return Err(AppError::Internal(format!(
-            "Graph mark message failed: HTTP {} {}",
-            response.status(),
-            response.text().unwrap_or_default()
-        )));
-    }
-    Ok(())
+    with_account_http_client(account, |client| {
+        let token = refresh_graph_access_token_with_client(account, client)?;
+        let url = format!(
+            "https://graph.microsoft.com/v1.0/me/messages/{}",
+            urlencoding::encode(message_id)
+        );
+        let response = client
+            .patch(url)
+            .bearer_auth(token.access_token)
+            .json(&json!({ "isRead": is_read }))
+            .send()
+            .map_err(network_error)?;
+        if !response.status().is_success() {
+            return Err(AppError::Internal(format!(
+                "Graph mark message failed: HTTP {} {}",
+                response.status(),
+                response.text().unwrap_or_default()
+            )));
+        }
+        Ok(())
+    })
 }
 
 pub fn delete_graph_message(account: &AccountCredentials, message_id: &str) -> AppResult<()> {
-    let token = refresh_graph_access_token(account)?;
-    let client = http_client()?;
-    let url = format!(
-        "https://graph.microsoft.com/v1.0/me/messages/{}",
-        urlencoding::encode(message_id)
-    );
-    let response = client
-        .delete(url)
-        .bearer_auth(token.access_token)
-        .send()
-        .map_err(network_error)?;
-    if !response.status().is_success() {
-        return Err(AppError::Internal(format!(
-            "Graph delete message failed: HTTP {} {}",
-            response.status(),
-            response.text().unwrap_or_default()
-        )));
-    }
-    Ok(())
+    with_account_http_client(account, |client| {
+        let token = refresh_graph_access_token_with_client(account, client)?;
+        let url = format!(
+            "https://graph.microsoft.com/v1.0/me/messages/{}",
+            urlencoding::encode(message_id)
+        );
+        let response = client
+            .delete(url)
+            .bearer_auth(token.access_token)
+            .send()
+            .map_err(network_error)?;
+        if !response.status().is_success() {
+            return Err(AppError::Internal(format!(
+                "Graph delete message failed: HTTP {} {}",
+                response.status(),
+                response.text().unwrap_or_default()
+            )));
+        }
+        Ok(())
+    })
 }
 
 pub fn fetch_imap_messages(account: &AccountCredentials, folder: &str, top: usize) -> AppResult<Vec<ProviderMessage>> {
-    let host = account.imap_host.trim();
-    if host.is_empty() {
-        return Err(AppError::InvalidInput("IMAP host is required".to_string()));
-    }
-    let password = if account.imap_password.trim().is_empty() {
-        account.password.as_str()
-    } else {
-        account.imap_password.as_str()
-    };
-    if password.trim().is_empty() {
-        return Err(AppError::InvalidInput("IMAP password is required".to_string()));
-    }
-
-    let tls = native_tls::TlsConnector::builder()
-        .build()
-        .map_err(|err| AppError::Internal(format!("TLS setup failed: {err}")))?;
-    let client = imap::connect(
-        (host, u16::try_from(account.imap_port).unwrap_or(993)),
-        host,
-        &tls,
-    )
-    .map_err(|err| AppError::Internal(format!("IMAP connect failed: {err}")))?;
-    let mut session = client
-        .login(account.email.as_str(), password)
-        .map_err(|err| AppError::Internal(format!("IMAP login failed: {}", err.0)))?;
-
-    let mut messages = Vec::new();
-    for app_folder in folders_for(folder) {
-        let mailbox = imap_mailbox_name(app_folder);
-        let selected = match session.select(mailbox) {
-            Ok(_) => true,
-            Err(_) if app_folder != "inbox" => false,
-            Err(err) => return Err(AppError::Internal(format!("IMAP select {mailbox} failed: {err}"))),
-        };
-        if !selected {
-            continue;
-        }
-        let uids = session
-            .uid_search("ALL")
-            .map_err(|err| AppError::Internal(format!("IMAP search failed: {err}")))?;
-        let mut selected_uids: Vec<u32> = uids.into_iter().collect();
-        selected_uids.sort_unstable();
-        selected_uids.reverse();
-        selected_uids.truncate(top.clamp(1, 50));
-        if selected_uids.is_empty() {
-            continue;
-        }
-        let sequence = selected_uids
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let fetches = session
-            .uid_fetch(sequence, "(RFC822 FLAGS INTERNALDATE)")
-            .map_err(|err| AppError::Internal(format!("IMAP fetch failed: {err}")))?;
-        for fetch in fetches.iter() {
-            if let Some(body) = fetch.body() {
-                messages.push(parse_imap_message(app_folder, fetch.uid.unwrap_or(fetch.message), body));
+    with_imap_session(account, |session| {
+        let mut messages = Vec::new();
+        for app_folder in folders_for(folder) {
+            let mailbox = imap_mailbox_name(app_folder);
+            let selected = match session.select(mailbox) {
+                Ok(_) => true,
+                Err(_) if app_folder != "inbox" => false,
+                Err(err) => return Err(AppError::Internal(format!("IMAP select {mailbox} failed: {err}"))),
+            };
+            if !selected {
+                continue;
+            }
+            let uids = session
+                .uid_search("ALL")
+                .map_err(|err| AppError::Internal(format!("IMAP search failed: {err}")))?;
+            let mut selected_uids: Vec<u32> = uids.into_iter().collect();
+            selected_uids.sort_unstable();
+            selected_uids.reverse();
+            selected_uids.truncate(top.clamp(1, 50));
+            if selected_uids.is_empty() {
+                continue;
+            }
+            let sequence = selected_uids
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            let fetches = session
+                .uid_fetch(sequence, "(RFC822 FLAGS INTERNALDATE)")
+                .map_err(|err| AppError::Internal(format!("IMAP fetch failed: {err}")))?;
+            for fetch in fetches.iter() {
+                if let Some(body) = fetch.body() {
+                    messages.push(parse_imap_message(app_folder, fetch.uid.unwrap_or(fetch.message), body));
+                }
             }
         }
-    }
-    let _ = session.logout();
-    messages.sort_by(|a, b| b.received_at_sort.total_cmp(&a.received_at_sort));
-    Ok(messages)
+        messages.sort_by(|a, b| b.received_at_sort.total_cmp(&a.received_at_sort));
+        Ok(messages)
+    })
 }
 
 pub fn mark_imap_message_read(account: &AccountCredentials, folder: &str, message_id: &str, is_read: bool) -> AppResult<()> {
@@ -345,11 +325,47 @@ pub fn test_cloudflare_channel(channel: &CloudflareChannelCredential) -> AppResu
 }
 
 fn http_client() -> AppResult<Client> {
-    Client::builder()
+    http_client_for_proxy(None)
+}
+
+fn http_client_for_proxy(proxy_url: Option<&str>) -> AppResult<Client> {
+    let mut builder = Client::builder()
         .timeout(Duration::from_secs(30))
-        .user_agent("OutlookEmailDesktop/0.1")
+        .user_agent("OutlookEmailDesktop/0.1");
+    if let Some(proxy_url) = proxy_url.filter(|value| !value.trim().is_empty()) {
+        let proxy = Proxy::all(proxy_url.trim())
+            .map_err(|err| AppError::InvalidInput(format!("invalid proxy URL {proxy_url}: {err}")))?;
+        builder = builder.proxy(proxy);
+    }
+    builder
         .build()
         .map_err(network_error)
+}
+
+fn with_account_http_client<T>(
+    account: &AccountCredentials,
+    operation: impl Fn(&Client) -> AppResult<T>,
+) -> AppResult<T> {
+    if account.proxy_chain.is_empty() {
+        let client = http_client()?;
+        return operation(&client);
+    }
+
+    let mut last_error = String::new();
+    for proxy_url in &account.proxy_chain {
+        let client = http_client_for_proxy(Some(proxy_url))?;
+        match operation(&client) {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                last_error = format!("{err}");
+            }
+        }
+    }
+    Err(AppError::Internal(format!(
+        "all proxy attempts failed for {}: {}",
+        account.email,
+        if last_error.is_empty() { "unknown network error" } else { last_error.as_str() }
+    )))
 }
 
 fn network_error(err: reqwest::Error) -> AppError {
@@ -818,13 +834,10 @@ fn imap_mailbox_name(folder: &str) -> &'static str {
     }
 }
 
-fn mutate_imap_message(
+fn with_imap_session<T>(
     account: &AccountCredentials,
-    folder: &str,
-    message_id: &str,
-    operation: &str,
-    expunge: bool,
-) -> AppResult<()> {
+    operation: impl Fn(&mut imap::Session<native_tls::TlsStream<TcpStream>>) -> AppResult<T>,
+) -> AppResult<T> {
     let host = account.imap_host.trim();
     if host.is_empty() {
         return Err(AppError::InvalidInput("IMAP host is required".to_string()));
@@ -837,37 +850,147 @@ fn mutate_imap_message(
     if password.trim().is_empty() {
         return Err(AppError::InvalidInput("IMAP password is required".to_string()));
     }
+
+    if account.proxy_chain.is_empty() {
+        let mut session = connect_imap_session(account, password, None)?;
+        let result = operation(&mut session);
+        let _ = session.logout();
+        return result;
+    }
+
+    let mut last_error = String::new();
+    for proxy_url in &account.proxy_chain {
+        match connect_imap_session(account, password, Some(proxy_url)).and_then(|mut session| {
+            let result = operation(&mut session);
+            let _ = session.logout();
+            result
+        }) {
+            Ok(value) => return Ok(value),
+            Err(err) => last_error = format!("{err}"),
+        }
+    }
+    Err(AppError::Internal(format!(
+        "all proxy attempts failed for IMAP account {}: {}",
+        account.email,
+        if last_error.is_empty() { "unknown network error" } else { last_error.as_str() }
+    )))
+}
+
+fn connect_imap_session(
+    account: &AccountCredentials,
+    password: &str,
+    proxy_url: Option<&str>,
+) -> AppResult<imap::Session<native_tls::TlsStream<TcpStream>>> {
+    let host = account.imap_host.trim();
+    let port = u16::try_from(account.imap_port).unwrap_or(993);
+    let tls = native_tls::TlsConnector::builder()
+        .build()
+        .map_err(|err| AppError::Internal(format!("TLS setup failed: {err}")))?;
+    let client = if let Some(proxy_url) = proxy_url {
+        let stream = connect_http_proxy_tunnel(proxy_url, host, port)?;
+        let tls_stream = native_tls::TlsConnector::connect(&tls, host, stream)
+            .map_err(|err| AppError::Internal(format!("IMAP TLS handshake failed: {err}")))?;
+        let mut client = imap::Client::new(tls_stream);
+        client
+            .read_greeting()
+            .map_err(|err| AppError::Internal(format!("IMAP greeting failed: {err}")))?;
+        client
+    } else {
+        imap::connect((host, port), host, &tls)
+            .map_err(|err| AppError::Internal(format!("IMAP connect failed: {err}")))?
+    };
+    client
+        .login(account.email.as_str(), password)
+        .map_err(|err| AppError::Internal(format!("IMAP login failed: {}", err.0)))
+}
+
+fn connect_http_proxy_tunnel(proxy_url: &str, host: &str, port: u16) -> AppResult<TcpStream> {
+    let url = reqwest::Url::parse(proxy_url)
+        .map_err(|err| AppError::InvalidInput(format!("invalid proxy URL {proxy_url}: {err}")))?;
+    if url.scheme() != "http" {
+        return Err(AppError::InvalidInput(
+            "IMAP proxy tunnel currently supports http:// proxies only".to_string(),
+        ));
+    }
+    let proxy_host = url
+        .host_str()
+        .ok_or_else(|| AppError::InvalidInput("proxy URL must include a host".to_string()))?;
+    let proxy_port = url.port_or_known_default().unwrap_or(80);
+    let mut stream = TcpStream::connect((proxy_host, proxy_port))
+        .map_err(|err| AppError::Internal(format!("proxy connect failed: {err}")))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .map_err(|err| AppError::Internal(format!("proxy read timeout setup failed: {err}")))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(30)))
+        .map_err(|err| AppError::Internal(format!("proxy write timeout setup failed: {err}")))?;
+
+    let authority = format!("{host}:{port}");
+    let mut request = format!(
+        "CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Connection: Keep-Alive\r\n"
+    );
+    if !url.username().is_empty() {
+        let password = url.password().unwrap_or_default();
+        let token = STANDARD.encode(format!("{}:{password}", url.username()));
+        request.push_str(&format!("Proxy-Authorization: Basic {token}\r\n"));
+    }
+    request.push_str("\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|err| AppError::Internal(format!("proxy CONNECT request failed: {err}")))?;
+
+    let mut response = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        let read = stream
+            .read(&mut buffer)
+            .map_err(|err| AppError::Internal(format!("proxy CONNECT response failed: {err}")))?;
+        if read == 0 {
+            break;
+        }
+        response.extend_from_slice(&buffer[..read]);
+        if response.windows(4).any(|window| window == b"\r\n\r\n") || response.len() > 8192 {
+            break;
+        }
+    }
+    let response_text = String::from_utf8_lossy(&response);
+    let status_line = response_text.lines().next().unwrap_or_default();
+    if !status_line.contains(" 200 ") {
+        return Err(AppError::Internal(format!(
+            "proxy CONNECT failed: {}",
+            status_line
+        )));
+    }
+    Ok(stream)
+}
+
+fn mutate_imap_message(
+    account: &AccountCredentials,
+    folder: &str,
+    message_id: &str,
+    operation: &str,
+    expunge: bool,
+) -> AppResult<()> {
     let uid = message_id
         .trim()
         .parse::<u32>()
         .map_err(|_| AppError::InvalidInput("IMAP message id is not a UID".to_string()))?;
 
-    let tls = native_tls::TlsConnector::builder()
-        .build()
-        .map_err(|err| AppError::Internal(format!("TLS setup failed: {err}")))?;
-    let client = imap::connect(
-        (host, u16::try_from(account.imap_port).unwrap_or(993)),
-        host,
-        &tls,
-    )
-    .map_err(|err| AppError::Internal(format!("IMAP connect failed: {err}")))?;
-    let mut session = client
-        .login(account.email.as_str(), password)
-        .map_err(|err| AppError::Internal(format!("IMAP login failed: {}", err.0)))?;
-    let mailbox = imap_mailbox_name(folder);
-    session
-        .select(mailbox)
-        .map_err(|err| AppError::Internal(format!("IMAP select {mailbox} failed: {err}")))?;
-    session
-        .uid_store(uid.to_string(), operation)
-        .map_err(|err| AppError::Internal(format!("IMAP update flags failed: {err}")))?;
-    if expunge {
+    with_imap_session(account, |session| {
+        let mailbox = imap_mailbox_name(folder);
         session
-            .expunge()
-            .map_err(|err| AppError::Internal(format!("IMAP expunge failed: {err}")))?;
-    }
-    let _ = session.logout();
-    Ok(())
+            .select(mailbox)
+            .map_err(|err| AppError::Internal(format!("IMAP select {mailbox} failed: {err}")))?;
+        session
+            .uid_store(uid.to_string(), operation)
+            .map_err(|err| AppError::Internal(format!("IMAP update flags failed: {err}")))?;
+        if expunge {
+            session
+                .expunge()
+                .map_err(|err| AppError::Internal(format!("IMAP expunge failed: {err}")))?;
+        }
+        Ok(())
+    })
 }
 
 fn parse_imap_message(folder: &str, uid: u32, body: &[u8]) -> ProviderMessage {

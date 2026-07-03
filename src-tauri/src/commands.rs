@@ -45,6 +45,12 @@ pub fn create_group(state: State<'_, AppState>, input: CreateGroupInput) -> AppR
 }
 
 #[tauri::command]
+pub fn update_group_proxy(state: State<'_, AppState>, input: UpdateGroupProxyInput) -> AppResult<Group> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.update_group_proxy(input)
+}
+
+#[tauri::command]
 pub fn list_tags(state: State<'_, AppState>) -> AppResult<Vec<Tag>> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.list_tags()

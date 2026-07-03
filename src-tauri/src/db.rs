@@ -186,7 +186,9 @@ impl Database {
         self.require_unlocked()?;
         let mut stmt = self.conn.prepare(
             "
-            SELECT g.id, g.name, COALESCE(g.description, ''), g.color, g.parent_id, g.level,
+            SELECT g.id, g.name, COALESCE(g.description, ''), g.color,
+                   COALESCE(g.proxy_url, ''), COALESCE(g.fallback_proxy_url_1, ''),
+                   COALESCE(g.fallback_proxy_url_2, ''), g.parent_id, g.level,
                    g.sort_order, COUNT(a.id) AS account_count
             FROM groups g
             LEFT JOIN accounts a ON a.group_id = g.id
@@ -200,10 +202,13 @@ impl Database {
                 name: row.get(1)?,
                 description: row.get(2)?,
                 color: row.get(3)?,
-                parent_id: row.get(4)?,
-                level: row.get(5)?,
-                sort_order: row.get(6)?,
-                account_count: row.get(7)?,
+                proxy_url: row.get(4)?,
+                fallback_proxy_url_1: row.get(5)?,
+                fallback_proxy_url_2: row.get(6)?,
+                parent_id: row.get(7)?,
+                level: row.get(8)?,
+                sort_order: row.get(9)?,
+                account_count: row.get(10)?,
             })
         })?;
         collect_rows(rows)
@@ -230,13 +235,17 @@ impl Database {
 
         self.conn.execute(
             "
-            INSERT INTO groups (name, description, color, parent_id, level, sort_order)
-            VALUES (?, ?, ?, ?, ?, COALESCE((SELECT MAX(sort_order) + 1 FROM groups), 0))
+            INSERT INTO groups
+            (name, description, color, proxy_url, fallback_proxy_url_1, fallback_proxy_url_2, parent_id, level, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(sort_order) + 1 FROM groups), 0))
             ",
             params![
                 name,
                 input.description.unwrap_or_default(),
                 input.color.unwrap_or_else(|| "#2f6f9f".to_string()),
+                normalize_proxy_value(input.proxy_url.as_deref())?,
+                normalize_proxy_value(input.fallback_proxy_url_1.as_deref())?,
+                normalize_proxy_value(input.fallback_proxy_url_2.as_deref())?,
                 input.parent_id,
                 level
             ],
@@ -244,6 +253,32 @@ impl Database {
         let id = self.conn.last_insert_rowid();
         self.audit("group.created", "group", Some(id), name)?;
         self.get_group(id)
+    }
+
+    pub fn update_group_proxy(&self, input: UpdateGroupProxyInput) -> AppResult<Group> {
+        self.require_unlocked()?;
+        let existing_id = self
+            .conn
+            .query_row("SELECT id FROM groups WHERE id = ?", [input.id], |row| row.get::<_, i64>(0))
+            .optional()?
+            .ok_or_else(|| AppError::InvalidInput("group not found".to_string()))?;
+        self.conn.execute(
+            "
+            UPDATE groups
+            SET proxy_url = COALESCE(?, proxy_url),
+                fallback_proxy_url_1 = COALESCE(?, fallback_proxy_url_1),
+                fallback_proxy_url_2 = COALESCE(?, fallback_proxy_url_2)
+            WHERE id = ?
+            ",
+            params![
+                normalize_proxy_option(input.proxy_url.as_deref())?,
+                normalize_proxy_option(input.fallback_proxy_url_1.as_deref())?,
+                normalize_proxy_option(input.fallback_proxy_url_2.as_deref())?,
+                existing_id
+            ],
+        )?;
+        self.audit("group.proxy_updated", "group", Some(existing_id), "")?;
+        self.get_group(existing_id)
     }
 
     pub fn list_tags(&self) -> AppResult<Vec<Tag>> {
@@ -295,7 +330,8 @@ impl Database {
                    a.provider, a.account_type, a.forward_enabled, a.last_refresh_status,
                    a.last_refresh_error, COUNT(m.id) AS message_count, a.created_at, a.updated_at,
                    a.password_enc, a.refresh_token_enc, a.imap_password_enc, COALESCE(a.imap_host, ''),
-                   a.imap_port
+                   a.imap_port, COALESCE(a.proxy_url, ''), COALESCE(a.fallback_proxy_url_1, ''),
+                   COALESCE(a.fallback_proxy_url_2, '')
             FROM accounts a
             LEFT JOIN groups g ON g.id = a.group_id
             LEFT JOIN retained_mail_messages m ON m.account_id = a.id
@@ -327,6 +363,9 @@ impl Database {
                 has_imap_password: !row.get::<_, String>(16)?.is_empty(),
                 imap_host: row.get(17)?,
                 imap_port: row.get(18)?,
+                proxy_url: row.get(19)?,
+                fallback_proxy_url_1: row.get(20)?,
+                fallback_proxy_url_2: row.get(21)?,
             })
         })?;
 
@@ -405,6 +444,9 @@ impl Database {
                 account_type = COALESCE(?, account_type),
                 imap_host = COALESCE(?, imap_host),
                 imap_port = COALESCE(?, imap_port),
+                proxy_url = COALESCE(?, proxy_url),
+                fallback_proxy_url_1 = COALESCE(?, fallback_proxy_url_1),
+                fallback_proxy_url_2 = COALESCE(?, fallback_proxy_url_2),
                 forward_enabled = COALESCE(?, forward_enabled),
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
@@ -418,6 +460,9 @@ impl Database {
                 input.account_type,
                 input.imap_host,
                 input.imap_port,
+                normalize_proxy_option(input.proxy_url.as_deref())?,
+                normalize_proxy_option(input.fallback_proxy_url_1.as_deref())?,
+                normalize_proxy_option(input.fallback_proxy_url_2.as_deref())?,
                 input.forward_enabled.map(|enabled| if enabled { 1 } else { 0 }),
                 existing_id
             ],
@@ -1251,6 +1296,9 @@ impl Database {
             "provider",
             "account_type",
             "forward_enabled",
+            "proxy_url",
+            "fallback_proxy_url_1",
+            "fallback_proxy_url_2",
             "message_count",
             "last_refresh_status",
             "created_at",
@@ -1267,6 +1315,9 @@ impl Database {
                 account.provider.clone(),
                 account.account_type.clone(),
                 account.forward_enabled.to_string(),
+                account.proxy_url.clone(),
+                account.fallback_proxy_url_1.clone(),
+                account.fallback_proxy_url_2.clone(),
                 account.message_count.to_string(),
                 account.last_refresh_status.clone(),
                 account.created_at.clone(),
@@ -1378,13 +1429,14 @@ impl Database {
 
         for (account_id, account_email) in accounts {
             let messages = self.forwarding_candidates(account_id, limit)?;
+            let proxy_chain = self.proxy_chain_for_account(account_id)?;
             for message in messages {
                 for channel in &channels {
                     if self.forward_success_exists(account_id, &message.message_id, channel)? {
                         skipped += 1;
                         continue;
                     }
-                    match automation::forward_message(&settings, channel, &message) {
+                    match automation::forward_message(&settings, channel, &message, &proxy_chain) {
                         Ok(()) => {
                             forwarded += 1;
                             self.insert_forwarding_log(
@@ -2192,6 +2244,9 @@ impl Database {
                 name TEXT UNIQUE NOT NULL,
                 description TEXT DEFAULT '',
                 color TEXT NOT NULL DEFAULT '#2f6f9f',
+                proxy_url TEXT DEFAULT '',
+                fallback_proxy_url_1 TEXT DEFAULT '',
+                fallback_proxy_url_2 TEXT DEFAULT '',
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 is_system INTEGER NOT NULL DEFAULT 0,
                 parent_id INTEGER,
@@ -2491,6 +2546,7 @@ impl Database {
             ",
         )?;
         self.ensure_default_data()?;
+        self.ensure_group_columns()?;
         self.ensure_account_columns()?;
         self.ensure_project_columns()?;
         self.ensure_temp_columns()?;
@@ -2516,8 +2572,40 @@ impl Database {
                 "ALTER TABLE accounts ADD COLUMN forward_last_checked_at TEXT",
             ),
             (
+                "proxy_url",
+                "ALTER TABLE accounts ADD COLUMN proxy_url TEXT DEFAULT ''",
+            ),
+            (
+                "fallback_proxy_url_1",
+                "ALTER TABLE accounts ADD COLUMN fallback_proxy_url_1 TEXT DEFAULT ''",
+            ),
+            (
+                "fallback_proxy_url_2",
+                "ALTER TABLE accounts ADD COLUMN fallback_proxy_url_2 TEXT DEFAULT ''",
+            ),
+            (
                 "refresh_token_updated_at",
                 "ALTER TABLE accounts ADD COLUMN refresh_token_updated_at TEXT",
+            ),
+        ] {
+            if !columns.iter().any(|column| column == name) {
+                self.conn.execute(ddl, [])?;
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_group_columns(&self) -> AppResult<()> {
+        let columns = table_columns(&self.conn, "groups")?;
+        for (name, ddl) in [
+            ("proxy_url", "ALTER TABLE groups ADD COLUMN proxy_url TEXT DEFAULT ''"),
+            (
+                "fallback_proxy_url_1",
+                "ALTER TABLE groups ADD COLUMN fallback_proxy_url_1 TEXT DEFAULT ''",
+            ),
+            (
+                "fallback_proxy_url_2",
+                "ALTER TABLE groups ADD COLUMN fallback_proxy_url_2 TEXT DEFAULT ''",
             ),
         ] {
             if !columns.iter().any(|column| column == name) {
@@ -2682,7 +2770,9 @@ impl Database {
         self.conn
             .query_row(
                 "
-                SELECT g.id, g.name, COALESCE(g.description, ''), g.color, g.parent_id, g.level,
+                SELECT g.id, g.name, COALESCE(g.description, ''), g.color,
+                       COALESCE(g.proxy_url, ''), COALESCE(g.fallback_proxy_url_1, ''),
+                       COALESCE(g.fallback_proxy_url_2, ''), g.parent_id, g.level,
                        g.sort_order, COUNT(a.id) AS account_count
                 FROM groups g
                 LEFT JOIN accounts a ON a.group_id = g.id
@@ -2696,10 +2786,13 @@ impl Database {
                         name: row.get(1)?,
                         description: row.get(2)?,
                         color: row.get(3)?,
-                        parent_id: row.get(4)?,
-                        level: row.get(5)?,
-                        sort_order: row.get(6)?,
-                        account_count: row.get(7)?,
+                        proxy_url: row.get(4)?,
+                        fallback_proxy_url_1: row.get(5)?,
+                        fallback_proxy_url_2: row.get(6)?,
+                        parent_id: row.get(7)?,
+                        level: row.get(8)?,
+                        sort_order: row.get(9)?,
+                        account_count: row.get(10)?,
                     })
                 },
             )
@@ -3083,11 +3176,15 @@ impl Database {
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
         let mut stmt = self.conn.prepare(
             "
-            SELECT id, email, provider, account_type, password_enc, client_id_enc,
-                   refresh_token_enc, COALESCE(imap_host, ''), imap_port, imap_password_enc
-            FROM accounts
-            WHERE status = 'active' AND (?1 IS NULL OR id = ?1)
-            ORDER BY sort_order ASC, email ASC
+            SELECT a.id, a.email, a.provider, a.account_type, a.password_enc, a.client_id_enc,
+                   a.refresh_token_enc, COALESCE(a.imap_host, ''), a.imap_port, a.imap_password_enc,
+                   COALESCE(a.proxy_url, ''), COALESCE(a.fallback_proxy_url_1, ''),
+                   COALESCE(a.fallback_proxy_url_2, ''), COALESCE(g.proxy_url, ''),
+                   COALESCE(g.fallback_proxy_url_1, ''), COALESCE(g.fallback_proxy_url_2, '')
+            FROM accounts a
+            LEFT JOIN groups g ON g.id = a.group_id
+            WHERE a.status = 'active' AND (?1 IS NULL OR a.id = ?1)
+            ORDER BY a.sort_order ASC, a.email ASC
             ",
         )?;
         let rows = stmt.query_map([account_id], |row| {
@@ -3102,6 +3199,12 @@ impl Database {
                 row.get::<_, String>(7)?,
                 row.get::<_, i64>(8)?,
                 row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+                row.get::<_, String>(11)?,
+                row.get::<_, String>(12)?,
+                row.get::<_, String>(13)?,
+                row.get::<_, String>(14)?,
+                row.get::<_, String>(15)?,
             ))
         })?;
 
@@ -3118,7 +3221,17 @@ impl Database {
                 imap_host,
                 imap_port,
                 imap_password,
+                account_proxy,
+                account_proxy_1,
+                account_proxy_2,
+                group_proxy,
+                group_proxy_1,
+                group_proxy_2,
             ) = row?;
+            let mut proxy_chain = proxy_chain_from_values(&[&account_proxy, &account_proxy_1, &account_proxy_2])?;
+            if proxy_chain.is_empty() {
+                proxy_chain = proxy_chain_from_values(&[&group_proxy, &group_proxy_1, &group_proxy_2])?;
+            }
             credentials.push(AccountCredentials {
                 id,
                 email,
@@ -3130,9 +3243,43 @@ impl Database {
                 imap_host,
                 imap_port,
                 imap_password: crypto::decrypt_text(&imap_password, key)?,
+                proxy_chain,
             });
         }
         Ok(credentials)
+    }
+
+    fn proxy_chain_for_account(&self, account_id: i64) -> AppResult<Vec<String>> {
+        let row = self
+            .conn
+            .query_row(
+                "
+                SELECT COALESCE(a.proxy_url, ''), COALESCE(a.fallback_proxy_url_1, ''),
+                       COALESCE(a.fallback_proxy_url_2, ''), COALESCE(g.proxy_url, ''),
+                       COALESCE(g.fallback_proxy_url_1, ''), COALESCE(g.fallback_proxy_url_2, '')
+                FROM accounts a
+                LEFT JOIN groups g ON g.id = a.group_id
+                WHERE a.id = ?
+                ",
+                [account_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| AppError::InvalidInput("account not found".to_string()))?;
+        let account_chain = proxy_chain_from_values(&[&row.0, &row.1, &row.2])?;
+        if !account_chain.is_empty() {
+            return Ok(account_chain);
+        }
+        proxy_chain_from_values(&[&row.3, &row.4, &row.5])
     }
 
     fn save_refresh_token(&self, account_id: i64, refresh_token: &str) -> AppResult<()> {
@@ -4102,7 +4249,8 @@ impl Database {
             return Ok(());
         }
         let message = self.forwarding_retry_content(payload.account_id, &payload.message_id)?;
-        automation::forward_message(&settings, &payload.channel, &message)?;
+        let proxy_chain = self.proxy_chain_for_account(payload.account_id)?;
+        automation::forward_message(&settings, &payload.channel, &message, &proxy_chain)?;
         self.insert_forwarding_log(
             Some(payload.account_id),
             &message.account_email,
@@ -4556,6 +4704,40 @@ fn normalize_email(value: &str) -> AppResult<String> {
         return Err(AppError::InvalidInput("email is invalid".to_string()));
     }
     Ok(email)
+}
+
+fn normalize_proxy_option(value: Option<&str>) -> AppResult<Option<String>> {
+    value.map(|item| normalize_proxy_value(Some(item))).transpose()
+}
+
+fn normalize_proxy_value(value: Option<&str>) -> AppResult<String> {
+    let Some(value) = value else {
+        return Ok(String::new());
+    };
+    let proxy = value.trim();
+    if proxy.is_empty() {
+        return Ok(String::new());
+    }
+    let lower = proxy.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err(AppError::InvalidInput(
+            "proxy URL must start with http:// or https://".to_string(),
+        ));
+    }
+    Ok(proxy.to_string())
+}
+
+fn proxy_chain_from_values(values: &[&str]) -> AppResult<Vec<String>> {
+    let mut chain = Vec::new();
+    let mut seen = HashSet::new();
+    for value in values {
+        let proxy = normalize_proxy_value(Some(value))?;
+        if proxy.is_empty() || !seen.insert(proxy.to_ascii_lowercase()) {
+            continue;
+        }
+        chain.push(proxy);
+    }
+    Ok(chain)
 }
 
 fn normalize_temp_provider(value: &str) -> AppResult<String> {
@@ -5031,7 +5213,7 @@ mod project_tests {
         ExportMailMessagesInput, MarkMailMessagesInput, ProjectAccountActionInput,
         RefreshInput, RestoreBackupInput, RetryQueueItemInput, RetryQueueQuery,
         RetryQueueRunInput,
-        UpdateAccountInput,
+        UpdateAccountInput, UpdateGroupProxyInput,
     };
     use rusqlite::{params, Connection};
     use std::path::PathBuf;
@@ -5126,6 +5308,9 @@ mod project_tests {
             account_type: None,
             imap_host: None,
             imap_port: None,
+            proxy_url: None,
+            fallback_proxy_url_1: None,
+            fallback_proxy_url_2: None,
             forward_enabled: None,
             password: None,
             client_id: None,
@@ -5145,6 +5330,9 @@ mod project_tests {
             account_type: None,
             imap_host: None,
             imap_port: None,
+            proxy_url: None,
+            fallback_proxy_url_1: None,
+            fallback_proxy_url_2: None,
             forward_enabled: None,
             password: None,
             client_id: None,
@@ -5164,6 +5352,9 @@ mod project_tests {
             account_type: None,
             imap_host: None,
             imap_port: None,
+            proxy_url: None,
+            fallback_proxy_url_1: None,
+            fallback_proxy_url_2: None,
             forward_enabled: None,
             password: None,
             client_id: None,
@@ -5227,6 +5418,9 @@ mod project_tests {
             account_type: None,
             imap_host: None,
             imap_port: None,
+            proxy_url: None,
+            fallback_proxy_url_1: None,
+            fallback_proxy_url_2: None,
             forward_enabled: None,
             password: None,
             client_id: None,
@@ -5261,6 +5455,73 @@ mod project_tests {
     }
 
     #[test]
+    fn account_proxy_chain_inherits_group_and_allows_override() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.update_group_proxy(UpdateGroupProxyInput {
+            id: 1,
+            proxy_url: Some("http://group-proxy:8080".to_string()),
+            fallback_proxy_url_1: Some("https://group-backup:8443".to_string()),
+            fallback_proxy_url_2: None,
+        })
+        .expect("set group proxy");
+        db.conn
+            .execute(
+                "INSERT INTO accounts (id, email, status, group_id) VALUES (1, 'proxy@example.com', 'active', 1)",
+                [],
+            )
+            .expect("insert account");
+
+        let inherited = db.account_credentials(Some(1)).expect("credentials");
+        assert_eq!(
+            inherited[0].proxy_chain,
+            vec!["http://group-proxy:8080", "https://group-backup:8443"]
+        );
+
+        db.update_account(UpdateAccountInput {
+            id: 1,
+            email: "proxy@example.com".to_string(),
+            group_id: Some(1),
+            remark: None,
+            status: Some("active".to_string()),
+            provider: None,
+            account_type: None,
+            imap_host: None,
+            imap_port: None,
+            proxy_url: Some("http://account-proxy:8080".to_string()),
+            fallback_proxy_url_1: Some("http://account-proxy:8080".to_string()),
+            fallback_proxy_url_2: Some("https://account-backup:8443".to_string()),
+            forward_enabled: None,
+            password: None,
+            client_id: None,
+            refresh_token: None,
+            imap_password: None,
+            tag_ids: None,
+            aliases: None,
+        })
+        .expect("set account proxy");
+
+        let overridden = db.account_credentials(Some(1)).expect("credentials");
+        assert_eq!(
+            overridden[0].proxy_chain,
+            vec!["http://account-proxy:8080", "https://account-backup:8443"]
+        );
+
+        let invalid = db.update_group_proxy(UpdateGroupProxyInput {
+            id: 1,
+            proxy_url: Some("socks5://127.0.0.1:1080".to_string()),
+            fallback_proxy_url_1: None,
+            fallback_proxy_url_2: None,
+        });
+        assert!(matches!(invalid, Err(AppError::InvalidInput(_))));
+    }
+
+    #[test]
     fn project_scope_can_use_account_alias_email() {
         let conn = Connection::open_in_memory().expect("open memory db");
         let mut db = Database {
@@ -5285,6 +5546,9 @@ mod project_tests {
             account_type: None,
             imap_host: None,
             imap_port: None,
+            proxy_url: None,
+            fallback_proxy_url_1: None,
+            fallback_proxy_url_2: None,
             forward_enabled: None,
             password: None,
             client_id: None,

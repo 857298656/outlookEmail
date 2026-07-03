@@ -535,6 +535,12 @@ function App() {
                 await loadWorkspace(selectedAccountId, folder);
               }, "分组已创建")
             }
+            onUpdateGroupProxy={(input) =>
+              runAction(async () => {
+                await api.updateGroupProxy(input);
+                await loadWorkspace(selectedAccountId, folder);
+              }, "分组代理已保存")
+            }
             onCreateTag={(name, color) =>
               runAction(async () => {
                 await api.createTag({ name, color });
@@ -1146,6 +1152,7 @@ function AccountsView({
   busy,
   onImport,
   onCreateGroup,
+  onUpdateGroupProxy,
   onCreateTag,
   onDeleteAccount,
   onExportAccounts,
@@ -1160,6 +1167,7 @@ function AccountsView({
   busy: boolean;
   onImport: (raw: string, groupId: number | null) => void;
   onCreateGroup: (name: string, color: string) => void;
+  onUpdateGroupProxy: (input: Parameters<typeof api.updateGroupProxy>[0]) => void;
   onCreateTag: (name: string, color: string) => void;
   onDeleteAccount: (accountId: number) => void;
   onExportAccounts: (groupId?: number | null) => void;
@@ -1170,6 +1178,12 @@ function AccountsView({
   const [raw, setRaw] = useState("");
   const [groupId, setGroupId] = useState<number | null>(groups[0]?.id ?? null);
   const [groupName, setGroupName] = useState("");
+  const [selectedProxyGroupId, setSelectedProxyGroupId] = useState<number | undefined>(groups[0]?.id);
+  const [groupProxyDraft, setGroupProxyDraft] = useState({
+    proxy_url: "",
+    fallback_proxy_url_1: "",
+    fallback_proxy_url_2: ""
+  });
   const [tagName, setTagName] = useState("");
   const [colorIndex, setColorIndex] = useState(0);
   const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>(accounts[0]?.id);
@@ -1195,6 +1209,17 @@ function AccountsView({
   const selectedAccount =
     visibleAccounts.find((account) => account.id === selectedAccountId) ?? visibleAccounts[0] ?? accounts[0];
   const parsedRows = useMemo(() => parseAccountRows(raw), [raw]);
+  const selectedProxyGroup = groups.find((group) => group.id === selectedProxyGroupId) ?? groups[0];
+
+  useEffect(() => {
+    if (!selectedProxyGroup) return;
+    setSelectedProxyGroupId(selectedProxyGroup.id);
+    setGroupProxyDraft({
+      proxy_url: selectedProxyGroup.proxy_url,
+      fallback_proxy_url_1: selectedProxyGroup.fallback_proxy_url_1,
+      fallback_proxy_url_2: selectedProxyGroup.fallback_proxy_url_2
+    });
+  }, [selectedProxyGroup?.id, selectedProxyGroup?.proxy_url, selectedProxyGroup?.fallback_proxy_url_1, selectedProxyGroup?.fallback_proxy_url_2]);
 
   return (
     <section className="managementGrid">
@@ -1252,6 +1277,56 @@ function AccountsView({
             </span>
           ))}
         </div>
+        {selectedProxyGroup && (
+          <>
+            <div className="formLine">
+              <select
+                className="select grow"
+                value={selectedProxyGroup.id}
+                onChange={(event) => setSelectedProxyGroupId(Number(event.target.value))}
+              >
+                {groups.map((group) => (
+                  <option value={group.id} key={group.id}>
+                    {group.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="button secondary"
+                onClick={() =>
+                  onUpdateGroupProxy({
+                    id: selectedProxyGroup.id,
+                    proxy_url: groupProxyDraft.proxy_url,
+                    fallback_proxy_url_1: groupProxyDraft.fallback_proxy_url_1,
+                    fallback_proxy_url_2: groupProxyDraft.fallback_proxy_url_2
+                  })
+                }
+              >
+                保存代理
+              </button>
+            </div>
+            <input
+              className="input"
+              value={groupProxyDraft.proxy_url}
+              placeholder="分组主代理：http://127.0.0.1:7890"
+              onChange={(event) => setGroupProxyDraft({ ...groupProxyDraft, proxy_url: event.target.value })}
+            />
+            <div className="formLine">
+              <input
+                className="input grow"
+                value={groupProxyDraft.fallback_proxy_url_1}
+                placeholder="备用代理 1"
+                onChange={(event) => setGroupProxyDraft({ ...groupProxyDraft, fallback_proxy_url_1: event.target.value })}
+              />
+              <input
+                className="input grow"
+                value={groupProxyDraft.fallback_proxy_url_2}
+                placeholder="备用代理 2"
+                onChange={(event) => setGroupProxyDraft({ ...groupProxyDraft, fallback_proxy_url_2: event.target.value })}
+              />
+            </div>
+          </>
+        )}
         <div className="formLine">
           <input className="input grow" value={tagName} placeholder="新标签" onChange={(event) => setTagName(event.target.value)} />
           <button
@@ -1944,6 +2019,9 @@ function AccountEditor({
     forward_enabled: false,
     imap_host: "",
     imap_port: 993,
+    proxy_url: "",
+    fallback_proxy_url_1: "",
+    fallback_proxy_url_2: "",
     password: "",
     client_id: "",
     refresh_token: "",
@@ -1963,6 +2041,9 @@ function AccountEditor({
       forward_enabled: account.forward_enabled,
       imap_host: account.imap_host,
       imap_port: account.imap_port || 993,
+      proxy_url: account.proxy_url,
+      fallback_proxy_url_1: account.fallback_proxy_url_1,
+      fallback_proxy_url_2: account.fallback_proxy_url_2,
       password: "",
       client_id: settings?.graph_client_id ?? "",
       refresh_token: "",
@@ -2105,6 +2186,26 @@ function AccountEditor({
           onChange={(event) => setDraft({ ...draft, imap_port: Number(event.target.value) || 993 })}
         />
       </div>
+      <input
+        className="input"
+        value={draft.proxy_url}
+        placeholder="账号主代理，留空则继承分组代理"
+        onChange={(event) => setDraft({ ...draft, proxy_url: event.target.value })}
+      />
+      <div className="formLine">
+        <input
+          className="input grow"
+          value={draft.fallback_proxy_url_1}
+          placeholder="账号备用代理 1"
+          onChange={(event) => setDraft({ ...draft, fallback_proxy_url_1: event.target.value })}
+        />
+        <input
+          className="input grow"
+          value={draft.fallback_proxy_url_2}
+          placeholder="账号备用代理 2"
+          onChange={(event) => setDraft({ ...draft, fallback_proxy_url_2: event.target.value })}
+        />
+      </div>
       <div className="formLine">
         <input
           className="input grow"
@@ -2135,6 +2236,9 @@ function AccountEditor({
             forward_enabled: draft.forward_enabled,
             imap_host: draft.imap_host,
             imap_port: draft.imap_port,
+            proxy_url: draft.proxy_url,
+            fallback_proxy_url_1: draft.fallback_proxy_url_1,
+            fallback_proxy_url_2: draft.fallback_proxy_url_2,
             client_id: draft.client_id || undefined,
             password: draft.password || undefined,
             imap_password: draft.imap_password || undefined,

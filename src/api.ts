@@ -63,6 +63,9 @@ let mockGroups: Group[] = [
     name: "Default",
     description: "Default mailbox group",
     color: "#111827",
+    proxy_url: "",
+    fallback_proxy_url_1: "",
+    fallback_proxy_url_2: "",
     parent_id: null,
     level: 1,
     sort_order: 0,
@@ -122,19 +125,40 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     case "list_groups":
       return mockGroups as T;
     case "create_group": {
-      const input = args?.input as { name: string; color?: string; description?: string };
+      const input = args?.input as {
+        name: string;
+        color?: string;
+        description?: string;
+        parent_id?: number | null;
+        proxy_url?: string;
+        fallback_proxy_url_1?: string;
+        fallback_proxy_url_2?: string;
+      };
       const group: Group = {
         id: Date.now(),
         name: input.name,
         description: input.description ?? "",
         color: input.color ?? "#2f6f9f",
-        parent_id: null,
+        proxy_url: input.proxy_url ?? "",
+        fallback_proxy_url_1: input.fallback_proxy_url_1 ?? "",
+        fallback_proxy_url_2: input.fallback_proxy_url_2 ?? "",
+        parent_id: input.parent_id ?? null,
         level: 1,
         sort_order: mockGroups.length,
         account_count: 0
       };
       mockGroups = [...mockGroups, group];
       return group as T;
+    }
+    case "update_group_proxy": {
+      const input = args?.input as {
+        id: number;
+        proxy_url?: string;
+        fallback_proxy_url_1?: string;
+        fallback_proxy_url_2?: string;
+      };
+      mockGroups = mockGroups.map((group) => (group.id === input.id ? { ...group, ...input } : group));
+      return mockGroups.find((group) => group.id === input.id) as T;
     }
     case "list_tags":
       return mockTags as T;
@@ -193,7 +217,10 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
           has_refresh_token: Boolean(parts[3]),
           has_imap_password: false,
           imap_host: "",
-          imap_port: 993
+          imap_port: 993,
+          proxy_url: "",
+          fallback_proxy_url_1: "",
+          fallback_proxy_url_2: ""
         } satisfies Account;
       });
       mockAccounts = [...mockAccounts, ...nextAccounts];
@@ -813,8 +840,22 @@ export const api = {
   unlock: (password: string) => call<AppStatus>("unlock_app", { password }),
   lock: () => call<AppStatus>("lock_app"),
   listGroups: () => call<Group[]>("list_groups"),
-  createGroup: (input: { name: string; description?: string; color?: string; parent_id?: number | null }) =>
+  createGroup: (input: {
+    name: string;
+    description?: string;
+    color?: string;
+    parent_id?: number | null;
+    proxy_url?: string;
+    fallback_proxy_url_1?: string;
+    fallback_proxy_url_2?: string;
+  }) =>
     call<Group>("create_group", { input }),
+  updateGroupProxy: (input: {
+    id: number;
+    proxy_url?: string;
+    fallback_proxy_url_1?: string;
+    fallback_proxy_url_2?: string;
+  }) => call<Group>("update_group_proxy", { input }),
   listTags: () => call<Tag[]>("list_tags"),
   createTag: (input: { name: string; color: string }) => call<Tag>("create_tag", { input }),
   deleteTag: (tagId: number) => call<void>("delete_tag", { tagId }),
@@ -829,6 +870,9 @@ export const api = {
     account_type?: string;
     imap_host?: string;
     imap_port?: number;
+    proxy_url?: string;
+    fallback_proxy_url_1?: string;
+    fallback_proxy_url_2?: string;
     forward_enabled?: boolean;
     password?: string;
     client_id?: string;

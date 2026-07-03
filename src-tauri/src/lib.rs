@@ -34,6 +34,7 @@ pub fn run() {
             lock_app,
             list_groups,
             create_group,
+            update_group_proxy,
             list_tags,
             create_tag,
             delete_tag,

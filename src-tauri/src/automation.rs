@@ -3,7 +3,7 @@ use crate::models::{ForwardContent, Settings};
 use lettre::message::Mailbox;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
-use reqwest::blocking::Client;
+use reqwest::{blocking::Client, Proxy};
 use serde_json::json;
 use std::time::Duration;
 
@@ -28,11 +28,12 @@ pub fn forward_message(
     settings: &Settings,
     channel: &str,
     content: &ForwardContent,
+    proxy_chain: &[String],
 ) -> AppResult<()> {
     match channel {
         "smtp" => send_smtp(settings, content),
-        "telegram" => send_telegram(settings, content),
-        "wecom" => send_wecom(settings, content),
+        "telegram" => send_telegram(settings, content, proxy_chain),
+        "wecom" => send_wecom(settings, content, proxy_chain),
         value => Err(AppError::InvalidInput(format!(
             "unsupported forwarding channel: {value}"
         ))),
@@ -111,7 +112,7 @@ fn send_smtp(settings: &Settings, content: &ForwardContent) -> AppResult<()> {
     Ok(())
 }
 
-fn send_telegram(settings: &Settings, content: &ForwardContent) -> AppResult<()> {
+fn send_telegram(settings: &Settings, content: &ForwardContent, proxy_chain: &[String]) -> AppResult<()> {
     let token = settings.forward_telegram_bot_token.trim();
     let chat_id = settings.forward_telegram_chat_id.trim();
     if token.is_empty() || chat_id.is_empty() {
@@ -120,58 +121,92 @@ fn send_telegram(settings: &Settings, content: &ForwardContent) -> AppResult<()>
         ));
     }
     let url = format!("https://api.telegram.org/bot{token}/sendMessage");
-    let response = http_client()?
-        .post(url)
-        .json(&json!({
-            "chat_id": chat_id,
-            "text": trim_message(&render_forward_text(content), 3900),
-            "disable_web_page_preview": true
-        }))
-        .send()
-        .map_err(network_error)?;
-    if !response.status().is_success() {
-        return Err(AppError::Internal(format!(
-            "Telegram forward failed: HTTP {} {}",
-            response.status(),
-            response.text().unwrap_or_default()
-        )));
-    }
-    Ok(())
+    with_proxy_chain(proxy_chain, |client| {
+        let response = client
+            .post(&url)
+            .json(&json!({
+                "chat_id": chat_id,
+                "text": trim_message(&render_forward_text(content), 3900),
+                "disable_web_page_preview": true
+            }))
+            .send()
+            .map_err(network_error)?;
+        if !response.status().is_success() {
+            return Err(AppError::Internal(format!(
+                "Telegram forward failed: HTTP {} {}",
+                response.status(),
+                response.text().unwrap_or_default()
+            )));
+        }
+        Ok(())
+    })
 }
 
-fn send_wecom(settings: &Settings, content: &ForwardContent) -> AppResult<()> {
+fn send_wecom(settings: &Settings, content: &ForwardContent, proxy_chain: &[String]) -> AppResult<()> {
     let webhook = settings.forward_wecom_webhook.trim();
     if webhook.is_empty() {
         return Err(AppError::InvalidInput(
             "WeCom webhook is required".to_string(),
         ));
     }
-    let response = http_client()?
-        .post(webhook)
-        .json(&json!({
-            "msgtype": "markdown",
-            "markdown": {
-                "content": trim_message(&render_forward_markdown(content), 3900)
-            }
-        }))
-        .send()
-        .map_err(network_error)?;
-    if !response.status().is_success() {
-        return Err(AppError::Internal(format!(
-            "WeCom forward failed: HTTP {} {}",
-            response.status(),
-            response.text().unwrap_or_default()
-        )));
-    }
-    Ok(())
+    with_proxy_chain(proxy_chain, |client| {
+        let response = client
+            .post(webhook)
+            .json(&json!({
+                "msgtype": "markdown",
+                "markdown": {
+                    "content": trim_message(&render_forward_markdown(content), 3900)
+                }
+            }))
+            .send()
+            .map_err(network_error)?;
+        if !response.status().is_success() {
+            return Err(AppError::Internal(format!(
+                "WeCom forward failed: HTTP {} {}",
+                response.status(),
+                response.text().unwrap_or_default()
+            )));
+        }
+        Ok(())
+    })
 }
 
 fn http_client() -> AppResult<Client> {
-    Client::builder()
+    http_client_for_proxy(None)
+}
+
+fn http_client_for_proxy(proxy_url: Option<&str>) -> AppResult<Client> {
+    let mut builder = Client::builder()
         .timeout(Duration::from_secs(30))
-        .user_agent("OutlookEmailDesktop/0.1")
+        .user_agent("OutlookEmailDesktop/0.1");
+    if let Some(proxy_url) = proxy_url.filter(|value| !value.trim().is_empty()) {
+        let proxy = Proxy::all(proxy_url.trim())
+            .map_err(|err| AppError::InvalidInput(format!("invalid proxy URL {proxy_url}: {err}")))?;
+        builder = builder.proxy(proxy);
+    }
+    builder
         .build()
         .map_err(network_error)
+}
+
+fn with_proxy_chain<T>(proxy_chain: &[String], operation: impl Fn(&Client) -> AppResult<T>) -> AppResult<T> {
+    if proxy_chain.is_empty() {
+        let client = http_client()?;
+        return operation(&client);
+    }
+
+    let mut last_error = String::new();
+    for proxy_url in proxy_chain {
+        let client = http_client_for_proxy(Some(proxy_url))?;
+        match operation(&client) {
+            Ok(value) => return Ok(value),
+            Err(err) => last_error = format!("{err}"),
+        }
+    }
+    Err(AppError::Internal(format!(
+        "all proxy attempts failed for forwarding request: {}",
+        if last_error.is_empty() { "unknown network error" } else { last_error.as_str() }
+    )))
 }
 
 fn network_error(err: reqwest::Error) -> AppError {

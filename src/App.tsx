@@ -106,8 +106,8 @@ function App() {
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const selectedMessage = messages.find((message) => message.id === selectedMessageId);
   const selectedTempMessage = tempMessages.find((message) => message.message_id === selectedTempMessageId);
-  const railIdentity = selectedAccount?.email ?? accounts[0]?.email ?? "本地工作区";
-  const railInitial = railIdentity === "本地工作区" ? "本" : railIdentity.slice(0, 1).toUpperCase();
+  const railIdentity = selectedAccount?.email ?? accounts[0]?.email ?? "设置";
+  const railInitial = railIdentity === "设置" ? "设" : railIdentity.slice(0, 1).toUpperCase();
   const filteredAccounts = useMemo(() => {
     if (selectedGroupId === "all") return accounts;
     return accounts.filter((account) => account.group_id === selectedGroupId);
@@ -316,7 +316,7 @@ function App() {
                 }}
               >
                 <SettingsIcon size={18} />
-                <span>设置</span>
+                <span>配置</span>
               </button>
               <div className="railMenuDivider" />
               <button
@@ -342,7 +342,7 @@ function App() {
             <span className="railAvatar">{railInitial}</span>
             <span className="railAccountText">
               <strong>{railIdentity}</strong>
-              <small>本地工作区</small>
+              <small>设置</small>
             </span>
             {railMenuOpen ? <ChevronDown className="railAccountChevron" size={16} /> : <ChevronUp className="railAccountChevron" size={16} />}
           </button>
@@ -679,7 +679,7 @@ function App() {
               runAction(async () => {
                 setSettings(await api.updateSettings(nextSettings));
                 await loadAutomation();
-              }, "设置已保存")
+              }, "配置已保存")
             }
             onRunForwarding={() =>
               runAction(async () => {
@@ -2138,7 +2138,7 @@ function SettingsView({
     <section className="settingsGrid">
       <div className="panel">
         <div className="panelHeader">
-          <h2>服务商设置</h2>
+          <h2>服务商配置</h2>
           <SettingsIcon size={18} />
         </div>
         <Field label="Microsoft Graph 客户端 ID" value={draft.graph_client_id} onChange={(value) => setField("graph_client_id", value)} />
@@ -2283,7 +2283,7 @@ function SettingsView({
         </div>
         <button className="button primary" disabled={busy} onClick={() => onSave(draft)}>
           {busy ? <Loader2 className="spin" size={16} /> : <SettingsIcon size={16} />}
-          保存设置
+          保存配置
         </button>
       </div>
 

@@ -794,6 +794,7 @@ impl Database {
                   AND latest.status IN ('pending', 'failed')
                   AND latest.account_id = m.account_id
                   AND latest.message_id = m.provider_message_id
+                  AND (latest.channel = '' OR latest.channel = m.folder)
                 ORDER BY latest.id DESC
                 LIMIT 1
             )
@@ -944,6 +945,7 @@ impl Database {
         let sync_remote = input.sync_remote.unwrap_or(true);
         let mut failed = 0_usize;
         let mut errors = Vec::new();
+        let mut failed_local_ids = HashSet::new();
         if sync_remote {
             for target in &targets {
                 if let Err(err) = self.sync_remote_delete_message(target) {
@@ -951,15 +953,27 @@ impl Database {
                     let error = err.to_string();
                     errors.push(format!("#{} {}: {}", target.id, target.provider_message_id, error));
                     self.enqueue_mail_delete_retry(target, &error)?;
+                    failed_local_ids.insert(target.id);
+                } else {
+                    self.clear_mail_delete_retry(target)?;
                 }
             }
         }
 
         let mut changed = 0_usize;
         for id in &ids {
-            changed += self
+            if failed_local_ids.contains(id) {
+                continue;
+            }
+            let deleted = self
                 .conn
                 .execute("DELETE FROM retained_mail_messages WHERE id = ?", [id])?;
+            changed += deleted;
+            if deleted > 0 {
+                if let Some(target) = targets.iter().find(|target| target.id == *id) {
+                    self.clear_mail_delete_retry(target)?;
+                }
+            }
         }
 
         self.audit("mail.deleted", "message", None, &format!("{} message(s)", changed))?;
@@ -3232,7 +3246,7 @@ impl Database {
             Some(target.account_id),
             &target.account_email,
             &target.provider_message_id,
-            "",
+            &target.folder,
             action,
             serde_json::json!({
                 "account_id": target.account_id,
@@ -3251,7 +3265,7 @@ impl Database {
             Some(target.account_id),
             &target.account_email,
             &target.provider_message_id,
-            "",
+            &target.folder,
             "delete",
             serde_json::json!({
                 "account_id": target.account_id,
@@ -3841,7 +3855,9 @@ impl Database {
             folder: payload.folder.clone(),
             provider_message_id: payload.provider_message_id.clone(),
         };
-        self.sync_remote_delete_message(&target)
+        self.sync_remote_delete_message(&target)?;
+        self.delete_cached_mail_message(&target)?;
+        Ok(())
     }
 
     fn retry_forward_message(&self, payload: &ForwardRetryPayload) -> AppResult<()> {
@@ -3965,6 +3981,34 @@ impl Database {
               AND action = 'refresh'
             ",
             params![account_id, folder],
+        )?;
+        Ok(())
+    }
+
+    fn clear_mail_delete_retry(&self, target: &MailMessageRef) -> AppResult<()> {
+        self.conn.execute(
+            "
+            DELETE FROM retry_queue
+            WHERE task_type = 'mail_delete'
+              AND account_id = ?
+              AND message_id = ?
+              AND (channel = '' OR channel = ?)
+              AND action = 'delete'
+            ",
+            params![target.account_id, target.provider_message_id, target.folder],
+        )?;
+        Ok(())
+    }
+
+    fn delete_cached_mail_message(&self, target: &MailMessageRef) -> AppResult<()> {
+        self.conn.execute(
+            "
+            DELETE FROM retained_mail_messages
+            WHERE account_id = ?
+              AND folder = ?
+              AND provider_message_id = ?
+            ",
+            params![target.account_id, target.folder, target.provider_message_id],
         )?;
         Ok(())
     }
@@ -4742,7 +4786,7 @@ fn remote_sync_failure_from_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Re
 
 #[cfg(test)]
 mod project_tests {
-    use super::{backup_dir, normalize_project_key, Database};
+    use super::{backup_dir, normalize_project_key, Database, MailMessageRef};
     use crate::models::{
         AutomationRunQuery, ClaimProjectAccountInput, ClearAutomationRunsInput,
         AttachmentInfo, CreateProjectInput, DeleteMailMessagesInput, DownloadAttachmentInput,
@@ -5227,6 +5271,141 @@ mod project_tests {
             .expect("messages after dismiss")[0]
             .remote_sync_failure
             .is_none());
+    }
+
+    #[test]
+    fn failed_remote_delete_keeps_message_visible_until_retry_success() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "
+                INSERT INTO accounts (id, email, status, group_id, provider, account_type)
+                VALUES (1, 'one@example.com', 'active', 1, 'imap', 'imap')
+                ",
+                [],
+            )
+            .expect("insert account");
+        db.conn
+            .execute(
+                "
+                INSERT INTO retained_mail_messages
+                (id, account_id, folder, provider_message_id, subject, received_at, received_at_sort, is_read)
+                VALUES (10, 1, 'inbox', '42', 'Hello', '2026-01-01T00:00:00Z', 1, 0)
+                ",
+                [],
+            )
+            .expect("insert message");
+
+        let deleted = db
+            .delete_mail_messages(DeleteMailMessagesInput {
+                message_ids: vec![10],
+                sync_remote: Some(true),
+            })
+            .expect("delete with remote failure");
+        assert!(!deleted.success);
+        assert_eq!(deleted.refreshed, 0);
+        assert_eq!(deleted.failed, 1);
+
+        let queued = db
+            .list_retry_queue(RetryQueueQuery::default())
+            .expect("retry queue");
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].task_type, "mail_delete");
+        assert_eq!(queued[0].action, "delete");
+        assert_eq!(queued[0].channel, "inbox");
+
+        let messages = db
+            .list_messages_query(MailMessageQuery {
+                account_id: Some(1),
+                folder: Some("inbox".to_string()),
+                ..MailMessageQuery::default()
+            })
+            .expect("messages after failed delete");
+        assert_eq!(messages.len(), 1);
+        let failure = messages[0]
+            .remote_sync_failure
+            .as_ref()
+            .expect("delete failure");
+        assert_eq!(failure.retry_id, queued[0].id);
+        assert_eq!(failure.task_type, "mail_delete");
+        assert_eq!(failure.action, "delete");
+
+        db.dismiss_retry_item(RetryQueueItemInput {
+            retry_id: queued[0].id,
+        })
+        .expect("dismiss");
+        assert!(db
+            .list_messages_query(MailMessageQuery {
+                account_id: Some(1),
+                folder: Some("inbox".to_string()),
+                ..MailMessageQuery::default()
+            })
+            .expect("messages after dismiss")[0]
+            .remote_sync_failure
+            .is_none());
+    }
+
+    #[test]
+    fn successful_delete_retry_removes_cached_message() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "INSERT INTO accounts (id, email, status, group_id) VALUES (1, 'one@example.com', 'active', 1)",
+                [],
+            )
+            .expect("insert account");
+        db.conn
+            .execute(
+                "
+                INSERT INTO retained_mail_messages
+                (id, account_id, folder, provider_message_id, subject, received_at, received_at_sort, is_read)
+                VALUES (10, 1, 'inbox', 'local-demo-delete', 'Hello', '2026-01-01T00:00:00Z', 1, 0)
+                ",
+                [],
+            )
+            .expect("insert message");
+        let target = MailMessageRef {
+            id: 10,
+            account_id: 1,
+            account_email: "one@example.com".to_string(),
+            folder: "inbox".to_string(),
+            provider_message_id: "local-demo-delete".to_string(),
+        };
+        db.enqueue_mail_delete_retry(&target, "previous remote failure")
+            .expect("enqueue retry");
+        let queued = db
+            .list_retry_queue(RetryQueueQuery::default())
+            .expect("retry queue");
+        assert_eq!(queued.len(), 1);
+
+        let retried = db
+            .run_retry_queue(Some(RetryQueueRunInput {
+                retry_id: Some(queued[0].id),
+                limit: None,
+            }))
+            .expect("retry delete");
+        assert!(retried.success);
+        assert_eq!(retried.refreshed, 1);
+        assert!(db
+            .list_messages_query(MailMessageQuery {
+                account_id: Some(1),
+                folder: Some("inbox".to_string()),
+                ..MailMessageQuery::default()
+            })
+            .expect("messages after retry")
+            .is_empty());
     }
 
     #[test]

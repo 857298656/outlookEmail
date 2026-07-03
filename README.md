@@ -63,7 +63,7 @@ Graph accounts need a Microsoft client ID and OAuth callback URL. Generate the a
 
 IMAP accounts need host, port, and password fields. The IMAP implementation supports TLS password login, caches recent messages in SQLite, stores raw RFC822 MIME for synced messages, and downloads attachments by extracting them from the local cached MIME.
 
-The Mailbox view supports cached-message search, field tokens such as `from:`, `to:`, `subject:`, `body:`, `folder:`, `is:`, and `has:`, read/unread filtering, attachment filtering, multi-field sorting, pagination, sandboxed HTML body rendering, single-message actions, and batch read/unread/delete actions. Graph and IMAP message actions update the local SQLite cache and attempt remote synchronization. Failed remote mark/delete attempts are surfaced on affected messages and queued for manual or scheduled retry.
+The Mailbox view supports cached-message search, field tokens such as `from:`, `to:`, `subject:`, `body:`, `folder:`, `is:`, and `has:`, read/unread filtering, attachment filtering, multi-field sorting, pagination, sandboxed HTML body rendering, single-message actions, and batch read/unread/delete actions. Graph and IMAP message actions update the local SQLite cache and attempt remote synchronization. Failed remote mark/delete attempts are surfaced on affected messages and queued for manual or scheduled retry; failed deletes keep the cached message visible until the remote delete retry succeeds.
 
 ## Local exports
 

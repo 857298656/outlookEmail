@@ -1,4 +1,5 @@
 import {
+  Activity,
   Archive,
   CheckCircle2,
   ChevronDown,
@@ -34,6 +35,7 @@ import { parseAccountRows } from "./lib/importParser";
 import type {
   Account,
   AppStatus,
+  AutomationObservability,
   AutomationRun,
   AutomationRunQuery,
   BackupLog,
@@ -59,7 +61,7 @@ import type {
   CloudflareChannel
 } from "./types";
 
-type View = "mail" | "accounts" | "refresh" | "temp" | "projects" | "settings";
+type View = "mail" | "accounts" | "refresh" | "automation" | "temp" | "projects" | "settings";
 type MailFilters = {
   search: string;
   readState: "all" | "read" | "unread";
@@ -88,6 +90,7 @@ function App() {
   const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
   const [retryQueue, setRetryQueue] = useState<RetryQueueItem[]>([]);
   const [refreshLogs, setRefreshLogs] = useState<RefreshLog[]>([]);
+  const [automationObservability, setAutomationObservability] = useState<AutomationObservability | null>(null);
   const [localRetention, setLocalRetention] = useState<LocalRetentionSummary | null>(null);
   const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<number | "all">("all");
@@ -211,6 +214,7 @@ function App() {
       nextRetryQueue,
       nextRefreshLogs,
       nextSchedulerStatus,
+      nextAutomationObservability,
       nextLocalRetention
     ] = await Promise.all([
       api.getSettings(),
@@ -220,6 +224,7 @@ function App() {
       api.listRetryQueue({}, 80),
       api.listRefreshLogs(null, 100),
       api.schedulerStatus(),
+      api.getAutomationObservability(),
       api.getLocalRetentionSummary()
     ]);
     setSettings(nextSettings);
@@ -229,6 +234,7 @@ function App() {
     setRetryQueue(nextRetryQueue);
     setRefreshLogs(nextRefreshLogs);
     setSchedulerStatus(nextSchedulerStatus);
+    setAutomationObservability(nextAutomationObservability);
     setLocalRetention(nextLocalRetention);
   }
 
@@ -346,6 +352,16 @@ function App() {
           }}
         >
           <RefreshCw size={20} />
+        </IconButton>
+        <IconButton
+          active={view === "automation"}
+          title="自动化"
+          onClick={() => {
+            setView("automation");
+            setRailMenuOpen(false);
+          }}
+        >
+          <Activity size={20} />
         </IconButton>
         <IconButton
           active={view === "temp"}
@@ -703,6 +719,53 @@ function App() {
                 await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
                 await loadAutomation();
                 await loadStatus();
+              })
+            }
+            onRunRetryQueue={() =>
+              runAction(async () => {
+                const result = await api.runRetryQueue(20);
+                setNotice(formatResultMessage(result.message));
+                await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
+                await loadAutomation();
+              })
+            }
+            onRetryQueueItem={(retryId) =>
+              runAction(async () => {
+                const result = await api.retryQueueItem(retryId);
+                setNotice(formatResultMessage(result.message));
+                await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
+                await loadAutomation();
+              })
+            }
+            onDismissRetryItem={(retryId) =>
+              runAction(async () => {
+                const result = await api.dismissRetryItem(retryId);
+                setNotice(formatResultMessage(result.message));
+                await loadAutomation();
+              })
+            }
+          />
+        )}
+
+        {view === "automation" && (
+          <AutomationDashboardView
+            observability={automationObservability}
+            automationRuns={automationRuns}
+            retryQueue={retryQueue}
+            schedulerStatus={schedulerStatus}
+            busy={busy}
+            onFilterAutomationRuns={(query) =>
+              runAction(async () => {
+                setAutomationRuns(await api.listAutomationRuns(query, 80));
+                setAutomationObservability(await api.getAutomationObservability());
+              })
+            }
+            onClearAutomationRuns={(query) =>
+              runAction(async () => {
+                const result = await api.clearAutomationRuns(query);
+                setNotice(formatResultMessage(result.message));
+                setAutomationRuns(await api.listAutomationRuns(query, 80));
+                setAutomationObservability(await api.getAutomationObservability());
               })
             }
             onRunRetryQueue={() =>
@@ -3391,6 +3454,293 @@ function AccountEditor({
   );
 }
 
+function AutomationDashboardView({
+  observability,
+  automationRuns,
+  retryQueue,
+  schedulerStatus,
+  busy,
+  onFilterAutomationRuns,
+  onClearAutomationRuns,
+  onRunRetryQueue,
+  onRetryQueueItem,
+  onDismissRetryItem
+}: {
+  observability: AutomationObservability | null;
+  automationRuns: AutomationRun[];
+  retryQueue: RetryQueueItem[];
+  schedulerStatus: SchedulerStatus | null;
+  busy: boolean;
+  onFilterAutomationRuns: (query: AutomationRunQuery) => void;
+  onClearAutomationRuns: (query: AutomationRunQuery & { clear_all?: boolean }) => void;
+  onRunRetryQueue: () => void;
+  onRetryQueueItem: (retryId: number) => void;
+  onDismissRetryItem: (retryId: number) => void;
+}) {
+  const [runFilters, setRunFilters] = useState({ job_type: "all", trigger_type: "all", status: "all", search: "" });
+
+  function automationRunQuery(): AutomationRunQuery {
+    return {
+      job_type: runFilters.job_type === "all" ? undefined : runFilters.job_type,
+      trigger_type: runFilters.trigger_type === "all" ? undefined : runFilters.trigger_type,
+      status: runFilters.status === "all" ? undefined : runFilters.status,
+      search: runFilters.search.trim() || undefined
+    };
+  }
+
+  return (
+    <section className="settingsGrid automationDashboard">
+      <div className="panel widePanel">
+        <div className="panelHeader">
+          <h2>自动化仪表盘</h2>
+          <Activity size={18} />
+        </div>
+        {observability ? (
+          <>
+            <div className="statStrip observabilityStrip">
+              <Stat label="任务记录" value={observability.run_count} />
+              <Stat label="成功" value={observability.successful_run_count} />
+              <Stat label="失败" value={observability.failed_run_count} />
+              <Stat label="待重试" value={observability.retry_pending_count} />
+              <Stat label="到期重试" value={observability.retry_due_count} />
+              <Stat label="熔断通道" value={observability.open_circuit_count} />
+            </div>
+            <div className="runStatusGrid">
+              <RunStatus label="上次刷新" value={schedulerStatus?.last_refresh_at} />
+              <RunStatus label="上次转发" value={schedulerStatus?.last_forwarding_at} />
+              <RunStatus label="上次备份" value={schedulerStatus?.last_backup_at} />
+            </div>
+            <div className="automationSummaryGrid">
+              {observability.job_summaries.map((summary) => (
+                <div className="summaryTile" key={summary.job_type}>
+                  <div className="summaryTop">
+                    <strong>{formatAutomationJob(summary.job_type)}</strong>
+                    <StatusPill status={summary.failed > 0 ? "failed" : summary.total > 0 ? "success" : "never"} />
+                  </div>
+                  <div className="summaryStats">
+                    <span>{summary.total} 次</span>
+                    <span>{summary.success} 成功</span>
+                    <span>{summary.failed} 失败</span>
+                    <span>{formatDuration(summary.average_duration_ms)}</span>
+                  </div>
+                  <small>{summary.last_finished_at ? formatDate(summary.last_finished_at) : "从未运行"}</small>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <EmptyState icon={<Activity size={24} />} text="暂无自动化观测数据。" />
+        )}
+      </div>
+
+      <div className="panel widePanel">
+        <div className="panelHeader">
+          <h2>转发通道健康</h2>
+          <Mail size={18} />
+        </div>
+        <div className="logTable channelHealthTable">
+          <div className="logHeader">
+            <span>通道</span>
+            <span>状态</span>
+            <span>近期失败</span>
+            <span>待重试</span>
+            <span>熔断至</span>
+            <span>上次成功</span>
+            <span>错误</span>
+          </div>
+          {(observability?.channel_circuits ?? []).map((channel) => (
+            <div className="logRow" key={channel.channel}>
+              <span>{formatForwardingChannel(channel.channel)}</span>
+              <StatusPill status={channel.status} />
+              <span>{channel.recent_failures}</span>
+              <span>{channel.pending_retries}</span>
+              <span>{channel.open_until ? formatDate(channel.open_until) : "-"}</span>
+              <span>{channel.last_success_at ? formatDate(channel.last_success_at) : "-"}</span>
+              <span>{channel.last_error || "-"}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel widePanel">
+        <div className="panelHeader">
+          <h2>错误分类</h2>
+          <XCircle size={18} />
+        </div>
+        <div className="logTable errorBucketTable">
+          <div className="logHeader">
+            <span>类别</span>
+            <span>次数</span>
+            <span>最近时间</span>
+            <span>详情</span>
+          </div>
+          {(observability?.error_buckets ?? []).map((bucket) => (
+            <div className="logRow" key={bucket.category}>
+              <span>{formatErrorCategory(bucket.category)}</span>
+              <span>{bucket.count}</span>
+              <span>{bucket.latest_at ? formatDate(bucket.latest_at) : "-"}</span>
+              <span>{formatResultMessage(bucket.latest_message)}</span>
+            </div>
+          ))}
+        </div>
+        {observability?.error_buckets.length === 0 && <EmptyState icon={<CheckCircle2 size={24} />} text="最近没有失败错误。" />}
+      </div>
+
+      <div className="panel widePanel">
+        <div className="panelHeader">
+          <h2>重试退避</h2>
+          <RotateCcw size={18} />
+        </div>
+        <div className="automationSummaryGrid retrySummaryGrid">
+          {(observability?.retry_summaries ?? []).map((summary) => (
+            <div className="summaryTile" key={summary.task_type}>
+              <div className="summaryTop">
+                <strong>{formatRetryTaskType(summary.task_type)}</strong>
+                <StatusPill status={summary.failed > 0 ? "failed" : summary.pending > 0 ? "pending" : "success"} />
+              </div>
+              <div className="summaryStats">
+                <span>{summary.pending} 待处理</span>
+                <span>{summary.due} 到期</span>
+                <span>{summary.failed} 失败</span>
+                <span>{summary.exhausted} 耗尽</span>
+              </div>
+              <small>{summary.next_attempt_at ? `下次 ${formatDate(summary.next_attempt_at)}` : summary.last_error || "无待处理项"}</small>
+            </div>
+          ))}
+        </div>
+        <div className="tableActions">
+          <button className="button secondary" disabled={busy || retryQueue.length === 0} onClick={onRunRetryQueue}>
+            {busy ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />}
+            运行到期重试
+          </button>
+        </div>
+        <div className="logTable retryObservabilityTable">
+          <div className="logHeader">
+            <span>更新时间</span>
+            <span>任务</span>
+            <span>状态</span>
+            <span>错误类</span>
+            <span>次数</span>
+            <span>下次</span>
+            <span>错误</span>
+            <span>操作</span>
+          </div>
+          {retryQueue.map((item) => (
+            <div className="logRow" key={item.id}>
+              <span>{formatDate(item.updated_at)}</span>
+              <span>{formatRetryTask(item)}</span>
+              <StatusPill status={item.status} />
+              <span>{formatErrorCategory(item.error_category)}</span>
+              <span>{item.attempts} / {item.max_attempts}</span>
+              <span>{item.next_attempt_at ? `${formatDate(item.next_attempt_at)}（${formatRetryDelay(item)}）` : item.due_now ? "已到期" : "-"}</span>
+              <span>{item.error_message}</span>
+              <span className="rowActions">
+                <button className="iconMini" title="立即重试" disabled={busy} onClick={() => onRetryQueueItem(item.id)}>
+                  <RotateCcw size={14} />
+                </button>
+                <button className="iconMini danger" title="忽略" disabled={busy} onClick={() => onDismissRetryItem(item.id)}>
+                  <Trash2 size={14} />
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+        {retryQueue.length === 0 && <EmptyState icon={<RotateCcw size={24} />} text="暂无待处理重试项。" />}
+      </div>
+
+      <div className="panel widePanel">
+        <div className="panelHeader">
+          <h2>任务历史</h2>
+          <RefreshCw size={18} />
+        </div>
+        <div className="automationFilters">
+          <select
+            className="select"
+            value={runFilters.job_type}
+            onChange={(event) => setRunFilters({ ...runFilters, job_type: event.target.value })}
+          >
+            <option value="all">全部任务</option>
+            <option value="refresh">刷新</option>
+            <option value="forwarding">转发</option>
+            <option value="backup">备份</option>
+            <option value="retry">重试</option>
+          </select>
+          <select
+            className="select"
+            value={runFilters.trigger_type}
+            onChange={(event) => setRunFilters({ ...runFilters, trigger_type: event.target.value })}
+          >
+            <option value="all">全部触发</option>
+            <option value="manual">手动</option>
+            <option value="schedule">定时</option>
+          </select>
+          <select
+            className="select"
+            value={runFilters.status}
+            onChange={(event) => setRunFilters({ ...runFilters, status: event.target.value })}
+          >
+            <option value="all">全部状态</option>
+            <option value="success">成功</option>
+            <option value="failed">失败</option>
+          </select>
+          <input
+            className="input grow"
+            value={runFilters.search}
+            placeholder="搜索详情"
+            onChange={(event) => setRunFilters({ ...runFilters, search: event.target.value })}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onFilterAutomationRuns(automationRunQuery());
+            }}
+          />
+          <button className="button secondary" disabled={busy} onClick={() => onFilterAutomationRuns(automationRunQuery())}>
+            <Search size={16} />
+            应用
+          </button>
+          <button
+            className="button danger"
+            disabled={busy || automationRuns.length === 0}
+            onClick={() => {
+              const query = automationRunQuery();
+              const clearAll = !query.job_type && !query.trigger_type && !query.status && !query.search;
+              if (window.confirm(clearAll ? "确认清空全部自动化历史？" : "确认清理匹配的自动化历史？")) {
+                onClearAutomationRuns({ ...query, clear_all: clearAll });
+              }
+            }}
+          >
+            <Trash2 size={16} />
+            清理
+          </button>
+        </div>
+        <div className="logTable automationDashboardLogTable">
+          <div className="logHeader">
+            <span>时间</span>
+            <span>任务</span>
+            <span>触发</span>
+            <span>状态</span>
+            <span>错误类</span>
+            <span>数量</span>
+            <span>耗时</span>
+            <span>详情</span>
+          </div>
+          {automationRuns.map((run) => (
+            <div className="logRow" key={run.id}>
+              <span>{formatDate(run.finished_at)}</span>
+              <span>{formatAutomationJob(run.job_type)}</span>
+              <span>{formatAutomationTrigger(run.trigger_type)}</span>
+              <StatusPill status={run.status} />
+              <span>{formatErrorCategory(run.error_category)}</span>
+              <span>{run.refreshed} 成功 / {run.failed} 失败</span>
+              <span>{formatDuration(run.duration_ms)}</span>
+              <span>{formatResultMessage(run.message)}</span>
+            </div>
+          ))}
+        </div>
+        {automationRuns.length === 0 && <EmptyState icon={<RefreshCw size={24} />} text="暂无自动化运行记录。" />}
+      </div>
+    </section>
+  );
+}
+
 function SettingsView({
   status,
   settings,
@@ -4091,12 +4441,49 @@ function formatDuration(value: number) {
 
 function formatRetryTask(item: RetryQueueItem) {
   if (item.task_type === "mail_mark") return item.action === "mark_read" ? "标记已读" : "标记未读";
-  if (item.task_type === "mail_delete") return "删除邮件";
-  if (item.task_type === "forward_message") return "转发邮件";
-  if (item.task_type === "temp_refresh") return "刷新临时邮箱";
-  if (item.task_type === "refresh_account") return "刷新账号";
-  if (item.task_type === "backup_job") return "执行备份";
-  return item.task_type;
+  return formatRetryTaskType(item.task_type);
+}
+
+function formatRetryTaskType(taskType: string) {
+  if (taskType === "mail_mark") return "标记邮件";
+  if (taskType === "mail_delete") return "删除邮件";
+  if (taskType === "forward_message") return "转发邮件";
+  if (taskType === "temp_refresh") return "刷新临时邮箱";
+  if (taskType === "refresh_account") return "刷新账号";
+  if (taskType === "backup_job") return "执行备份";
+  return taskType;
+}
+
+function formatErrorCategory(category: string) {
+  const map: Record<string, string> = {
+    none: "-",
+    auth: "认证",
+    rate_limit: "限流",
+    network: "网络",
+    config: "配置",
+    storage: "存储",
+    data: "数据",
+    provider: "服务商",
+    unknown: "未知"
+  };
+  return map[category] ?? category;
+}
+
+function formatForwardingChannel(channel: string) {
+  const map: Record<string, string> = {
+    smtp: "SMTP",
+    telegram: "Telegram",
+    wecom: "企业微信",
+    preview: "预览"
+  };
+  return map[channel] ?? channel;
+}
+
+function formatRetryDelay(item: RetryQueueItem) {
+  if (item.due_now) return "已到期";
+  if (!item.next_delay_minutes) return "小于 1 分钟";
+  if (item.next_delay_minutes < 60) return `${item.next_delay_minutes} 分钟后`;
+  return `${(item.next_delay_minutes / 60).toFixed(1)} 小时后`;
 }
 
 function formatRemoteFailureAction(action: string) {
@@ -4114,6 +4501,11 @@ function formatStatus(status: string) {
     success: "成功",
     failed: "失败",
     pending: "待处理",
+    healthy: "健康",
+    degraded: "降级",
+    open: "熔断",
+    not_configured: "未配置",
+    none: "-",
     removed: "已移除",
     toClaim: "可领取",
     claimed: "已领取",
@@ -4185,6 +4577,12 @@ function formatResultMessage(message: string) {
 
   const refreshedTemp = message.match(/^Refreshed (\d+) temp message\(s\)$/);
   if (refreshedTemp) return `已刷新 ${refreshedTemp[1]} 条临时邮件`;
+
+  const forwardedWithCircuit = message.match(/^Forwarded (\d+) message channel\(s\), (\d+) failed, (\d+) circuit skipped: (.+)$/);
+  if (forwardedWithCircuit) {
+    const [, forwarded, failed, skipped, detail] = forwardedWithCircuit;
+    return `已转发 ${forwarded} 个消息通道，${failed} 个失败，${skipped} 个因熔断跳过：${detail}`;
+  }
 
   const forwardedWithFailures = message.match(/^Forwarded (\d+) message channel\(s\), (\d+) failed: (.+)$/);
   if (forwardedWithFailures) {

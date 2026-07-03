@@ -3,6 +3,7 @@ import type {
   Account,
   AccountSecretsPreview,
   AppStatus,
+  AutomationObservability,
   AutomationRun,
   AutomationRunQuery,
   BackupLog,
@@ -492,6 +493,8 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       return mockBackupLogs.slice(0, (args?.limit as number | undefined) ?? 100) as T;
     case "scheduler_status":
       return mockSchedulerStatus as T;
+    case "get_automation_observability":
+      return mockAutomationObservability() as T;
     case "list_refresh_logs": {
       const accountId = args?.accountId as number | undefined;
       const limit = (args?.limit as number | undefined) ?? 100;
@@ -854,6 +857,87 @@ function mockLocalRetentionSummary(): LocalRetentionSummary {
   };
 }
 
+function mockAutomationObservability(): AutomationObservability {
+  const runs = mockAutomationRuns.slice(0, 500);
+  const retryItems = mockRetryQueue.slice(0, 500);
+  const channelCircuits = ["smtp", "telegram", "wecom"].map((channel) => {
+    const configured =
+      (channel === "smtp" && !!mockSettings.forward_smtp_host && !!mockSettings.forward_smtp_to) ||
+      (channel === "telegram" && !!mockSettings.forward_telegram_bot_token && !!mockSettings.forward_telegram_chat_id) ||
+      (channel === "wecom" && !!mockSettings.forward_wecom_webhook);
+    const channelLogs = mockForwardingLogs.filter((log) => log.channel === channel);
+    const recentFailures = channelLogs.filter((log) => log.status === "failed").length;
+    const pendingRetries = retryItems.filter((item) => item.task_type === "forward_message" && item.channel === channel).length;
+    const open = configured && recentFailures + pendingRetries >= 3;
+    return {
+      channel,
+      configured,
+      status: configured ? (open ? "open" : recentFailures || pendingRetries ? "degraded" : "healthy") : "not_configured",
+      recent_failures: recentFailures + pendingRetries,
+      pending_retries: pendingRetries,
+      open_until: open ? new Date(Date.now() + 30 * 60 * 1000).toISOString() : null,
+      last_success_at: channelLogs.find((log) => log.status === "success")?.created_at ?? null,
+      last_failure_at: channelLogs.find((log) => log.status === "failed")?.created_at ?? null,
+      last_error: channelLogs.find((log) => log.status === "failed")?.error_message ?? ""
+    };
+  });
+  const errorBuckets = [...runs.filter((run) => run.status === "failed").map((run) => run.message), ...retryItems.map((item) => item.error_message)]
+    .filter(Boolean)
+    .reduce<AutomationObservability["error_buckets"]>((buckets, message) => {
+      const category = classifyMockError(message);
+      const current = buckets.find((bucket) => bucket.category === category);
+      if (current) {
+        current.count += 1;
+        current.latest_message = message;
+      } else {
+        buckets.push({ category, count: 1, latest_message: message, latest_at: new Date().toISOString() });
+      }
+      return buckets;
+    }, [])
+    .sort((left, right) => right.count - left.count);
+  return {
+    run_count: runs.length,
+    successful_run_count: runs.filter((run) => run.status === "success").length,
+    failed_run_count: runs.filter((run) => run.status === "failed").length,
+    scheduled_run_count: runs.filter((run) => run.trigger_type === "schedule").length,
+    manual_run_count: runs.filter((run) => run.trigger_type === "manual").length,
+    average_duration_ms: runs.length ? Math.round(runs.reduce((sum, run) => sum + run.duration_ms, 0) / runs.length) : 0,
+    retry_pending_count: retryItems.filter((item) => item.status === "pending").length,
+    retry_failed_count: retryItems.filter((item) => item.status === "failed").length,
+    retry_due_count: retryItems.filter((item) => item.status === "pending" && (item.due_now || !item.next_attempt_at)).length,
+    retry_exhausted_count: retryItems.filter((item) => item.status === "failed" || item.attempts >= item.max_attempts).length,
+    open_circuit_count: channelCircuits.filter((channel) => channel.status === "open").length,
+    job_summaries: ["refresh", "forwarding", "backup", "retry"].map((jobType) => {
+      const matching = runs.filter((run) => run.job_type === jobType);
+      return {
+        job_type: jobType,
+        total: matching.length,
+        success: matching.filter((run) => run.status === "success").length,
+        failed: matching.filter((run) => run.status === "failed").length,
+        scheduled: matching.filter((run) => run.trigger_type === "schedule").length,
+        manual: matching.filter((run) => run.trigger_type === "manual").length,
+        average_duration_ms: matching.length ? Math.round(matching.reduce((sum, run) => sum + run.duration_ms, 0) / matching.length) : 0,
+        last_finished_at: matching[0]?.finished_at ?? null,
+        latest_message: matching[0]?.message ?? ""
+      };
+    }),
+    retry_summaries: ["mail_mark", "mail_delete", "forward_message", "temp_refresh", "refresh_account", "backup_job"].map((taskType) => {
+      const matching = retryItems.filter((item) => item.task_type === taskType);
+      return {
+        task_type: taskType,
+        pending: matching.filter((item) => item.status === "pending").length,
+        failed: matching.filter((item) => item.status === "failed").length,
+        due: matching.filter((item) => item.status === "pending" && (item.due_now || !item.next_attempt_at)).length,
+        exhausted: matching.filter((item) => item.status === "failed" || item.attempts >= item.max_attempts).length,
+        next_attempt_at: matching.find((item) => item.next_attempt_at)?.next_attempt_at ?? null,
+        last_error: matching.find((item) => item.error_message)?.error_message ?? ""
+      };
+    }),
+    error_buckets: errorBuckets,
+    channel_circuits: channelCircuits
+  };
+}
+
 function mockExport(fileName: string, itemCount: number): ExportResult {
   return {
     path: `browser-preview/exports/${fileName}`,
@@ -871,6 +955,7 @@ function recordMockAutomationRun(jobType: string, triggerType: string, result: J
       job_type: jobType,
       trigger_type: triggerType,
       status: result.success ? "success" : "failed",
+      error_category: result.success ? "none" : classifyMockError(result.message),
       message: result.message,
       refreshed: result.refreshed,
       failed: result.failed,
@@ -898,6 +983,19 @@ function matchesAutomationRun(run: AutomationRun, query: AutomationRunQuery) {
     (!query.status || query.status === "all" || run.status === query.status) &&
     (!search || text.includes(search))
   );
+}
+
+function classifyMockError(message: string) {
+  const value = message.toLowerCase();
+  if (!value.trim()) return "none";
+  if (value.includes("auth") || value.includes("token") || value.includes("password") || value.includes("unauthorized")) return "auth";
+  if (value.includes("429") || value.includes("rate limit") || value.includes("throttle")) return "rate_limit";
+  if (value.includes("timeout") || value.includes("connection") || value.includes("proxy") || value.includes("network")) return "network";
+  if (value.includes("required") || value.includes("missing") || value.includes("configure")) return "config";
+  if (value.includes("sqlite") || value.includes("database") || value.includes("backup")) return "storage";
+  if (value.includes("invalid") || value.includes("parse") || value.includes("not found")) return "data";
+  if (value.includes("smtp") || value.includes("telegram") || value.includes("wecom") || value.includes("webdav")) return "provider";
+  return "unknown";
 }
 
 function filterMockMessages(args?: Record<string, unknown>) {
@@ -1173,6 +1271,7 @@ export const api = {
   listForwardingLogs: (limit = 100) => call<ForwardingLog[]>("list_forwarding_logs", { limit }),
   listBackupLogs: (limit = 100) => call<BackupLog[]>("list_backup_logs", { limit }),
   schedulerStatus: () => call<SchedulerStatus>("scheduler_status"),
+  getAutomationObservability: () => call<AutomationObservability>("get_automation_observability"),
   listRefreshLogs: (accountId?: number | null, limit = 100) =>
     call<RefreshLog[]>("list_refresh_logs", { accountId: accountId ?? null, limit }),
   listAutomationRuns: (query: AutomationRunQuery = {}, limit = 100) =>

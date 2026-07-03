@@ -342,6 +342,12 @@ pub fn scheduler_status(state: State<'_, AppState>) -> AppResult<SchedulerStatus
 }
 
 #[tauri::command]
+pub fn get_automation_observability(state: State<'_, AppState>) -> AppResult<AutomationObservability> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.get_automation_observability()
+}
+
+#[tauri::command]
 pub fn list_refresh_logs(
     state: State<'_, AppState>,
     account_id: Option<i64>,

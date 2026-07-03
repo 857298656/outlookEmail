@@ -80,6 +80,7 @@ pub fn run() {
             list_forwarding_logs,
             list_backup_logs,
             scheduler_status,
+            get_automation_observability,
             list_refresh_logs,
             list_automation_runs,
             clear_automation_runs,

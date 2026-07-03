@@ -245,11 +245,71 @@ export type SchedulerStatus = {
   last_backup_at: string | null;
 };
 
+export type AutomationObservability = {
+  run_count: number;
+  successful_run_count: number;
+  failed_run_count: number;
+  scheduled_run_count: number;
+  manual_run_count: number;
+  average_duration_ms: number;
+  retry_pending_count: number;
+  retry_failed_count: number;
+  retry_due_count: number;
+  retry_exhausted_count: number;
+  open_circuit_count: number;
+  job_summaries: AutomationJobSummary[];
+  retry_summaries: RetryTaskSummary[];
+  error_buckets: AutomationErrorBucket[];
+  channel_circuits: ForwardingChannelCircuit[];
+};
+
+export type AutomationJobSummary = {
+  job_type: string;
+  total: number;
+  success: number;
+  failed: number;
+  scheduled: number;
+  manual: number;
+  average_duration_ms: number;
+  last_finished_at: string | null;
+  latest_message: string;
+};
+
+export type RetryTaskSummary = {
+  task_type: string;
+  pending: number;
+  failed: number;
+  due: number;
+  exhausted: number;
+  next_attempt_at: string | null;
+  last_error: string;
+};
+
+export type AutomationErrorBucket = {
+  category: string;
+  count: number;
+  latest_message: string;
+  latest_at: string | null;
+};
+
+export type ForwardingChannelCircuit = {
+  channel: string;
+  configured: boolean;
+  status: string;
+  recent_failures: number;
+  pending_retries: number;
+  open_until: string | null;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  last_error: string;
+};
+
 export type AutomationRun = {
   id: number;
   job_type: string;
   trigger_type: string;
   status: string;
+  error_category: string;
   message: string;
   refreshed: number;
   failed: number;
@@ -287,8 +347,11 @@ export type RetryQueueItem = {
   action: string;
   payload_json: string;
   error_message: string;
+  error_category: string;
   attempts: number;
   max_attempts: number;
+  due_now: boolean;
+  next_delay_minutes: number;
   next_attempt_at: string | null;
   last_attempt_at: string | null;
   created_at: string;

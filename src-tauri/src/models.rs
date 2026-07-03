@@ -283,11 +283,76 @@ pub struct SchedulerStatus {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AutomationObservability {
+    pub run_count: i64,
+    pub successful_run_count: i64,
+    pub failed_run_count: i64,
+    pub scheduled_run_count: i64,
+    pub manual_run_count: i64,
+    pub average_duration_ms: i64,
+    pub retry_pending_count: i64,
+    pub retry_failed_count: i64,
+    pub retry_due_count: i64,
+    pub retry_exhausted_count: i64,
+    pub open_circuit_count: i64,
+    pub job_summaries: Vec<AutomationJobSummary>,
+    pub retry_summaries: Vec<RetryTaskSummary>,
+    pub error_buckets: Vec<AutomationErrorBucket>,
+    pub channel_circuits: Vec<ForwardingChannelCircuit>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AutomationJobSummary {
+    pub job_type: String,
+    pub total: i64,
+    pub success: i64,
+    pub failed: i64,
+    pub scheduled: i64,
+    pub manual: i64,
+    pub average_duration_ms: i64,
+    pub last_finished_at: Option<String>,
+    pub latest_message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RetryTaskSummary {
+    pub task_type: String,
+    pub pending: i64,
+    pub failed: i64,
+    pub due: i64,
+    pub exhausted: i64,
+    pub next_attempt_at: Option<String>,
+    pub last_error: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AutomationErrorBucket {
+    pub category: String,
+    pub count: i64,
+    pub latest_message: String,
+    pub latest_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ForwardingChannelCircuit {
+    pub channel: String,
+    pub configured: bool,
+    pub status: String,
+    pub recent_failures: i64,
+    pub pending_retries: i64,
+    pub open_until: Option<String>,
+    pub last_success_at: Option<String>,
+    pub last_failure_at: Option<String>,
+    pub last_error: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct AutomationRun {
     pub id: i64,
     pub job_type: String,
     pub trigger_type: String,
     pub status: String,
+    pub error_category: String,
     pub message: String,
     pub refreshed: i64,
     pub failed: i64,
@@ -319,8 +384,11 @@ pub struct RetryQueueItem {
     pub action: String,
     pub payload_json: String,
     pub error_message: String,
+    pub error_category: String,
     pub attempts: i64,
     pub max_attempts: i64,
+    pub due_now: bool,
+    pub next_delay_minutes: i64,
     pub next_attempt_at: Option<String>,
     pub last_attempt_at: Option<String>,
     pub created_at: String,

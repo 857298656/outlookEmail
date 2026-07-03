@@ -1778,6 +1778,7 @@ impl Database {
                 "configure at least one forwarding channel first".to_string(),
             ));
         }
+        let channel_circuits = self.forwarding_channel_circuits(&settings)?;
         let account_id = input.as_ref().and_then(|value| value.account_id);
         let limit = input
             .as_ref()
@@ -1794,6 +1795,7 @@ impl Database {
         let mut forwarded = 0_usize;
         let mut failed = 0_usize;
         let mut skipped = 0_usize;
+        let mut circuit_skipped = 0_usize;
         let mut errors = Vec::new();
 
         for (account_id, account_email) in accounts {
@@ -1801,6 +1803,14 @@ impl Database {
             let proxy_chain = self.proxy_chain_for_account(account_id)?;
             for message in messages {
                 for channel in &channels {
+                    if let Some(circuit) = channel_circuits.iter().find(|item| item.channel == *channel && item.status == "open") {
+                        circuit_skipped += 1;
+                        let error = forwarding_circuit_error(circuit);
+                        if !errors.iter().any(|item| item == &error) {
+                            errors.push(error);
+                        }
+                        continue;
+                    }
                     if self.forward_success_exists(account_id, &message.message_id, channel)? {
                         skipped += 1;
                         continue;
@@ -1844,20 +1854,20 @@ impl Database {
             "forwarding.job",
             "forwarding",
             None,
-            &format!("{forwarded} success, {failed} failed, {skipped} skipped"),
+            &format!("{forwarded} success, {failed} failed, {skipped} skipped, {circuit_skipped} circuit skipped"),
         )?;
         Ok(JobResult {
-            success: failed == 0,
+            success: failed == 0 && circuit_skipped == 0,
             message: if errors.is_empty() {
                 format!("Forwarded {forwarded} message channel(s), skipped {skipped}")
             } else {
                 format!(
-                    "Forwarded {forwarded} message channel(s), {failed} failed: {}",
+                    "Forwarded {forwarded} message channel(s), {failed} failed, {circuit_skipped} circuit skipped: {}",
                     errors.join("; ")
                 )
             },
             refreshed: forwarded,
-            failed,
+            failed: failed + circuit_skipped,
         })
     }
 
@@ -2378,6 +2388,96 @@ impl Database {
             last_refresh_at: self.get_config("scheduler_last_refresh_at")?,
             last_forwarding_at: self.get_config("scheduler_last_forwarding_at")?,
             last_backup_at: self.get_config("scheduler_last_backup_at")?,
+        })
+    }
+
+    pub fn get_automation_observability(&self) -> AppResult<AutomationObservability> {
+        self.require_unlocked()?;
+        let runs = self.list_automation_runs_query(AutomationRunQuery {
+            limit: Some(500),
+            ..AutomationRunQuery::default()
+        })?;
+        let retry_items = self.list_retry_queue(RetryQueueQuery {
+            limit: Some(500),
+            ..RetryQueueQuery::default()
+        })?;
+        let settings = self.get_settings()?;
+        let channel_circuits = self.forwarding_channel_circuits(&settings)?;
+
+        let run_count = runs.len() as i64;
+        let successful_run_count = runs.iter().filter(|run| run.status == "success").count() as i64;
+        let failed_run_count = runs.iter().filter(|run| run.status == "failed").count() as i64;
+        let scheduled_run_count = runs.iter().filter(|run| run.trigger_type == "schedule").count() as i64;
+        let manual_run_count = runs.iter().filter(|run| run.trigger_type == "manual").count() as i64;
+        let average_duration_ms = average_i64(runs.iter().map(|run| run.duration_ms), run_count);
+        let retry_pending_count = retry_items.iter().filter(|item| item.status == "pending").count() as i64;
+        let retry_failed_count = retry_items.iter().filter(|item| item.status == "failed").count() as i64;
+        let retry_due_count = retry_items
+            .iter()
+            .filter(|item| item.status == "pending" && item.due_now)
+            .count() as i64;
+        let retry_exhausted_count = retry_items
+            .iter()
+            .filter(|item| item.status == "failed" || item.attempts >= item.max_attempts)
+            .count() as i64;
+        let open_circuit_count = channel_circuits
+            .iter()
+            .filter(|channel| channel.status == "open")
+            .count() as i64;
+
+        let job_summaries = ["refresh", "forwarding", "backup", "retry"]
+            .iter()
+            .map(|job_type| automation_job_summary(&runs, job_type))
+            .collect();
+        let retry_summaries = [
+            "mail_mark",
+            "mail_delete",
+            "forward_message",
+            "temp_refresh",
+            "refresh_account",
+            "backup_job",
+        ]
+        .iter()
+        .map(|task_type| retry_task_summary(&retry_items, task_type))
+        .collect();
+        let mut error_buckets = Vec::new();
+        for run in runs.iter().filter(|run| run.status == "failed") {
+            push_error_bucket(
+                &mut error_buckets,
+                &run.error_category,
+                &run.message,
+                Some(run.finished_at.as_str()),
+                run.failed.max(1),
+            );
+        }
+        for item in retry_items.iter() {
+            push_error_bucket(
+                &mut error_buckets,
+                &item.error_category,
+                &item.error_message,
+                Some(item.updated_at.as_str()),
+                1,
+            );
+        }
+        error_buckets.sort_by(|left, right| right.count.cmp(&left.count).then_with(|| left.category.cmp(&right.category)));
+        error_buckets.truncate(8);
+
+        Ok(AutomationObservability {
+            run_count,
+            successful_run_count,
+            failed_run_count,
+            scheduled_run_count,
+            manual_run_count,
+            average_duration_ms,
+            retry_pending_count,
+            retry_failed_count,
+            retry_due_count,
+            retry_exhausted_count,
+            open_circuit_count,
+            job_summaries,
+            retry_summaries,
+            error_buckets,
+            channel_circuits,
         })
     }
 
@@ -4186,6 +4286,131 @@ impl Database {
         Ok(())
     }
 
+    fn forwarding_channel_circuits(&self, settings: &Settings) -> AppResult<Vec<ForwardingChannelCircuit>> {
+        ["smtp", "telegram", "wecom"]
+            .iter()
+            .map(|channel| self.forwarding_channel_circuit(channel, settings))
+            .collect()
+    }
+
+    fn forwarding_channel_circuit(&self, channel: &str, settings: &Settings) -> AppResult<ForwardingChannelCircuit> {
+        let configured = automation::configured_forward_channels(settings)
+            .iter()
+            .any(|configured_channel| *configured_channel == channel);
+        let since = sqlite_timestamp(Utc::now() - ChronoDuration::minutes(30));
+        let recent_log_failures: i64 = self.conn.query_row(
+            "
+            SELECT COUNT(*)
+            FROM forwarding_logs
+            WHERE channel = ?
+              AND status = 'failed'
+              AND datetime(created_at) >= datetime(?)
+            ",
+            params![channel, since],
+            |row| row.get(0),
+        )?;
+        let recent_retry_failures: i64 = self.conn.query_row(
+            "
+            SELECT COUNT(*)
+            FROM retry_queue
+            WHERE task_type = 'forward_message'
+              AND channel = ?
+              AND status IN ('pending', 'failed')
+              AND datetime(updated_at) >= datetime(?)
+            ",
+            params![channel, since],
+            |row| row.get(0),
+        )?;
+        let pending_retries: i64 = self.conn.query_row(
+            "
+            SELECT COUNT(*)
+            FROM retry_queue
+            WHERE task_type = 'forward_message'
+              AND channel = ?
+              AND status IN ('pending', 'failed')
+            ",
+            [channel],
+            |row| row.get(0),
+        )?;
+        let last_success_at = self
+            .conn
+            .query_row(
+                "
+                SELECT created_at
+                FROM forwarding_logs
+                WHERE channel = ? AND status = 'success'
+                ORDER BY id DESC
+                LIMIT 1
+                ",
+                [channel],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let log_failure = self
+            .conn
+            .query_row(
+                "
+                SELECT COALESCE(error_message, ''), created_at
+                FROM forwarding_logs
+                WHERE channel = ? AND status = 'failed'
+                ORDER BY id DESC
+                LIMIT 1
+                ",
+                [channel],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        let retry_failure = self
+            .conn
+            .query_row(
+                "
+                SELECT error_message, updated_at
+                FROM retry_queue
+                WHERE task_type = 'forward_message'
+                  AND channel = ?
+                  AND status IN ('pending', 'failed')
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                ",
+                [channel],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        let (last_error, last_failure_at) = latest_failure_detail(log_failure, retry_failure);
+        let recent_failures = recent_log_failures + recent_retry_failures;
+        let open_until = last_failure_at
+            .as_deref()
+            .and_then(parse_scheduler_timestamp)
+            .map(|value| (value + ChronoDuration::minutes(30)).to_rfc3339());
+        let is_open = configured
+            && recent_failures >= 3
+            && open_until
+                .as_deref()
+                .and_then(parse_scheduler_timestamp)
+                .is_some_and(|value| value > Utc::now());
+        let status = if !configured {
+            "not_configured"
+        } else if is_open {
+            "open"
+        } else if recent_failures > 0 || pending_retries > 0 {
+            "degraded"
+        } else {
+            "healthy"
+        };
+
+        Ok(ForwardingChannelCircuit {
+            channel: channel.to_string(),
+            configured,
+            status: status.to_string(),
+            recent_failures,
+            pending_retries,
+            open_until: if is_open { open_until } else { None },
+            last_success_at,
+            last_failure_at,
+            last_error,
+        })
+    }
+
     fn retry_queue_candidates(&self, input: RetryQueueRunInput) -> AppResult<Vec<RetryQueueItem>> {
         if let Some(retry_id) = input.retry_id {
             let mut stmt = self.conn.prepare(
@@ -4262,7 +4487,7 @@ impl Database {
         let next_attempt_at = if exhausted {
             None
         } else {
-            Some((Utc::now() + ChronoDuration::minutes(retry_delay_minutes(attempts))).to_rfc3339())
+            Some((Utc::now() + ChronoDuration::minutes(retry_delay_minutes_for_error(&item.task_type, attempts, error))).to_rfc3339())
         };
         self.conn.execute(
             "
@@ -4410,6 +4635,8 @@ impl Database {
     ) -> AppResult<()> {
         let payload_json = serde_json::to_string(&payload)
             .map_err(|err| AppError::Internal(format!("serialize retry payload failed: {err}")))?;
+        let max_attempts = retry_max_attempts_for_error(task_type, error);
+        let next_attempt_at = Some((Utc::now() + ChronoDuration::minutes(retry_delay_minutes_for_error(task_type, 1, error))).to_rfc3339());
         let account_key = account_id.unwrap_or(-1);
         let existing = self
             .conn
@@ -4438,18 +4665,20 @@ impl Database {
                     account_email = ?,
                     payload_json = ?,
                     error_message = ?,
+                    max_attempts = ?,
+                    next_attempt_at = COALESCE(next_attempt_at, ?),
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 ",
-                params![account_email, payload_json, error, id],
+                params![account_email, payload_json, error, max_attempts, next_attempt_at, id],
             )?;
         } else {
             self.conn.execute(
                 "
                 INSERT INTO retry_queue
                 (task_type, status, account_id, account_email, message_id, channel,
-                 action, payload_json, error_message, max_attempts)
-                VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, 5)
+                 action, payload_json, error_message, max_attempts, next_attempt_at)
+                VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ",
                 params![
                     task_type,
@@ -4459,7 +4688,9 @@ impl Database {
                     channel,
                     action,
                     payload_json,
-                    error
+                    error,
+                    max_attempts,
+                    next_attempt_at
                 ],
             )?;
         }
@@ -4903,6 +5134,10 @@ impl Database {
 
     fn retry_forward_message(&self, payload: &ForwardRetryPayload) -> AppResult<()> {
         let settings = self.get_settings()?;
+        let circuit = self.forwarding_channel_circuit(&payload.channel, &settings)?;
+        if circuit.status == "open" {
+            return Err(AppError::Internal(forwarding_circuit_error(&circuit)));
+        }
         if self.forward_success_exists(payload.account_id, &payload.message_id, &payload.channel)? {
             return Ok(());
         }
@@ -5220,12 +5455,273 @@ fn normalize_retry_value(value: Option<&str>, allowed: &[&str], field: &str) -> 
     )))
 }
 
+fn automation_job_summary(runs: &[AutomationRun], job_type: &str) -> AutomationJobSummary {
+    let matching = runs
+        .iter()
+        .filter(|run| run.job_type == job_type)
+        .collect::<Vec<_>>();
+    let total = matching.len() as i64;
+    let success = matching.iter().filter(|run| run.status == "success").count() as i64;
+    let failed = matching.iter().filter(|run| run.status == "failed").count() as i64;
+    let scheduled = matching.iter().filter(|run| run.trigger_type == "schedule").count() as i64;
+    let manual = matching.iter().filter(|run| run.trigger_type == "manual").count() as i64;
+    let average_duration_ms = average_i64(matching.iter().map(|run| run.duration_ms), total);
+    let latest = matching.first();
+    AutomationJobSummary {
+        job_type: job_type.to_string(),
+        total,
+        success,
+        failed,
+        scheduled,
+        manual,
+        average_duration_ms,
+        last_finished_at: latest.map(|run| run.finished_at.clone()),
+        latest_message: latest.map(|run| run.message.clone()).unwrap_or_default(),
+    }
+}
+
+fn retry_task_summary(items: &[RetryQueueItem], task_type: &str) -> RetryTaskSummary {
+    let matching = items
+        .iter()
+        .filter(|item| item.task_type == task_type)
+        .collect::<Vec<_>>();
+    let pending = matching.iter().filter(|item| item.status == "pending").count() as i64;
+    let failed = matching.iter().filter(|item| item.status == "failed").count() as i64;
+    let due = matching
+        .iter()
+        .filter(|item| item.status == "pending" && item.due_now)
+        .count() as i64;
+    let exhausted = matching
+        .iter()
+        .filter(|item| item.status == "failed" || item.attempts >= item.max_attempts)
+        .count() as i64;
+    let next_attempt_at = matching
+        .iter()
+        .filter_map(|item| item.next_attempt_at.as_ref())
+        .min_by(|left, right| compare_timestamps(left, right))
+        .cloned();
+    let last_error = matching
+        .iter()
+        .find(|item| !item.error_message.trim().is_empty())
+        .map(|item| item.error_message.clone())
+        .unwrap_or_default();
+    RetryTaskSummary {
+        task_type: task_type.to_string(),
+        pending,
+        failed,
+        due,
+        exhausted,
+        next_attempt_at,
+        last_error,
+    }
+}
+
+fn average_i64<I>(values: I, count: i64) -> i64
+where
+    I: Iterator<Item = i64>,
+{
+    if count <= 0 {
+        return 0;
+    }
+    values.sum::<i64>() / count
+}
+
+fn push_error_bucket(
+    buckets: &mut Vec<AutomationErrorBucket>,
+    category: &str,
+    message: &str,
+    at: Option<&str>,
+    count: i64,
+) {
+    if category == "none" || message.trim().is_empty() || count <= 0 {
+        return;
+    }
+    if let Some(bucket) = buckets.iter_mut().find(|bucket| bucket.category == category) {
+        bucket.count += count;
+        if at.is_some_and(|value| bucket.latest_at.as_deref().is_none_or(|current| timestamp_is_newer(value, current))) {
+            bucket.latest_message = message.to_string();
+            bucket.latest_at = at.map(str::to_string);
+        }
+    } else {
+        buckets.push(AutomationErrorBucket {
+            category: category.to_string(),
+            count,
+            latest_message: message.to_string(),
+            latest_at: at.map(str::to_string),
+        });
+    }
+}
+
+fn latest_failure_detail(
+    log_failure: Option<(String, String)>,
+    retry_failure: Option<(String, String)>,
+) -> (String, Option<String>) {
+    match (log_failure, retry_failure) {
+        (Some((log_error, log_at)), Some((retry_error, retry_at))) => {
+            if timestamp_is_newer(&retry_at, &log_at) {
+                (retry_error, Some(retry_at))
+            } else {
+                (log_error, Some(log_at))
+            }
+        }
+        (Some((error, at)), None) | (None, Some((error, at))) => (error, Some(at)),
+        (None, None) => (String::new(), None),
+    }
+}
+
+fn compare_timestamps(left: &str, right: &str) -> std::cmp::Ordering {
+    match (parse_scheduler_timestamp(left), parse_scheduler_timestamp(right)) {
+        (Some(left), Some(right)) => left.cmp(&right),
+        _ => left.cmp(right),
+    }
+}
+
+fn timestamp_is_newer(value: &str, current: &str) -> bool {
+    compare_timestamps(value, current).is_gt()
+}
+
+fn sqlite_timestamp(value: DateTime<Utc>) -> String {
+    value.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+fn classify_error_category(error: &str) -> &'static str {
+    let lower = error.to_ascii_lowercase();
+    if lower.trim().is_empty() {
+        return "none";
+    }
+    if lower.contains("auth")
+        || lower.contains("unauthorized")
+        || lower.contains("forbidden")
+        || lower.contains("invalid_grant")
+        || lower.contains("credential")
+        || lower.contains("password")
+        || lower.contains("token")
+        || lower.contains("login")
+    {
+        return "auth";
+    }
+    if lower.contains("429")
+        || lower.contains("rate limit")
+        || lower.contains("too many requests")
+        || lower.contains("throttle")
+    {
+        return "rate_limit";
+    }
+    if lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("connection")
+        || lower.contains("connect")
+        || lower.contains("dns")
+        || lower.contains("network")
+        || lower.contains("proxy")
+        || lower.contains("tls")
+        || lower.contains("refused")
+    {
+        return "network";
+    }
+    if lower.contains("configure")
+        || lower.contains("required")
+        || lower.contains("missing")
+        || lower.contains("unsupported")
+    {
+        return "config";
+    }
+    if lower.contains("sqlite")
+        || lower.contains("database")
+        || lower.contains("disk")
+        || lower.contains("permission")
+        || lower.contains("backup")
+    {
+        return "storage";
+    }
+    if lower.contains("parse")
+        || lower.contains("invalid")
+        || lower.contains("not found")
+        || lower.contains("deserialize")
+    {
+        return "data";
+    }
+    if lower.contains("imap")
+        || lower.contains("smtp")
+        || lower.contains("telegram")
+        || lower.contains("wecom")
+        || lower.contains("webdav")
+        || lower.contains("graph")
+        || lower.contains("cloudflare")
+        || lower.contains("gptmail")
+        || lower.contains("duckmail")
+        || lower.contains("http 5")
+    {
+        return "provider";
+    }
+    "unknown"
+}
+
 fn retry_delay_minutes(attempts: i64) -> i64 {
     match attempts {
         0 | 1 => 5,
         2 => 15,
         3 => 60,
         _ => 360,
+    }
+}
+
+fn retry_delay_minutes_for_error(task_type: &str, attempts: i64, error: &str) -> i64 {
+    let category = classify_error_category(error);
+    match (task_type, category, attempts) {
+        ("forward_message", "rate_limit", 0 | 1) => 15,
+        ("forward_message", "rate_limit", 2) => 30,
+        ("forward_message", "rate_limit", 3) => 90,
+        ("forward_message", "auth" | "config", 0 | 1) => 60,
+        ("forward_message", "auth" | "config", 2) => 240,
+        ("forward_message", "network" | "provider", 0 | 1) => 10,
+        ("forward_message", "network" | "provider", 2) => 30,
+        (_, "rate_limit", 0 | 1) => 15,
+        (_, "rate_limit", 2) => 60,
+        (_, "auth" | "config", 0 | 1) => 30,
+        (_, "auth" | "config", 2) => 180,
+        (_, "storage", 0 | 1) => 10,
+        _ => retry_delay_minutes(attempts),
+    }
+}
+
+fn retry_max_attempts_for_error(task_type: &str, error: &str) -> i64 {
+    let category = classify_error_category(error);
+    match (task_type, category) {
+        (_, "auth" | "config") => 3,
+        (_, "rate_limit") => 8,
+        ("forward_message", "network" | "provider") => 7,
+        (_, "network") => 6,
+        _ => 5,
+    }
+}
+
+fn retry_due_now(status: &str, next_attempt_at: Option<&str>) -> bool {
+    if status != "pending" {
+        return false;
+    }
+    next_attempt_at
+        .and_then(parse_scheduler_timestamp)
+        .is_none_or(|value| value <= Utc::now())
+}
+
+fn retry_next_delay_minutes(next_attempt_at: Option<&str>) -> i64 {
+    next_attempt_at
+        .and_then(parse_scheduler_timestamp)
+        .map(|value| value.signed_duration_since(Utc::now()).num_minutes().max(0))
+        .unwrap_or(0)
+}
+
+fn forwarding_circuit_error(circuit: &ForwardingChannelCircuit) -> String {
+    match circuit.open_until.as_deref() {
+        Some(open_until) => format!(
+            "forwarding channel circuit open for {} until {} after {} recent failure(s)",
+            circuit.channel, open_until, circuit.recent_failures
+        ),
+        None => format!(
+            "forwarding channel circuit open for {} after {} recent failure(s)",
+            circuit.channel, circuit.recent_failures
+        ),
     }
 }
 
@@ -6055,12 +6551,19 @@ fn refresh_log_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RefreshLog>
 }
 
 fn automation_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AutomationRun> {
+    let status = row.get::<_, String>(3)?;
+    let message = row.get::<_, String>(4)?;
     Ok(AutomationRun {
         id: row.get(0)?,
         job_type: row.get(1)?,
         trigger_type: row.get(2)?,
-        status: row.get(3)?,
-        message: row.get(4)?,
+        status: status.clone(),
+        error_category: if status == "failed" {
+            classify_error_category(&message).to_string()
+        } else {
+            "none".to_string()
+        },
+        message,
         refreshed: row.get(5)?,
         failed: row.get(6)?,
         duration_ms: row.get(7)?,
@@ -6070,20 +6573,26 @@ fn automation_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Automati
 }
 
 fn retry_queue_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RetryQueueItem> {
+    let status = row.get::<_, String>(2)?;
+    let error_message = row.get::<_, String>(9)?;
+    let next_attempt_at = row.get::<_, Option<String>>(12)?;
     Ok(RetryQueueItem {
         id: row.get(0)?,
         task_type: row.get(1)?,
-        status: row.get(2)?,
+        status: status.clone(),
         account_id: row.get(3)?,
         account_email: row.get(4)?,
         message_id: row.get(5)?,
         channel: row.get(6)?,
         action: row.get(7)?,
         payload_json: row.get(8)?,
-        error_message: row.get(9)?,
+        error_message: error_message.clone(),
+        error_category: classify_error_category(&error_message).to_string(),
         attempts: row.get(10)?,
         max_attempts: row.get(11)?,
-        next_attempt_at: row.get(12)?,
+        due_now: retry_due_now(&status, next_attempt_at.as_deref()),
+        next_delay_minutes: retry_next_delay_minutes(next_attempt_at.as_deref()),
+        next_attempt_at,
         last_attempt_at: row.get(13)?,
         created_at: row.get(14)?,
         updated_at: row.get(15)?,
@@ -6121,7 +6630,7 @@ mod project_tests {
         MailMessageQuery, MarkMailMessagesInput, ProjectAccountActionInput, RefreshInput,
         RestoreBackupInput, RevealAccountSecretsInput, RetryQueueItemInput, RetryQueueQuery,
         RetryQueueRunInput, UpdateAccountInput, UpdateGroupInput, UpdateGroupProxyInput,
-        UpdateTempEmailInput,
+        UpdateTempEmailInput, Settings,
     };
     use rusqlite::{params, Connection};
     use std::path::PathBuf;
@@ -7166,6 +7675,97 @@ mod project_tests {
             .expect("clear failed");
         assert_eq!(cleared.refreshed, 1);
         assert_eq!(db.list_automation_runs(Some(10)).expect("remaining").len(), 1);
+    }
+
+    #[test]
+    fn reports_automation_observability_and_forwarding_circuit() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.update_settings(Settings {
+            forwarding_enabled: true,
+            forward_smtp_host: "smtp.example.com".to_string(),
+            forward_smtp_to: "ops@example.com".to_string(),
+            ..Settings::default()
+        })
+        .expect("settings");
+        db.conn
+            .execute(
+                "INSERT INTO accounts (id, email, status, group_id) VALUES (1, 'one@example.com', 'active', 1)",
+                [],
+            )
+            .expect("insert account");
+        db.conn
+            .execute(
+                "
+                INSERT INTO automation_runs
+                (job_type, trigger_type, status, message, refreshed, failed, duration_ms, started_at, finished_at)
+                VALUES
+                ('refresh', 'manual', 'failed', 'invalid token', 0, 1, 10, '2026-01-01T00:00:00Z', '2026-01-01T00:00:01Z'),
+                ('forwarding', 'schedule', 'failed', 'SMTP send failed: connection refused', 0, 1, 20, '2026-01-01T00:00:02Z', '2026-01-01T00:00:03Z'),
+                ('retry', 'manual', 'success', 'Retried 1 item(s)', 1, 0, 30, '2026-01-01T00:00:04Z', '2026-01-01T00:00:05Z')
+                ",
+                [],
+            )
+            .expect("insert runs");
+        for index in 0..3 {
+            db.conn
+                .execute(
+                    "
+                    INSERT INTO forwarding_logs
+                    (account_id, account_email, message_id, channel, status, error_message)
+                    VALUES (1, 'one@example.com', ?, 'smtp', 'failed', 'SMTP send failed: connection refused')
+                    ",
+                    [format!("message-{index}")],
+                )
+                .expect("insert forwarding log");
+        }
+        db.conn
+            .execute(
+                "
+                INSERT INTO retry_queue
+                (task_type, status, account_id, account_email, message_id, channel, action,
+                 payload_json, error_message, attempts, max_attempts, next_attempt_at)
+                VALUES
+                ('forward_message', 'pending', 1, 'one@example.com', 'message-4', 'smtp', 'forward',
+                 '{}', 'SMTP send failed: connection refused', 2, 7, datetime('now', '-1 minutes'))
+                ",
+                [],
+            )
+            .expect("insert retry");
+
+        let observability = db.get_automation_observability().expect("observability");
+        assert_eq!(observability.run_count, 3);
+        assert_eq!(observability.failed_run_count, 2);
+        assert_eq!(observability.retry_due_count, 1);
+        assert!(observability
+            .error_buckets
+            .iter()
+            .any(|bucket| bucket.category == "auth" && bucket.count >= 1));
+        assert!(observability
+            .error_buckets
+            .iter()
+            .any(|bucket| bucket.category == "network" && bucket.count >= 1));
+        let smtp = observability
+            .channel_circuits
+            .iter()
+            .find(|channel| channel.channel == "smtp")
+            .expect("smtp channel");
+        assert_eq!(smtp.status, "open");
+        assert!(smtp.open_until.is_some());
+
+        let retry = db
+            .list_retry_queue(RetryQueueQuery::default())
+            .expect("retry queue")
+            .into_iter()
+            .next()
+            .expect("retry item");
+        assert_eq!(retry.error_category, "network");
+        assert!(retry.due_now);
     }
 
     #[test]

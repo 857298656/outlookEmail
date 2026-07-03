@@ -281,6 +281,104 @@ impl Database {
         self.get_group(existing_id)
     }
 
+    pub fn update_group(&self, input: UpdateGroupInput) -> AppResult<Group> {
+        self.require_unlocked()?;
+        let name = input.name.trim();
+        if name.is_empty() {
+            return Err(AppError::InvalidInput("group name is required".to_string()));
+        }
+        let (current_parent_id, current_level): (Option<i64>, i64) = self
+            .conn
+            .query_row("SELECT parent_id, level FROM groups WHERE id = ?", [input.id], |row| {
+                Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, i64>(1)?))
+            })
+            .optional()?
+            .ok_or_else(|| AppError::InvalidInput("group not found".to_string()))?;
+        if input.parent_id == Some(input.id) {
+            return Err(AppError::InvalidInput("group cannot be its own parent".to_string()));
+        }
+        if let Some(parent_id) = input.parent_id {
+            if self.group_descendant_ids(input.id)?.contains(&parent_id) {
+                return Err(AppError::InvalidInput("group cannot move under its descendant".to_string()));
+            }
+        }
+        let parent_level = match input.parent_id {
+            Some(parent_id) => self
+                .conn
+                .query_row("SELECT level FROM groups WHERE id = ?", [parent_id], |row| row.get::<_, i64>(0))
+                .optional()?
+                .ok_or_else(|| AppError::InvalidInput("parent group not found".to_string()))?,
+            None => 0,
+        };
+        let new_level = parent_level + 1;
+        let subtree_depth = self.group_subtree_depth(input.id, current_level)?;
+        if new_level + subtree_depth > 3 {
+            return Err(AppError::InvalidInput("groups support at most 3 levels".to_string()));
+        }
+
+        self.conn.execute(
+            "
+            UPDATE groups
+            SET name = ?,
+                description = ?,
+                color = ?,
+                proxy_url = ?,
+                fallback_proxy_url_1 = ?,
+                fallback_proxy_url_2 = ?,
+                parent_id = ?,
+                level = ?,
+                sort_order = ?
+            WHERE id = ?
+            ",
+            params![
+                name,
+                input.description.unwrap_or_default(),
+                input.color.unwrap_or_else(|| "#2f6f9f".to_string()),
+                normalize_proxy_value(input.proxy_url.as_deref())?,
+                normalize_proxy_value(input.fallback_proxy_url_1.as_deref())?,
+                normalize_proxy_value(input.fallback_proxy_url_2.as_deref())?,
+                input.parent_id,
+                new_level,
+                input.sort_order.unwrap_or(0).max(0),
+                input.id
+            ],
+        )?;
+        if current_parent_id != input.parent_id || current_level != new_level {
+            self.shift_group_descendant_levels(input.id, new_level - current_level)?;
+        }
+        self.audit("group.updated", "group", Some(input.id), name)?;
+        self.get_group(input.id)
+    }
+
+    pub fn delete_group(&self, group_id: i64) -> AppResult<()> {
+        self.require_unlocked()?;
+        let (parent_id, level, is_system): (Option<i64>, i64, i64) = self
+            .conn
+            .query_row(
+                "SELECT parent_id, level, is_system FROM groups WHERE id = ?",
+                [group_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?
+            .ok_or_else(|| AppError::InvalidInput("group not found".to_string()))?;
+        if is_system == 1 {
+            return Err(AppError::InvalidInput("system group cannot be deleted".to_string()));
+        }
+        let descendants = self.group_descendant_ids(group_id)?;
+        self.conn
+            .execute("UPDATE accounts SET group_id = ? WHERE group_id = ?", params![parent_id, group_id])?;
+        self.conn.execute(
+            "UPDATE groups SET parent_id = ? WHERE parent_id = ?",
+            params![parent_id, group_id],
+        )?;
+        if !descendants.is_empty() {
+            self.shift_group_levels(&descendants, -1)?;
+        }
+        self.conn.execute("DELETE FROM groups WHERE id = ?", [group_id])?;
+        self.audit("group.deleted", "group", Some(group_id), &format!("level {level}"))?;
+        Ok(())
+    }
+
     pub fn list_tags(&self) -> AppResult<Vec<Tag>> {
         self.require_unlocked()?;
         let mut stmt = self
@@ -2799,6 +2897,48 @@ impl Database {
             .map_err(AppError::from)
     }
 
+    fn group_descendant_ids(&self, group_id: i64) -> AppResult<Vec<i64>> {
+        let mut descendants = Vec::new();
+        let mut stack = vec![group_id];
+        while let Some(parent_id) = stack.pop() {
+            let mut stmt = self.conn.prepare("SELECT id FROM groups WHERE parent_id = ?")?;
+            let rows = stmt.query_map([parent_id], |row| row.get::<_, i64>(0))?;
+            for row in rows {
+                let id = row?;
+                descendants.push(id);
+                stack.push(id);
+            }
+        }
+        Ok(descendants)
+    }
+
+    fn group_subtree_depth(&self, group_id: i64, current_level: i64) -> AppResult<i64> {
+        let descendants = self.group_descendant_ids(group_id)?;
+        let mut max_level = current_level;
+        for id in descendants {
+            let level = self
+                .conn
+                .query_row("SELECT level FROM groups WHERE id = ?", [id], |row| row.get::<_, i64>(0))?;
+            max_level = max_level.max(level);
+        }
+        Ok(max_level - current_level)
+    }
+
+    fn shift_group_descendant_levels(&self, group_id: i64, delta: i64) -> AppResult<()> {
+        let descendants = self.group_descendant_ids(group_id)?;
+        self.shift_group_levels(&descendants, delta)
+    }
+
+    fn shift_group_levels(&self, group_ids: &[i64], delta: i64) -> AppResult<()> {
+        for id in group_ids {
+            self.conn.execute(
+                "UPDATE groups SET level = level + ? WHERE id = ?",
+                params![delta, id],
+            )?;
+        }
+        Ok(())
+    }
+
     fn tags_for_account(&self, account_id: i64) -> AppResult<Vec<Tag>> {
         let mut stmt = self.conn.prepare(
             "
@@ -5207,13 +5347,12 @@ mod project_tests {
     use super::{backup_dir, normalize_project_key, Database, MailMessageRef};
     use crate::error::AppError;
     use crate::models::{
-        AutomationRunQuery, ClaimProjectAccountInput, ClearAutomationRunsInput,
-        AttachmentInfo, CreateProjectInput, DeleteMailMessagesInput, DownloadAttachmentInput,
-        ExportAccountsInput, MailMessageQuery,
-        ExportMailMessagesInput, MarkMailMessagesInput, ProjectAccountActionInput,
-        RefreshInput, RestoreBackupInput, RetryQueueItemInput, RetryQueueQuery,
-        RetryQueueRunInput,
-        UpdateAccountInput, UpdateGroupProxyInput,
+        AttachmentInfo, AutomationRunQuery, ClaimProjectAccountInput, ClearAutomationRunsInput,
+        CreateGroupInput, CreateProjectInput, DeleteMailMessagesInput, DownloadAttachmentInput,
+        ExportAccountsInput, ExportMailMessagesInput, MailMessageQuery,
+        MarkMailMessagesInput, ProjectAccountActionInput, RefreshInput, RestoreBackupInput,
+        RetryQueueItemInput, RetryQueueQuery, RetryQueueRunInput, UpdateAccountInput,
+        UpdateGroupInput, UpdateGroupProxyInput,
     };
     use rusqlite::{params, Connection};
     use std::path::PathBuf;
@@ -5519,6 +5658,84 @@ mod project_tests {
             fallback_proxy_url_2: None,
         });
         assert!(matches!(invalid, Err(AppError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn group_update_and_delete_maintain_tree_and_accounts() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        let child = db
+            .create_group(CreateGroupInput {
+                name: "Child".to_string(),
+                description: None,
+                color: None,
+                parent_id: Some(1),
+                proxy_url: None,
+                fallback_proxy_url_1: None,
+                fallback_proxy_url_2: None,
+            })
+            .expect("create child");
+        let grandchild = db
+            .create_group(CreateGroupInput {
+                name: "Grandchild".to_string(),
+                description: None,
+                color: None,
+                parent_id: Some(child.id),
+                proxy_url: None,
+                fallback_proxy_url_1: None,
+                fallback_proxy_url_2: None,
+            })
+            .expect("create grandchild");
+        db.conn
+            .execute(
+                "INSERT INTO accounts (id, email, status, group_id) VALUES (1, 'group@example.com', 'active', ?)",
+                [child.id],
+            )
+            .expect("insert account");
+
+        let moved = db
+            .update_group(UpdateGroupInput {
+                id: child.id,
+                name: "Child Root".to_string(),
+                description: Some("moved".to_string()),
+                color: Some("#111827".to_string()),
+                parent_id: None,
+                sort_order: Some(2),
+                proxy_url: None,
+                fallback_proxy_url_1: None,
+                fallback_proxy_url_2: None,
+            })
+            .expect("move child");
+        assert_eq!(moved.level, 1);
+        assert_eq!(db.get_group(grandchild.id).expect("grandchild").level, 2);
+
+        let cycle = db.update_group(UpdateGroupInput {
+            id: child.id,
+            name: "Cycle".to_string(),
+            description: None,
+            color: None,
+            parent_id: Some(grandchild.id),
+            sort_order: None,
+            proxy_url: None,
+            fallback_proxy_url_1: None,
+            fallback_proxy_url_2: None,
+        });
+        assert!(matches!(cycle, Err(AppError::InvalidInput(_))));
+
+        db.delete_group(child.id).expect("delete child");
+        let account_group = db
+            .conn
+            .query_row("SELECT group_id FROM accounts WHERE id = 1", [], |row| row.get::<_, Option<i64>>(0))
+            .expect("account group");
+        assert_eq!(account_group, None);
+        let promoted = db.get_group(grandchild.id).expect("promoted grandchild");
+        assert_eq!(promoted.parent_id, None);
+        assert_eq!(promoted.level, 1);
     }
 
     #[test]

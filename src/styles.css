@@ -1187,6 +1187,98 @@ button:disabled {
   font-size: 12px;
 }
 
+.groupManageGrid {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(0, 1.2fr);
+  gap: 12px;
+  margin: 12px 0 18px;
+}
+
+.groupTree {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  max-height: 278px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 6px;
+}
+
+.groupTreeButton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #334155;
+  text-align: left;
+}
+
+.groupTreeButton:hover,
+.groupTreeButton.active {
+  border-color: #cfd8e3;
+  background: #f8fafc;
+}
+
+.groupTreeButton span:nth-of-type(2) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupTreeButton small {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.groupEditor {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.groupEditor .formLine {
+  margin-top: 0;
+}
+
+.groupEditor .input {
+  width: 100%;
+}
+
+.colorSwatches {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+}
+
+.colorSwatch {
+  width: 24px;
+  height: 24px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px #cbd5e1;
+}
+
+.colorSwatch.active {
+  box-shadow: 0 0 0 2px #111827;
+}
+
+.colorInput {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #cfd8e3;
+  border-radius: 8px;
+  background: #fff;
+  padding: 2px;
+}
+
 .table {
   display: grid;
   border: 1px solid #e5e7eb;
@@ -1431,6 +1523,16 @@ code {
 
 .spin {
   animation: spin 0.8s linear infinite;
+}
+
+@media (max-width: 820px) {
+  .groupManageGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .colorSwatches {
+    flex-wrap: wrap;
+  }
 }
 
 @keyframes spin {

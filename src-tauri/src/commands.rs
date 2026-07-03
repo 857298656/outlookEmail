@@ -51,6 +51,18 @@ pub fn update_group_proxy(state: State<'_, AppState>, input: UpdateGroupProxyInp
 }
 
 #[tauri::command]
+pub fn update_group(state: State<'_, AppState>, input: UpdateGroupInput) -> AppResult<Group> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.update_group(input)
+}
+
+#[tauri::command]
+pub fn delete_group(state: State<'_, AppState>, group_id: i64) -> AppResult<()> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.delete_group(group_id)
+}
+
+#[tauri::command]
 pub fn list_tags(state: State<'_, AppState>) -> AppResult<Vec<Tag>> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.list_tags()

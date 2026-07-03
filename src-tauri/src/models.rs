@@ -447,6 +447,19 @@ pub struct UpdateGroupProxyInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct UpdateGroupInput {
+    pub id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub color: Option<String>,
+    pub parent_id: Option<i64>,
+    pub sort_order: Option<i64>,
+    pub proxy_url: Option<String>,
+    pub fallback_proxy_url_1: Option<String>,
+    pub fallback_proxy_url_2: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct CreateTagInput {
     pub name: String,
     pub color: String,

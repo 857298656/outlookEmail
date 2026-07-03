@@ -35,6 +35,8 @@ pub fn run() {
             list_groups,
             create_group,
             update_group_proxy,
+            update_group,
+            delete_group,
             list_tags,
             create_tag,
             delete_tag,

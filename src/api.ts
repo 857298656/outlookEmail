@@ -160,6 +160,33 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       mockGroups = mockGroups.map((group) => (group.id === input.id ? { ...group, ...input } : group));
       return mockGroups.find((group) => group.id === input.id) as T;
     }
+    case "update_group": {
+      const input = args?.input as Partial<Group> & { id: number; name: string };
+      const parent = input.parent_id ? mockGroups.find((group) => group.id === input.parent_id) : null;
+      mockGroups = mockGroups.map((group) =>
+        group.id === input.id
+          ? {
+              ...group,
+              ...input,
+              parent_id: input.parent_id ?? null,
+              level: parent ? parent.level + 1 : 1,
+              sort_order: input.sort_order ?? group.sort_order
+            }
+          : group
+      );
+      return mockGroups.find((group) => group.id === input.id) as T;
+    }
+    case "delete_group": {
+      const groupId = args?.groupId as number;
+      const group = mockGroups.find((item) => item.id === groupId);
+      mockAccounts = mockAccounts.map((account) =>
+        account.group_id === groupId ? { ...account, group_id: group?.parent_id ?? null, group_name: null } : account
+      );
+      mockGroups = mockGroups
+        .filter((item) => item.id !== groupId)
+        .map((item) => (item.parent_id === groupId ? { ...item, parent_id: group?.parent_id ?? null, level: Math.max(1, item.level - 1) } : item));
+      return undefined as T;
+    }
     case "list_tags":
       return mockTags as T;
     case "create_tag": {
@@ -856,6 +883,18 @@ export const api = {
     fallback_proxy_url_1?: string;
     fallback_proxy_url_2?: string;
   }) => call<Group>("update_group_proxy", { input }),
+  updateGroup: (input: {
+    id: number;
+    name: string;
+    description?: string;
+    color?: string;
+    parent_id?: number | null;
+    sort_order?: number;
+    proxy_url?: string;
+    fallback_proxy_url_1?: string;
+    fallback_proxy_url_2?: string;
+  }) => call<Group>("update_group", { input }),
+  deleteGroup: (groupId: number) => call<void>("delete_group", { groupId }),
   listTags: () => call<Tag[]>("list_tags"),
   createTag: (input: { name: string; color: string }) => call<Tag>("create_tag", { input }),
   deleteTag: (tagId: number) => call<void>("delete_tag", { tagId }),

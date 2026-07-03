@@ -535,11 +535,18 @@ function App() {
                 await loadWorkspace(selectedAccountId, folder);
               }, "分组已创建")
             }
-            onUpdateGroupProxy={(input) =>
+            onUpdateGroup={(input) =>
               runAction(async () => {
-                await api.updateGroupProxy(input);
+                await api.updateGroup(input);
                 await loadWorkspace(selectedAccountId, folder);
-              }, "分组代理已保存")
+              }, "分组已保存")
+            }
+            onDeleteGroup={(groupId) =>
+              runAction(async () => {
+                await api.deleteGroup(groupId);
+                await loadWorkspace(selectedAccountId, folder);
+                await loadStatus();
+              }, "分组已删除")
             }
             onCreateTag={(name, color) =>
               runAction(async () => {
@@ -1144,6 +1151,41 @@ function MailWorkspace({
   );
 }
 
+type GroupDraft = {
+  name: string;
+  description: string;
+  color: string;
+  parent_id: number | "";
+  sort_order: string;
+  proxy_url: string;
+  fallback_proxy_url_1: string;
+  fallback_proxy_url_2: string;
+};
+
+function groupOptionLabel(group: Group): string {
+  return `${"  ".repeat(Math.max(0, group.level - 1))}${group.name}`;
+}
+
+function collectDescendantGroupIds(groups: Group[], groupId: number): Set<number> {
+  const descendants = new Set<number>();
+  const visit = (parentId: number) => {
+    groups
+      .filter((group) => group.parent_id === parentId)
+      .forEach((group) => {
+        descendants.add(group.id);
+        visit(group.id);
+      });
+  };
+  visit(groupId);
+  return descendants;
+}
+
+function groupSubtreeDepth(groups: Group[], groupId: number): number {
+  const children = groups.filter((group) => group.parent_id === groupId);
+  if (children.length === 0) return 0;
+  return 1 + Math.max(...children.map((group) => groupSubtreeDepth(groups, group.id)));
+}
+
 function AccountsView({
   groups,
   tags,
@@ -1152,7 +1194,8 @@ function AccountsView({
   busy,
   onImport,
   onCreateGroup,
-  onUpdateGroupProxy,
+  onUpdateGroup,
+  onDeleteGroup,
   onCreateTag,
   onDeleteAccount,
   onExportAccounts,
@@ -1167,7 +1210,8 @@ function AccountsView({
   busy: boolean;
   onImport: (raw: string, groupId: number | null) => void;
   onCreateGroup: (name: string, color: string) => void;
-  onUpdateGroupProxy: (input: Parameters<typeof api.updateGroupProxy>[0]) => void;
+  onUpdateGroup: (input: Parameters<typeof api.updateGroup>[0]) => void;
+  onDeleteGroup: (groupId: number) => void;
   onCreateTag: (name: string, color: string) => void;
   onDeleteAccount: (accountId: number) => void;
   onExportAccounts: (groupId?: number | null) => void;
@@ -1178,8 +1222,13 @@ function AccountsView({
   const [raw, setRaw] = useState("");
   const [groupId, setGroupId] = useState<number | null>(groups[0]?.id ?? null);
   const [groupName, setGroupName] = useState("");
-  const [selectedProxyGroupId, setSelectedProxyGroupId] = useState<number | undefined>(groups[0]?.id);
-  const [groupProxyDraft, setGroupProxyDraft] = useState({
+  const [selectedManageGroupId, setSelectedManageGroupId] = useState<number | undefined>(groups[0]?.id);
+  const [groupDraft, setGroupDraft] = useState<GroupDraft>({
+    name: "",
+    description: "",
+    color: colors[0],
+    parent_id: "",
+    sort_order: "0",
     proxy_url: "",
     fallback_proxy_url_1: "",
     fallback_proxy_url_2: ""
@@ -1209,17 +1258,58 @@ function AccountsView({
   const selectedAccount =
     visibleAccounts.find((account) => account.id === selectedAccountId) ?? visibleAccounts[0] ?? accounts[0];
   const parsedRows = useMemo(() => parseAccountRows(raw), [raw]);
-  const selectedProxyGroup = groups.find((group) => group.id === selectedProxyGroupId) ?? groups[0];
+  const selectedManageGroup = groups.find((group) => group.id === selectedManageGroupId) ?? groups[0];
+  const selectedDescendantGroupIds = useMemo(
+    () => (selectedManageGroup ? collectDescendantGroupIds(groups, selectedManageGroup.id) : new Set<number>()),
+    [groups, selectedManageGroup?.id]
+  );
+  const selectedSubtreeDepth = useMemo(
+    () => (selectedManageGroup ? groupSubtreeDepth(groups, selectedManageGroup.id) : 0),
+    [groups, selectedManageGroup?.id]
+  );
+  const parentGroupOptions = useMemo(() => {
+    if (!selectedManageGroup) return [];
+    return groups.filter(
+      (group) =>
+        group.id !== selectedManageGroup.id &&
+        !selectedDescendantGroupIds.has(group.id) &&
+        group.level + 1 + selectedSubtreeDepth <= 3
+    );
+  }, [groups, selectedDescendantGroupIds, selectedManageGroup?.id, selectedSubtreeDepth]);
 
   useEffect(() => {
-    if (!selectedProxyGroup) return;
-    setSelectedProxyGroupId(selectedProxyGroup.id);
-    setGroupProxyDraft({
-      proxy_url: selectedProxyGroup.proxy_url,
-      fallback_proxy_url_1: selectedProxyGroup.fallback_proxy_url_1,
-      fallback_proxy_url_2: selectedProxyGroup.fallback_proxy_url_2
+    if (groups.length === 0) {
+      setSelectedManageGroupId(undefined);
+      return;
+    }
+    if (!selectedManageGroupId || !groups.some((group) => group.id === selectedManageGroupId)) {
+      setSelectedManageGroupId(groups[0].id);
+    }
+  }, [groups, selectedManageGroupId]);
+
+  useEffect(() => {
+    if (!selectedManageGroup) return;
+    setGroupDraft({
+      name: selectedManageGroup.name,
+      description: selectedManageGroup.description,
+      color: selectedManageGroup.color || colors[0],
+      parent_id: selectedManageGroup.parent_id ?? "",
+      sort_order: String(selectedManageGroup.sort_order),
+      proxy_url: selectedManageGroup.proxy_url,
+      fallback_proxy_url_1: selectedManageGroup.fallback_proxy_url_1,
+      fallback_proxy_url_2: selectedManageGroup.fallback_proxy_url_2
     });
-  }, [selectedProxyGroup?.id, selectedProxyGroup?.proxy_url, selectedProxyGroup?.fallback_proxy_url_1, selectedProxyGroup?.fallback_proxy_url_2]);
+  }, [
+    selectedManageGroup?.id,
+    selectedManageGroup?.name,
+    selectedManageGroup?.description,
+    selectedManageGroup?.color,
+    selectedManageGroup?.parent_id,
+    selectedManageGroup?.sort_order,
+    selectedManageGroup?.proxy_url,
+    selectedManageGroup?.fallback_proxy_url_1,
+    selectedManageGroup?.fallback_proxy_url_2
+  ]);
 
   return (
     <section className="managementGrid">
@@ -1269,63 +1359,134 @@ function AccountsView({
             分组
           </button>
         </div>
-        <div className="chipCloud">
-          {groups.map((group) => (
-            <span className="chip" key={group.id}>
-              <span className="dot" style={{ backgroundColor: group.color }} />
-              {group.name}
-            </span>
-          ))}
-        </div>
-        {selectedProxyGroup && (
-          <>
-            <div className="formLine">
-              <select
-                className="select grow"
-                value={selectedProxyGroup.id}
-                onChange={(event) => setSelectedProxyGroupId(Number(event.target.value))}
-              >
-                {groups.map((group) => (
-                  <option value={group.id} key={group.id}>
-                    {group.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                className="button secondary"
-                onClick={() =>
-                  onUpdateGroupProxy({
-                    id: selectedProxyGroup.id,
-                    proxy_url: groupProxyDraft.proxy_url,
-                    fallback_proxy_url_1: groupProxyDraft.fallback_proxy_url_1,
-                    fallback_proxy_url_2: groupProxyDraft.fallback_proxy_url_2
-                  })
-                }
-              >
-                保存代理
-              </button>
+        {selectedManageGroup && (
+          <div className="groupManageGrid">
+            <div className="groupTree" aria-label="分组列表">
+              {groups.map((group) => (
+                <button
+                  className={selectedManageGroup.id === group.id ? "groupTreeButton active" : "groupTreeButton"}
+                  key={group.id}
+                  onClick={() => setSelectedManageGroupId(group.id)}
+                  style={{ paddingLeft: 12 + Math.max(0, group.level - 1) * 14 }}
+                >
+                  <span className="dot" style={{ backgroundColor: group.color }} />
+                  <span>{group.name}</span>
+                  <small>{group.account_count}</small>
+                </button>
+              ))}
             </div>
-            <input
-              className="input"
-              value={groupProxyDraft.proxy_url}
-              placeholder="分组主代理：http://127.0.0.1:7890"
-              onChange={(event) => setGroupProxyDraft({ ...groupProxyDraft, proxy_url: event.target.value })}
-            />
-            <div className="formLine">
+            <div className="groupEditor">
+              <div className="formLine">
+                <input
+                  className="input grow"
+                  value={groupDraft.name}
+                  placeholder="分组名称"
+                  onChange={(event) => setGroupDraft({ ...groupDraft, name: event.target.value })}
+                />
+                <input
+                  className="input smallInput"
+                  type="number"
+                  value={groupDraft.sort_order}
+                  title="排序"
+                  onChange={(event) => setGroupDraft({ ...groupDraft, sort_order: event.target.value })}
+                />
+              </div>
+              <div className="formLine">
+                <select
+                  className="select grow"
+                  value={groupDraft.parent_id}
+                  onChange={(event) =>
+                    setGroupDraft({
+                      ...groupDraft,
+                      parent_id: event.target.value ? Number(event.target.value) : ""
+                    })
+                  }
+                >
+                  <option value="">顶级分组</option>
+                  {parentGroupOptions.map((group) => (
+                    <option value={group.id} key={group.id}>
+                      {groupOptionLabel(group)}
+                    </option>
+                  ))}
+                </select>
+                <div className="colorSwatches" aria-label="分组颜色">
+                  {colors.map((color) => (
+                    <button
+                      className={groupDraft.color === color ? "colorSwatch active" : "colorSwatch"}
+                      key={color}
+                      title={color}
+                      style={{ backgroundColor: color }}
+                      onClick={() => setGroupDraft({ ...groupDraft, color })}
+                    />
+                  ))}
+                  <input
+                    className="colorInput"
+                    type="color"
+                    aria-label="自定义分组颜色"
+                    value={groupDraft.color}
+                    onChange={(event) => setGroupDraft({ ...groupDraft, color: event.target.value })}
+                  />
+                </div>
+              </div>
               <input
-                className="input grow"
-                value={groupProxyDraft.fallback_proxy_url_1}
-                placeholder="备用代理 1"
-                onChange={(event) => setGroupProxyDraft({ ...groupProxyDraft, fallback_proxy_url_1: event.target.value })}
+                className="input"
+                value={groupDraft.description}
+                placeholder="分组说明"
+                onChange={(event) => setGroupDraft({ ...groupDraft, description: event.target.value })}
               />
               <input
-                className="input grow"
-                value={groupProxyDraft.fallback_proxy_url_2}
-                placeholder="备用代理 2"
-                onChange={(event) => setGroupProxyDraft({ ...groupProxyDraft, fallback_proxy_url_2: event.target.value })}
+                className="input"
+                value={groupDraft.proxy_url}
+                placeholder="分组主代理：http://127.0.0.1:7890"
+                onChange={(event) => setGroupDraft({ ...groupDraft, proxy_url: event.target.value })}
               />
+              <div className="formLine">
+                <input
+                  className="input grow"
+                  value={groupDraft.fallback_proxy_url_1}
+                  placeholder="备用代理 1"
+                  onChange={(event) => setGroupDraft({ ...groupDraft, fallback_proxy_url_1: event.target.value })}
+                />
+                <input
+                  className="input grow"
+                  value={groupDraft.fallback_proxy_url_2}
+                  placeholder="备用代理 2"
+                  onChange={(event) => setGroupDraft({ ...groupDraft, fallback_proxy_url_2: event.target.value })}
+                />
+              </div>
+              <div className="formLine">
+                <button
+                  className="button primary grow"
+                  disabled={busy || !groupDraft.name.trim()}
+                  onClick={() => {
+                    const sortOrder = Number.parseInt(groupDraft.sort_order, 10);
+                    onUpdateGroup({
+                      id: selectedManageGroup.id,
+                      name: groupDraft.name,
+                      description: groupDraft.description,
+                      color: groupDraft.color,
+                      parent_id: groupDraft.parent_id === "" ? null : groupDraft.parent_id,
+                      sort_order: Number.isFinite(sortOrder) ? sortOrder : selectedManageGroup.sort_order,
+                      proxy_url: groupDraft.proxy_url,
+                      fallback_proxy_url_1: groupDraft.fallback_proxy_url_1,
+                      fallback_proxy_url_2: groupDraft.fallback_proxy_url_2
+                    });
+                  }}
+                >
+                  <CheckCircle2 size={16} />
+                  保存分组
+                </button>
+                <button
+                  className="button danger"
+                  disabled={busy || selectedManageGroup.id === 1}
+                  onClick={() => onDeleteGroup(selectedManageGroup.id)}
+                >
+                  <Trash2 size={16} />
+                  删除
+                </button>
+              </div>
             </div>
-          </>
+          </div>
         )}
         <div className="formLine">
           <input className="input grow" value={tagName} placeholder="新标签" onChange={(event) => setTagName(event.target.value)} />

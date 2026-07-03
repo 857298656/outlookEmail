@@ -7,6 +7,7 @@ use crate::models::{
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
+use imap::types::NameAttribute;
 use mailparse::MailHeaderMap;
 use reqwest::{blocking::Client, Proxy};
 use serde::Deserialize;
@@ -16,12 +17,20 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 const GRAPH_SCOPE: &str = "offline_access Mail.ReadWrite User.Read";
+const IMAP_OAUTH_SCOPE: &str = "offline_access https://outlook.office.com/IMAP.AccessAsUser.All";
 
 pub struct OAuthTokenResponse {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_in: i64,
     pub scope: String,
+}
+
+fn microsoft_oauth_scope(provider: Option<&str>) -> &'static str {
+    match provider.unwrap_or_default().trim().to_ascii_lowercase().as_str() {
+        "imap" => IMAP_OAUTH_SCOPE,
+        _ => GRAPH_SCOPE,
+    }
 }
 
 pub fn build_graph_auth_url(input: &OAuthAuthUrlInput) -> AppResult<String> {
@@ -38,7 +47,7 @@ pub fn build_graph_auth_url(input: &OAuthAuthUrlInput) -> AppResult<String> {
         "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query&scope={}&prompt=select_account",
         urlencoding::encode(client_id),
         urlencoding::encode(redirect_uri),
-        urlencoding::encode(GRAPH_SCOPE)
+        urlencoding::encode(microsoft_oauth_scope(input.provider.as_deref()))
     );
     if let Some(login_hint) = input.login_hint.as_ref().filter(|value| !value.trim().is_empty()) {
         url.push_str("&login_hint=");
@@ -47,7 +56,12 @@ pub fn build_graph_auth_url(input: &OAuthAuthUrlInput) -> AppResult<String> {
     Ok(url)
 }
 
-pub fn exchange_graph_code(client_id: &str, redirect_uri: &str, code_or_url: &str) -> AppResult<OAuthTokenResponse> {
+pub fn exchange_microsoft_code(
+    client_id: &str,
+    redirect_uri: &str,
+    code_or_url: &str,
+    provider: Option<&str>,
+) -> AppResult<OAuthTokenResponse> {
     let code = extract_code(code_or_url)?;
     let client = http_client()?;
     let response = client
@@ -57,7 +71,7 @@ pub fn exchange_graph_code(client_id: &str, redirect_uri: &str, code_or_url: &st
             ("redirect_uri", redirect_uri),
             ("grant_type", "authorization_code"),
             ("code", code.as_str()),
-            ("scope", GRAPH_SCOPE),
+            ("scope", microsoft_oauth_scope(provider)),
         ])
         .send()
         .map_err(network_error)?;
@@ -65,10 +79,25 @@ pub fn exchange_graph_code(client_id: &str, redirect_uri: &str, code_or_url: &st
 }
 
 fn refresh_graph_access_token_with_client(account: &AccountCredentials, client: &Client) -> AppResult<OAuthTokenResponse> {
+    refresh_microsoft_access_token_with_scope(account, client, GRAPH_SCOPE, "Graph")
+}
+
+fn refresh_imap_oauth_access_token(account: &AccountCredentials) -> AppResult<String> {
+    with_account_http_client(account, |client| {
+        refresh_microsoft_access_token_with_scope(account, client, IMAP_OAUTH_SCOPE, "IMAP").map(|token| token.access_token)
+    })
+}
+
+fn refresh_microsoft_access_token_with_scope(
+    account: &AccountCredentials,
+    client: &Client,
+    scope: &str,
+    label: &str,
+) -> AppResult<OAuthTokenResponse> {
     if account.client_id.trim().is_empty() || account.refresh_token.trim().is_empty() {
-        return Err(AppError::InvalidInput(
-            "Graph account is missing client id or refresh token".to_string(),
-        ));
+        return Err(AppError::InvalidInput(format!(
+            "{label} account is missing client id or refresh token"
+        )));
     }
     let response = client
         .post("https://login.microsoftonline.com/common/oauth2/v2.0/token")
@@ -76,7 +105,7 @@ fn refresh_graph_access_token_with_client(account: &AccountCredentials, client: 
             ("client_id", account.client_id.as_str()),
             ("grant_type", "refresh_token"),
             ("refresh_token", account.refresh_token.as_str()),
-            ("scope", GRAPH_SCOPE),
+            ("scope", scope),
         ])
         .send()
         .map_err(network_error)?;
@@ -229,11 +258,11 @@ pub fn delete_graph_message(account: &AccountCredentials, message_id: &str) -> A
 pub fn fetch_imap_messages(account: &AccountCredentials, folder: &str, top: usize) -> AppResult<Vec<ProviderMessage>> {
     with_imap_session(account, |session| {
         let mut messages = Vec::new();
-        for app_folder in folders_for(folder) {
-            let mailbox = imap_mailbox_name(app_folder);
+        for target in imap_mailbox_targets(session, folder) {
+            let mailbox = target.mailbox.as_str();
             let selected = match session.select(mailbox) {
                 Ok(_) => true,
-                Err(_) if app_folder != "inbox" => false,
+                Err(_) if target.app_folder != "inbox" => false,
                 Err(err) => return Err(AppError::Internal(format!("IMAP select {mailbox} failed: {err}"))),
             };
             if !selected {
@@ -259,7 +288,7 @@ pub fn fetch_imap_messages(account: &AccountCredentials, folder: &str, top: usiz
                 .map_err(|err| AppError::Internal(format!("IMAP fetch failed: {err}")))?;
             for fetch in fetches.iter() {
                 if let Some(body) = fetch.body() {
-                    messages.push(parse_imap_message(app_folder, fetch.uid.unwrap_or(fetch.message), body));
+                    messages.push(parse_imap_message(target.app_folder, fetch.uid.unwrap_or(fetch.message), body));
                 }
             }
         }
@@ -826,12 +855,117 @@ fn folders_for(folder: &str) -> Vec<&'static str> {
     }
 }
 
-fn imap_mailbox_name(folder: &str) -> &'static str {
-    match folder {
-        "junkemail" => "Junk",
-        "deleteditems" => "Deleted",
-        _ => "INBOX",
+#[derive(Debug, Clone)]
+struct ImapMailboxTarget {
+    app_folder: &'static str,
+    mailbox: String,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ImapMailboxMap {
+    inbox: Option<String>,
+    junkemail: Option<String>,
+    deleteditems: Option<String>,
+}
+
+impl ImapMailboxMap {
+    fn set_if_missing(&mut self, app_folder: &str, mailbox: &str) {
+        let target = match app_folder {
+            "junkemail" => &mut self.junkemail,
+            "deleteditems" => &mut self.deleteditems,
+            _ => &mut self.inbox,
+        };
+        if target.is_none() {
+            *target = Some(mailbox.to_string());
+        }
     }
+
+    fn mailbox_for(&self, app_folder: &str) -> String {
+        match app_folder {
+            "junk" | "junkemail" => self.junkemail.clone().unwrap_or_else(|| "Junk".to_string()),
+            "deleted" | "deleteditems" => self.deleteditems.clone().unwrap_or_else(|| "Deleted".to_string()),
+            _ => self.inbox.clone().unwrap_or_else(|| "INBOX".to_string()),
+        }
+    }
+}
+
+fn imap_mailbox_targets(
+    session: &mut imap::Session<native_tls::TlsStream<TcpStream>>,
+    folder: &str,
+) -> Vec<ImapMailboxTarget> {
+    let map = imap_mailbox_map(session);
+    folders_for(folder)
+        .into_iter()
+        .map(|app_folder| ImapMailboxTarget {
+            app_folder,
+            mailbox: map.mailbox_for(app_folder),
+        })
+        .collect()
+}
+
+fn imap_mailbox_map(session: &mut imap::Session<native_tls::TlsStream<TcpStream>>) -> ImapMailboxMap {
+    let mut map = ImapMailboxMap::default();
+    let Ok(names) = session.list(Some(""), Some("*")) else {
+        return map;
+    };
+    for name in names.iter() {
+        let attributes = name
+            .attributes()
+            .iter()
+            .map(imap_attribute_name)
+            .collect::<Vec<_>>();
+        if attributes.iter().any(|attribute| attribute == "noselect") {
+            continue;
+        }
+        if let Some(app_folder) = classify_imap_mailbox(&attributes, name.name()) {
+            map.set_if_missing(app_folder, name.name());
+        }
+    }
+    map
+}
+
+fn imap_attribute_name(attribute: &NameAttribute<'_>) -> String {
+    match attribute {
+        NameAttribute::NoInferiors => "noinferiors".to_string(),
+        NameAttribute::NoSelect => "noselect".to_string(),
+        NameAttribute::Marked => "marked".to_string(),
+        NameAttribute::Unmarked => "unmarked".to_string(),
+        NameAttribute::Custom(value) => value.trim_start_matches('\\').to_ascii_lowercase(),
+    }
+}
+
+fn classify_imap_mailbox(attributes: &[String], mailbox_name: &str) -> Option<&'static str> {
+    if attributes.iter().any(|value| value == "junk" || value == "spam") {
+        return Some("junkemail");
+    }
+    if attributes.iter().any(|value| value == "trash" || value == "deleted") {
+        return Some("deleteditems");
+    }
+    let normalized = normalize_imap_mailbox_name(mailbox_name);
+    if normalized == "inbox" {
+        return Some("inbox");
+    }
+    let leaf = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    match leaf {
+        "junk" | "junkemail" | "spam" | "bulkmail" => Some("junkemail"),
+        "deleted" | "deleteditems" | "deletedmessages" | "trash" | "bin" => Some("deleteditems"),
+        _ => None,
+    }
+}
+
+fn normalize_imap_mailbox_name(value: &str) -> String {
+    value
+        .chars()
+        .filter_map(|ch| {
+            if ch.is_ascii_whitespace() || ch == '_' || ch == '-' {
+                None
+            } else if ch == '\\' {
+                Some('/')
+            } else {
+                Some(ch.to_ascii_lowercase())
+            }
+        })
+        .collect()
 }
 
 fn with_imap_session<T>(
@@ -842,17 +976,10 @@ fn with_imap_session<T>(
     if host.is_empty() {
         return Err(AppError::InvalidInput("IMAP host is required".to_string()));
     }
-    let password = if account.imap_password.trim().is_empty() {
-        account.password.as_str()
-    } else {
-        account.imap_password.as_str()
-    };
-    if password.trim().is_empty() {
-        return Err(AppError::InvalidInput("IMAP password is required".to_string()));
-    }
+    let auth = imap_auth_secret(account)?;
 
     if account.proxy_chain.is_empty() {
-        let mut session = connect_imap_session(account, password, None)?;
+        let mut session = connect_imap_session(account, &auth, None)?;
         let result = operation(&mut session);
         let _ = session.logout();
         return result;
@@ -860,7 +987,7 @@ fn with_imap_session<T>(
 
     let mut last_error = String::new();
     for proxy_url in &account.proxy_chain {
-        match connect_imap_session(account, password, Some(proxy_url)).and_then(|mut session| {
+        match connect_imap_session(account, &auth, Some(proxy_url)).and_then(|mut session| {
             let result = operation(&mut session);
             let _ = session.logout();
             result
@@ -876,9 +1003,44 @@ fn with_imap_session<T>(
     )))
 }
 
+enum ImapAuthSecret {
+    Password(String),
+    OAuth2(String),
+}
+
+struct XOAuth2Authenticator {
+    user: String,
+    access_token: String,
+}
+
+impl imap::Authenticator for XOAuth2Authenticator {
+    type Response = String;
+
+    fn process(&self, _challenge: &[u8]) -> Self::Response {
+        format!("user={}\x01auth=Bearer {}\x01\x01", self.user, self.access_token)
+    }
+}
+
+fn imap_auth_secret(account: &AccountCredentials) -> AppResult<ImapAuthSecret> {
+    let password = if account.imap_password.trim().is_empty() {
+        account.password.trim()
+    } else {
+        account.imap_password.trim()
+    };
+    if !password.is_empty() {
+        return Ok(ImapAuthSecret::Password(password.to_string()));
+    }
+    if !account.client_id.trim().is_empty() && !account.refresh_token.trim().is_empty() {
+        return refresh_imap_oauth_access_token(account).map(ImapAuthSecret::OAuth2);
+    }
+    Err(AppError::InvalidInput(
+        "IMAP password or OAuth refresh token is required".to_string(),
+    ))
+}
+
 fn connect_imap_session(
     account: &AccountCredentials,
-    password: &str,
+    auth: &ImapAuthSecret,
     proxy_url: Option<&str>,
 ) -> AppResult<imap::Session<native_tls::TlsStream<TcpStream>>> {
     let host = account.imap_host.trim();
@@ -899,9 +1061,20 @@ fn connect_imap_session(
         imap::connect((host, port), host, &tls)
             .map_err(|err| AppError::Internal(format!("IMAP connect failed: {err}")))?
     };
-    client
-        .login(account.email.as_str(), password)
-        .map_err(|err| AppError::Internal(format!("IMAP login failed: {}", err.0)))
+    match auth {
+        ImapAuthSecret::Password(password) => client
+            .login(account.email.as_str(), password)
+            .map_err(|err| AppError::Internal(format!("IMAP login failed: {}", err.0))),
+        ImapAuthSecret::OAuth2(access_token) => {
+            let auth = XOAuth2Authenticator {
+                user: account.email.clone(),
+                access_token: access_token.clone(),
+            };
+            client
+                .authenticate("XOAUTH2", &auth)
+                .map_err(|err| AppError::Internal(format!("IMAP XOAUTH2 login failed: {}", err.0)))
+        }
+    }
 }
 
 fn connect_http_proxy_tunnel(proxy_url: &str, host: &str, port: u16) -> AppResult<TcpStream> {
@@ -977,9 +1150,9 @@ fn mutate_imap_message(
         .map_err(|_| AppError::InvalidInput("IMAP message id is not a UID".to_string()))?;
 
     with_imap_session(account, |session| {
-        let mailbox = imap_mailbox_name(folder);
+        let mailbox = imap_mailbox_map(session).mailbox_for(folder);
         session
-            .select(mailbox)
+            .select(&mailbox)
             .map_err(|err| AppError::Internal(format!("IMAP select {mailbox} failed: {err}")))?;
         session
             .uid_store(uid.to_string(), operation)
@@ -1242,4 +1415,31 @@ fn recipients_to_string(value: Option<Vec<GraphRecipient>>) -> String {
         .filter_map(|item| item.email_address.map(|email| email.address))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_imap_special_use_and_common_mailbox_names() {
+        assert_eq!(classify_imap_mailbox(&["junk".to_string()], "Mailbox"), Some("junkemail"));
+        assert_eq!(classify_imap_mailbox(&["trash".to_string()], "Mailbox"), Some("deleteditems"));
+        assert_eq!(classify_imap_mailbox(&[], "INBOX"), Some("inbox"));
+        assert_eq!(classify_imap_mailbox(&[], "[Gmail]/Spam"), Some("junkemail"));
+        assert_eq!(classify_imap_mailbox(&[], "Deleted Items"), Some("deleteditems"));
+        assert_eq!(classify_imap_mailbox(&[], "Archive"), None);
+    }
+
+    #[test]
+    fn formats_xoauth2_sasl_response() {
+        let auth = XOAuth2Authenticator {
+            user: "user@example.com".to_string(),
+            access_token: "token-value".to_string(),
+        };
+        assert_eq!(
+            <XOAuth2Authenticator as imap::Authenticator>::process(&auth, b""),
+            "user=user@example.com\x01auth=Bearer token-value\x01\x01"
+        );
+    }
 }

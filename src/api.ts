@@ -610,15 +610,29 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     case "test_cloudflare_channel":
       return { success: true, message: "Cloudflare channel connected", refreshed: 1, failed: 0 } as T;
     case "generate_oauth_auth_url": {
-      const input = args?.input as { client_id: string; redirect_uri: string; login_hint?: string };
-      return `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=${encodeURIComponent(input.client_id)}&response_type=code&redirect_uri=${encodeURIComponent(input.redirect_uri)}&scope=${encodeURIComponent("offline_access Mail.ReadWrite User.Read")}&response_mode=query&prompt=select_account${input.login_hint ? `&login_hint=${encodeURIComponent(input.login_hint)}` : ""}` as T;
+      const input = args?.input as { client_id: string; redirect_uri: string; login_hint?: string; provider?: string };
+      const scope =
+        input.provider === "imap"
+          ? "offline_access https://outlook.office.com/IMAP.AccessAsUser.All"
+          : "offline_access Mail.ReadWrite User.Read";
+      return `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=${encodeURIComponent(input.client_id)}&response_type=code&redirect_uri=${encodeURIComponent(input.redirect_uri)}&scope=${encodeURIComponent(scope)}&response_mode=query&prompt=select_account${input.login_hint ? `&login_hint=${encodeURIComponent(input.login_hint)}` : ""}` as T;
     }
-    case "exchange_oauth_token":
-      return { success: true, account_id: (args?.input as { account_id?: number }).account_id, scope: "offline_access Mail.ReadWrite User.Read", expires_in: 3600, refresh_token_preview: "mock...oken" } as T;
+    case "exchange_oauth_token": {
+      const input = args?.input as { account_id?: number; provider?: string };
+      const scope =
+        input.provider === "imap"
+          ? "offline_access https://outlook.office.com/IMAP.AccessAsUser.All"
+          : "offline_access Mail.ReadWrite User.Read";
+      return { success: true, account_id: input.account_id, scope, expires_in: 3600, refresh_token_preview: "mock...oken" } as T;
+    }
     case "download_attachment": {
       const input = args?.input as { attachment_id: string };
       return { path: `browser-preview/${input.attachment_id}`, file_name: input.attachment_id, size: 0 } as T;
     }
+    case "download_all_attachments":
+      return mockExport("attachments.zip", 2) as T;
+    case "get_mail_raw_content":
+      return { message_id: args?.messageId as number, file_name: "message-raw.eml", content: "From: mock@example.com\r\n\r\nMock raw content", size: 46 } as T;
     case "export_mail_messages": {
       const input = args?.input as { message_ids: number[] };
       const count = mockMessages.filter((message) => input.message_ids.includes(message.id)).length;
@@ -1146,9 +1160,9 @@ export const api = {
   }) => call<CloudflareChannel>("upsert_cloudflare_channel", { input }),
   deleteCloudflareChannel: (channelId: number) => call<void>("delete_cloudflare_channel", { channelId }),
   testCloudflareChannel: (channelId: number) => call<JobResult>("test_cloudflare_channel", { channelId }),
-  generateOAuthAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string }) =>
+  generateOAuthAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) =>
     call<string>("generate_oauth_auth_url", { input }),
-  exchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string }) =>
+  exchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) =>
     call<{ success: boolean; account_id?: number; scope: string; expires_in: number; refresh_token_preview: string }>("exchange_oauth_token", { input }),
   downloadAttachment: (input: { account_id: number; message_id: string; attachment_id: string; folder?: string }) =>
     call<{ path: string; file_name: string; size: number }>("download_attachment", { input }),

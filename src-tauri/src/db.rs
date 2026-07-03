@@ -1383,7 +1383,20 @@ impl Database {
 
     pub fn exchange_oauth_token(&self, input: OAuthExchangeInput) -> AppResult<OAuthTokenResult> {
         self.require_unlocked()?;
-        let token = providers::exchange_graph_code(&input.client_id, &input.redirect_uri, &input.code_or_url)?;
+        let provider = match normalize_oauth_provider(input.provider.as_deref())? {
+            Some(provider) => provider,
+            None => match input.account_id {
+                Some(account_id) => {
+                    let stored_provider = self
+                        .conn
+                        .query_row("SELECT provider FROM accounts WHERE id = ?", [account_id], |row| row.get::<_, String>(0))
+                        .optional()?;
+                    normalize_oauth_provider(stored_provider.as_deref())?.unwrap_or_else(|| "graph".to_string())
+                }
+                None => "graph".to_string(),
+            },
+        };
+        let token = providers::exchange_microsoft_code(&input.client_id, &input.redirect_uri, &input.code_or_url, Some(&provider))?;
         if let Some(account_id) = input.account_id {
             let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
             let refresh_token = crypto::encrypt_text(&token.refresh_token, key)?;
@@ -1393,16 +1406,17 @@ impl Database {
                 UPDATE accounts
                 SET client_id_enc = ?,
                     refresh_token_enc = ?,
-                    provider = 'graph',
+                    provider = ?,
+                    account_type = ?,
                     last_refresh_status = 'authorized',
                     last_refresh_error = NULL,
                     refresh_token_updated_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 ",
-                params![client_id, refresh_token, account_id],
+                params![client_id, refresh_token, provider, provider, account_id],
             )?;
-            self.audit("oauth.graph.exchanged", "account", Some(account_id), "")?;
+            self.audit(&format!("oauth.{provider}.exchanged"), "account", Some(account_id), "")?;
         }
         Ok(OAuthTokenResult {
             success: true,
@@ -5026,6 +5040,17 @@ fn normalize_mail_folder(value: &str) -> String {
     }
 }
 
+fn normalize_oauth_provider(value: Option<&str>) -> AppResult<Option<String>> {
+    let provider = value.unwrap_or_default().trim().to_ascii_lowercase();
+    if provider.is_empty() {
+        return Ok(None);
+    }
+    match provider.as_str() {
+        "graph" | "outlook" | "imap" => Ok(Some(provider)),
+        value => Err(AppError::InvalidInput(format!("unsupported OAuth provider: {value}"))),
+    }
+}
+
 fn normalize_read_state(value: Option<&str>) -> AppResult<String> {
     match value.unwrap_or("all").trim().to_ascii_lowercase().as_str() {
         "" | "all" => Ok("all".to_string()),
@@ -5493,6 +5518,9 @@ fn preview_secret(value: &str) -> String {
 fn should_use_graph(account: &AccountCredentials) -> bool {
     let provider = account.provider.to_ascii_lowercase();
     let account_type = account.account_type.to_ascii_lowercase();
+    if provider == "imap" || account_type == "imap" {
+        return false;
+    }
     provider == "graph"
         || provider == "outlook"
         || account_type == "outlook"

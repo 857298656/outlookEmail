@@ -1448,8 +1448,8 @@ function AccountsView({
   onExportAccounts: (groupId?: number | null, accountIds?: number[]) => void;
   onUpdateAccount: (input: Parameters<typeof api.updateAccount>[0]) => void;
   onRevealAccountSecrets: (input: Parameters<typeof api.revealAccountSecrets>[0]) => Promise<Awaited<ReturnType<typeof api.revealAccountSecrets>>>;
-  onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string }) => Promise<string>;
-  onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string }) => void;
+  onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => Promise<string>;
+  onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => void;
 }) {
   const [raw, setRaw] = useState("");
   const [groupId, setGroupId] = useState<number | null>(groups[0]?.id ?? null);
@@ -3037,8 +3037,8 @@ function AccountEditor({
   onOauthCallbackChange: (value: string) => void;
   onSave: (input: Parameters<typeof api.updateAccount>[0]) => void;
   onRevealAccountSecrets: (input: Parameters<typeof api.revealAccountSecrets>[0]) => Promise<Awaited<ReturnType<typeof api.revealAccountSecrets>>>;
-  onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string }) => void;
-  onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string }) => void;
+  onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => void;
+  onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => void;
 }) {
   const [draft, setDraft] = useState({
     email: "",
@@ -3180,7 +3180,7 @@ function AccountEditor({
         <button
           className="button secondary"
           disabled={!draft.client_id.trim()}
-          onClick={() => onGenerateOAuthUrl({ client_id: draft.client_id, redirect_uri: redirectUri, login_hint: draft.email })}
+          onClick={() => onGenerateOAuthUrl({ client_id: draft.client_id, redirect_uri: redirectUri, login_hint: draft.email, provider: draft.provider })}
         >
           <KeyRound size={16} />
           OAuth 链接
@@ -3202,7 +3202,8 @@ function AccountEditor({
               account_id: account.id,
               client_id: draft.client_id,
               redirect_uri: redirectUri,
-              code_or_url: oauthCallback
+              code_or_url: oauthCallback,
+              provider: draft.provider
             })
           }
         >

@@ -58,6 +58,7 @@
 - Graph 附件元数据同步和附件下载。
 - 基础 IMAP TLS 登录、UID search/fetch、MIME 解析。
 - IMAP 原始 MIME 本地缓存和附件解析下载。
+- IMAP 支持 XOAUTH2 登录、LIST 文件夹发现和 Junk/Deleted/Trash/Spam 等特殊文件夹映射。
 - 邮件详情支持全部附件打包为本地 ZIP 下载、已缓存原始 MIME raw 查看、附件下载中状态和错误提示。
 - 邮件列表、邮件详情、附件入口。
 - 刷新日志和账号刷新状态记录。
@@ -167,6 +168,7 @@
   - `feat: add temp email labels and cloudflare batch generation`
   - `feat: add temp email smart names and import progress`
   - `feat: enhance mail detail downloads and raw view`
+  - `feat: enhance imap auth and folder mapping`
 
 ## 未完成
 
@@ -180,7 +182,6 @@ P0：已补齐
 
 P1：补齐常用体验
 
-- IMAP 增强：XOAUTH2、文件夹发现、特殊文件夹映射，不再只依赖固定 `Junk` / `Deleted` 名称。
 - 本地保留管理：缓存统计、清理入口、关闭确认、新邮件同步提示和更明确的本地/远程状态。
 - 调度与重试可观测性：独立任务历史仪表盘、更细错误分类、转发失败退避和通道熔断。
 
@@ -300,4 +301,4 @@ P2：后续增强
 
 ## 当前推荐下一步
 
-继续按“桌面版够用，优先补功能”推进。下一批建议先做 IMAP 增强，然后推进本地保留管理；Web 服务和浏览器扩展暂不处理。
+继续按“桌面版够用，优先补功能”推进。下一批建议先做本地保留管理，然后推进调度与重试可观测性；Web 服务和浏览器扩展暂不处理。

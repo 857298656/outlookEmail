@@ -645,6 +645,7 @@ pub struct OAuthAuthUrlInput {
     pub client_id: String,
     pub redirect_uri: String,
     pub login_hint: Option<String>,
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -653,6 +654,7 @@ pub struct OAuthExchangeInput {
     pub client_id: String,
     pub redirect_uri: String,
     pub code_or_url: String,
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

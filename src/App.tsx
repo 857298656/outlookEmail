@@ -37,10 +37,12 @@ import type {
   AutomationRun,
   AutomationRunQuery,
   BackupLog,
+  ClearLocalDataInput,
   ExportResult,
   ForwardingLog,
   Group,
   ImportAccountsResult,
+  LocalRetentionSummary,
   MailMessage,
   MailMessageQuery,
   MailRawContent,
@@ -86,6 +88,7 @@ function App() {
   const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
   const [retryQueue, setRetryQueue] = useState<RetryQueueItem[]>([]);
   const [refreshLogs, setRefreshLogs] = useState<RefreshLog[]>([]);
+  const [localRetention, setLocalRetention] = useState<LocalRetentionSummary | null>(null);
   const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<number | "all">("all");
   const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>();
@@ -200,14 +203,24 @@ function App() {
   }
 
   async function loadAutomation() {
-    const [nextSettings, nextForwardingLogs, nextBackupLogs, nextAutomationRuns, nextRetryQueue, nextRefreshLogs, nextSchedulerStatus] = await Promise.all([
+    const [
+      nextSettings,
+      nextForwardingLogs,
+      nextBackupLogs,
+      nextAutomationRuns,
+      nextRetryQueue,
+      nextRefreshLogs,
+      nextSchedulerStatus,
+      nextLocalRetention
+    ] = await Promise.all([
       api.getSettings(),
       api.listForwardingLogs(80),
       api.listBackupLogs(40),
       api.listAutomationRuns({}, 80),
       api.listRetryQueue({}, 80),
       api.listRefreshLogs(null, 100),
-      api.schedulerStatus()
+      api.schedulerStatus(),
+      api.getLocalRetentionSummary()
     ]);
     setSettings(nextSettings);
     setForwardingLogs(nextForwardingLogs);
@@ -216,6 +229,7 @@ function App() {
     setRetryQueue(nextRetryQueue);
     setRefreshLogs(nextRefreshLogs);
     setSchedulerStatus(nextSchedulerStatus);
+    setLocalRetention(nextLocalRetention);
   }
 
   async function loadTempWorkspace(email: string | undefined | null = selectedTempEmail) {
@@ -240,6 +254,17 @@ function App() {
     loadAutomation().catch((err) => setError(readError(err)));
     loadTempWorkspace().catch((err) => setError(readError(err)));
   }, [status?.unlocked]);
+
+  useEffect(() => {
+    function handleBeforeUnload(event: BeforeUnloadEvent) {
+      if (!busy) return;
+      event.preventDefault();
+      event.returnValue = "";
+    }
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [busy]);
 
   async function runAction(action: () => Promise<void>, success?: string) {
     setBusy(true);
@@ -850,6 +875,7 @@ function App() {
             backupLogs={backupLogs}
             automationRuns={automationRuns}
             retryQueue={retryQueue}
+            localRetention={localRetention}
             schedulerStatus={schedulerStatus}
             busy={busy}
             onSave={(nextSettings) =>
@@ -903,6 +929,16 @@ function App() {
                 const result = await api.clearAutomationRuns(query);
                 setNotice(formatResultMessage(result.message));
                 setAutomationRuns(await api.listAutomationRuns(query, 80));
+              })
+            }
+            onClearLocalData={(input) =>
+              runAction(async () => {
+                const result = await api.clearLocalData(input);
+                setNotice(formatResultMessage(result.message));
+                await loadStatus();
+                await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
+                await loadTempWorkspace(selectedTempEmail);
+                await loadAutomation();
               })
             }
             onRunRetryQueue={() =>
@@ -3362,6 +3398,7 @@ function SettingsView({
   backupLogs,
   automationRuns,
   retryQueue,
+  localRetention,
   schedulerStatus,
   busy,
   onSave,
@@ -3370,6 +3407,7 @@ function SettingsView({
   onRestoreBackup,
   onFilterAutomationRuns,
   onClearAutomationRuns,
+  onClearLocalData,
   onRunRetryQueue,
   onRetryQueueItem,
   onDismissRetryItem
@@ -3380,6 +3418,7 @@ function SettingsView({
   backupLogs: BackupLog[];
   automationRuns: AutomationRun[];
   retryQueue: RetryQueueItem[];
+  localRetention: LocalRetentionSummary | null;
   schedulerStatus: SchedulerStatus | null;
   busy: boolean;
   onSave: (settings: Settings) => void;
@@ -3388,13 +3427,24 @@ function SettingsView({
   onRestoreBackup: (backupLogId: number) => void;
   onFilterAutomationRuns: (query: AutomationRunQuery) => void;
   onClearAutomationRuns: (query: AutomationRunQuery & { clear_all?: boolean }) => void;
+  onClearLocalData: (input: ClearLocalDataInput) => void;
   onRunRetryQueue: () => void;
   onRetryQueueItem: (retryId: number) => void;
   onDismissRetryItem: (retryId: number) => void;
 }) {
   const [draft, setDraft] = useState(settings);
   const [runFilters, setRunFilters] = useState({ job_type: "all", trigger_type: "all", status: "all", search: "" });
+  const [clearLocal, setClearLocal] = useState({
+    clear_mail_cache: false,
+    clear_temp_mail_cache: false,
+    clear_attachments: false,
+    clear_exports: false,
+    confirm: ""
+  });
   useEffect(() => setDraft(settings), [settings]);
+
+  const hasClearSelection =
+    clearLocal.clear_mail_cache || clearLocal.clear_temp_mail_cache || clearLocal.clear_attachments || clearLocal.clear_exports;
 
   function setField<K extends keyof Settings>(key: K, value: Settings[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -3556,6 +3606,84 @@ function SettingsView({
           <RunStatus label="转发" value={schedulerStatus?.last_forwarding_at} />
           <RunStatus label="备份" value={schedulerStatus?.last_backup_at} />
         </div>
+        {localRetention && (
+          <>
+            <div className="retentionStats">
+              <Stat label="本地邮件" value={localRetention.mail_message_count} />
+              <Stat label="未读" value={localRetention.unread_message_count} />
+              <Stat label="临时消息" value={localRetention.temp_message_count} />
+              <Stat label="附件文件" value={localRetention.attachment_file_count} />
+              <Stat label="导出文件" value={localRetention.export_file_count} />
+              <Stat label="待重试" value={localRetention.retry_queue_count} />
+            </div>
+            <div className="retentionSizeGrid">
+              <span>数据库</span>
+              <strong>{formatBytes(localRetention.database_size) || "0 B"}</strong>
+              <span>附件</span>
+              <strong>{formatBytes(localRetention.attachments_size) || "0 B"}</strong>
+              <span>导出</span>
+              <strong>{formatBytes(localRetention.exports_size) || "0 B"}</strong>
+              <span>备份</span>
+              <strong>{formatBytes(localRetention.backups_size) || "0 B"}</strong>
+              <span>最新邮件</span>
+              <strong>{localRetention.latest_mail_received_at ? formatDate(localRetention.latest_mail_received_at) : "-"}</strong>
+              <span>账号刷新</span>
+              <strong>{localRetention.latest_account_refresh_at ? formatDate(localRetention.latest_account_refresh_at) : "-"}</strong>
+            </div>
+            <div className="localStateRow">
+              <StatusPill status="local" />
+              <span>清理本地缓存不删除远端邮件</span>
+            </div>
+            <div className="localClearBox">
+              <label className="checkLine">
+                <input
+                  type="checkbox"
+                  checked={clearLocal.clear_mail_cache}
+                  onChange={(event) => setClearLocal({ ...clearLocal, clear_mail_cache: event.target.checked })}
+                />
+                <span>邮件缓存</span>
+              </label>
+              <label className="checkLine">
+                <input
+                  type="checkbox"
+                  checked={clearLocal.clear_temp_mail_cache}
+                  onChange={(event) => setClearLocal({ ...clearLocal, clear_temp_mail_cache: event.target.checked })}
+                />
+                <span>临时邮箱消息</span>
+              </label>
+              <label className="checkLine">
+                <input
+                  type="checkbox"
+                  checked={clearLocal.clear_attachments}
+                  onChange={(event) => setClearLocal({ ...clearLocal, clear_attachments: event.target.checked })}
+                />
+                <span>附件下载</span>
+              </label>
+              <label className="checkLine">
+                <input
+                  type="checkbox"
+                  checked={clearLocal.clear_exports}
+                  onChange={(event) => setClearLocal({ ...clearLocal, clear_exports: event.target.checked })}
+                />
+                <span>导出文件</span>
+              </label>
+              <input
+                className="input grow"
+                value={clearLocal.confirm}
+                placeholder="CLEAR LOCAL DATA"
+                onChange={(event) => setClearLocal({ ...clearLocal, confirm: event.target.value })}
+              />
+              <button
+                className="button danger"
+                disabled={busy || !hasClearSelection || clearLocal.confirm !== "CLEAR LOCAL DATA"}
+                onClick={() => onClearLocalData(clearLocal)}
+              >
+                <Trash2 size={16} />
+                清理本地数据
+              </button>
+            </div>
+          </>
+        )}
         <button className="button primary" disabled={busy} onClick={() => onSave(draft)}>
           {busy ? <Loader2 className="spin" size={16} /> : <SettingsIcon size={16} />}
           保存设置
@@ -3990,7 +4118,8 @@ function formatStatus(status: string) {
     toClaim: "可领取",
     claimed: "已领取",
     read: "已读",
-    unread: "未读"
+    unread: "未读",
+    local: "本地"
   };
   return map[status] ?? status;
 }
@@ -4042,6 +4171,15 @@ function formatResultMessage(message: string) {
     return `已刷新 ${refreshed} 个账号，${failed} 个失败：${detail}`;
   }
 
+  const refreshedWithCachedFailures = message.match(/^Refreshed (\d+) account\(s\), cached (\d+) message\(s\), (\d+) failed: (.+)$/);
+  if (refreshedWithCachedFailures) {
+    const [, refreshed, cached, failed, detail] = refreshedWithCachedFailures;
+    return `已刷新 ${refreshed} 个账号，缓存 ${cached} 封邮件，${failed} 个失败：${detail}`;
+  }
+
+  const refreshedWithCached = message.match(/^Refreshed (\d+) account\(s\), cached (\d+) message\(s\)$/);
+  if (refreshedWithCached) return `已刷新 ${refreshedWithCached[1]} 个账号，缓存 ${refreshedWithCached[2]} 封邮件`;
+
   const refreshed = message.match(/^Refreshed (\d+) account\(s\)$/);
   if (refreshed) return `已刷新 ${refreshed[1]} 个账号`;
 
@@ -4074,6 +4212,9 @@ function formatResultMessage(message: string) {
 
   const cleared = message.match(/^Cleared (\d+) automation run\(s\)$/);
   if (cleared) return `已清理 ${cleared[1]} 条自动化记录`;
+
+  const clearedLocal = message.match(/^Cleared local data: (\d+) mail message\(s\), (\d+) temp message\(s\), (\d+) file\(s\)$/);
+  if (clearedLocal) return `已清理本地数据：${clearedLocal[1]} 封邮件、${clearedLocal[2]} 条临时消息、${clearedLocal[3]} 个文件`;
 
   const batch = message.match(/^Batch (delete|move_group|set_forward|add_tags|remove_tags) processed (\d+) account\(s\)$/);
   if (batch) {

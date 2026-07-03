@@ -1530,6 +1530,52 @@ button:disabled {
   margin-bottom: 18px;
 }
 
+.retentionStats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.retentionSizeGrid {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 12px 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.retentionSizeGrid strong {
+  color: #17202a;
+  overflow-wrap: anywhere;
+}
+
+.localStateRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+  color: #475569;
+  font-size: 12px;
+}
+
+.localClearBox {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.localClearBox .input {
+  flex: 1 1 190px;
+}
+
 .runStatus {
   display: grid;
   gap: 4px;

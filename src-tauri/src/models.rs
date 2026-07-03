@@ -237,6 +237,45 @@ pub struct RestoreBackupResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct LocalRetentionSummary {
+    pub database_path: String,
+    pub database_size: i64,
+    pub attachment_file_count: usize,
+    pub attachments_size: i64,
+    pub export_file_count: usize,
+    pub exports_size: i64,
+    pub backup_file_count: usize,
+    pub backups_size: i64,
+    pub mail_message_count: i64,
+    pub unread_message_count: i64,
+    pub raw_mime_count: i64,
+    pub body_cached_count: i64,
+    pub temp_message_count: i64,
+    pub retry_queue_count: i64,
+    pub latest_mail_received_at: Option<String>,
+    pub latest_account_refresh_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClearLocalDataInput {
+    pub clear_mail_cache: Option<bool>,
+    pub clear_temp_mail_cache: Option<bool>,
+    pub clear_attachments: Option<bool>,
+    pub clear_exports: Option<bool>,
+    pub confirm: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClearLocalDataResult {
+    pub success: bool,
+    pub message: String,
+    pub deleted_messages: i64,
+    pub deleted_temp_messages: i64,
+    pub deleted_files: usize,
+    pub freed_bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SchedulerStatus {
     pub last_refresh_at: Option<String>,
     pub last_forwarding_at: Option<String>,

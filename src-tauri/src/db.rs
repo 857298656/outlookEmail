@@ -1449,12 +1449,14 @@ impl Database {
         let top = input.top.unwrap_or(25).clamp(1, 50);
         let mut refreshed = 0_usize;
         let mut failed = 0_usize;
+        let mut cached_messages = 0_usize;
         let mut errors = Vec::new();
 
         for account in credentials {
             match self.refresh_account_credential(&account, &folder, top) {
                 Ok(count) => {
                     refreshed += 1;
+                    cached_messages += count;
                     self.mark_account_refresh_success(account.id, &account.email, count)?;
                 }
                 Err(err) => {
@@ -1470,9 +1472,15 @@ impl Database {
         Ok(JobResult {
             success: failed == 0,
             message: if errors.is_empty() {
-                format!("Refreshed {} account(s)", refreshed)
+                format!("Refreshed {} account(s), cached {} message(s)", refreshed, cached_messages)
             } else {
-                format!("Refreshed {} account(s), {} failed: {}", refreshed, failed, errors.join("; "))
+                format!(
+                    "Refreshed {} account(s), cached {} message(s), {} failed: {}",
+                    refreshed,
+                    cached_messages,
+                    failed,
+                    errors.join("; ")
+                )
             },
             refreshed,
             failed,
@@ -2037,6 +2045,130 @@ impl Database {
             safety_backup_path: safety_path_text,
             replaced_database_path: db_path.to_string_lossy().to_string(),
             size: log.size,
+        })
+    }
+
+    pub fn local_retention_summary(&self) -> AppResult<LocalRetentionSummary> {
+        self.require_unlocked()?;
+        let (attachment_file_count, attachments_size) = dir_stats(&attachment_dir(&self.db_path)?)?;
+        let (export_file_count, exports_size) = dir_stats(&exports_dir(&self.db_path)?)?;
+        let (backup_file_count, backups_size) = dir_stats(&backup_dir(&self.db_path)?)?;
+        let (mail_message_count, unread_message_count, raw_mime_count, body_cached_count): (i64, i64, i64, i64) =
+            self.conn.query_row(
+                "
+                SELECT COUNT(*),
+                       COALESCE(SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END), 0),
+                       COALESCE(SUM(CASE WHEN raw_mime IS NOT NULL AND LENGTH(raw_mime) > 0 THEN 1 ELSE 0 END), 0),
+                       COALESCE(SUM(CASE WHEN body_cached = 1 THEN 1 ELSE 0 END), 0)
+                FROM retained_mail_messages
+                ",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+        let latest_mail_received_at = self
+            .conn
+            .query_row(
+                "
+                SELECT received_at
+                FROM retained_mail_messages
+                ORDER BY received_at_sort DESC, id DESC
+                LIMIT 1
+                ",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let temp_message_count = self.scalar_count("SELECT COUNT(*) FROM temp_email_messages")?;
+        let retry_queue_count = self.scalar_count("SELECT COUNT(*) FROM retry_queue WHERE status IN ('pending', 'failed')")?;
+        let latest_account_refresh_at = self
+            .conn
+            .query_row(
+                "
+                SELECT MAX(last_refresh_at)
+                FROM accounts
+                WHERE last_refresh_at IS NOT NULL
+                ",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(LocalRetentionSummary {
+            database_path: self.db_path.to_string_lossy().to_string(),
+            database_size: file_set_size(&sqlite_file_set(&self.db_path))?,
+            attachment_file_count,
+            attachments_size,
+            export_file_count,
+            exports_size,
+            backup_file_count,
+            backups_size,
+            mail_message_count,
+            unread_message_count,
+            raw_mime_count,
+            body_cached_count,
+            temp_message_count,
+            retry_queue_count,
+            latest_mail_received_at,
+            latest_account_refresh_at,
+        })
+    }
+
+    pub fn clear_local_data(&self, input: ClearLocalDataInput) -> AppResult<ClearLocalDataResult> {
+        self.require_unlocked()?;
+        if input.confirm.trim() != "CLEAR LOCAL DATA" {
+            return Err(AppError::InvalidInput("type CLEAR LOCAL DATA to confirm local data cleanup".to_string()));
+        }
+        let clear_mail_cache = input.clear_mail_cache.unwrap_or(false);
+        let clear_temp_mail_cache = input.clear_temp_mail_cache.unwrap_or(false);
+        let clear_attachments = input.clear_attachments.unwrap_or(false);
+        let clear_exports = input.clear_exports.unwrap_or(false);
+        if !clear_mail_cache && !clear_temp_mail_cache && !clear_attachments && !clear_exports {
+            return Err(AppError::InvalidInput("select at least one local data category to clear".to_string()));
+        }
+
+        let mut deleted_messages = 0_i64;
+        let mut deleted_temp_messages = 0_i64;
+        let mut deleted_files = 0_usize;
+        let mut freed_bytes = 0_i64;
+
+        if clear_mail_cache {
+            deleted_messages = self.scalar_count("SELECT COUNT(*) FROM retained_mail_messages")?;
+            self.conn.execute("DELETE FROM retained_mail_messages", [])?;
+        }
+        if clear_temp_mail_cache {
+            deleted_temp_messages = self.scalar_count("SELECT COUNT(*) FROM temp_email_messages")?;
+            self.conn.execute("DELETE FROM temp_email_messages", [])?;
+        }
+        if clear_attachments {
+            let (files, bytes) = remove_dir_contents(&attachment_dir(&self.db_path)?)?;
+            deleted_files += files;
+            freed_bytes += bytes;
+        }
+        if clear_exports {
+            let (files, bytes) = remove_dir_contents(&exports_dir(&self.db_path)?)?;
+            deleted_files += files;
+            freed_bytes += bytes;
+        }
+
+        self.audit(
+            "local_data.cleared",
+            "storage",
+            None,
+            &format!(
+                "{} mail, {} temp, {} files, {} bytes",
+                deleted_messages, deleted_temp_messages, deleted_files, freed_bytes
+            ),
+        )?;
+        Ok(ClearLocalDataResult {
+            success: true,
+            message: format!(
+                "Cleared local data: {} mail message(s), {} temp message(s), {} file(s)",
+                deleted_messages, deleted_temp_messages, deleted_files
+            ),
+            deleted_messages,
+            deleted_temp_messages,
+            deleted_files,
+            freed_bytes,
         })
     }
 
@@ -5547,6 +5679,65 @@ fn backup_dir(db_path: &Path) -> AppResult<PathBuf> {
         .join("backups"))
 }
 
+fn file_set_size(paths: &[PathBuf]) -> AppResult<i64> {
+    let mut size = 0_i64;
+    for path in paths {
+        if path.exists() {
+            size += path
+                .metadata()
+                .map_err(|err| AppError::Internal(err.to_string()))?
+                .len() as i64;
+        }
+    }
+    Ok(size)
+}
+
+fn dir_stats(dir: &Path) -> AppResult<(usize, i64)> {
+    if !dir.exists() {
+        return Ok((0, 0));
+    }
+    let mut files = 0_usize;
+    let mut bytes = 0_i64;
+    collect_dir_stats(dir, &mut files, &mut bytes)?;
+    Ok((files, bytes))
+}
+
+fn collect_dir_stats(dir: &Path, files: &mut usize, bytes: &mut i64) -> AppResult<()> {
+    for entry in std::fs::read_dir(dir).map_err(|err| AppError::Internal(err.to_string()))? {
+        let entry = entry.map_err(|err| AppError::Internal(err.to_string()))?;
+        let metadata = std::fs::symlink_metadata(entry.path()).map_err(|err| AppError::Internal(err.to_string()))?;
+        if metadata.file_type().is_dir() {
+            collect_dir_stats(&entry.path(), files, bytes)?;
+        } else {
+            *files += 1;
+            *bytes += metadata.len() as i64;
+        }
+    }
+    Ok(())
+}
+
+fn remove_dir_contents(dir: &Path) -> AppResult<(usize, i64)> {
+    if !dir.exists() {
+        return Ok((0, 0));
+    }
+    let root = std::fs::canonicalize(dir).map_err(|err| AppError::Internal(err.to_string()))?;
+    let (files, bytes) = dir_stats(&root)?;
+    for entry in std::fs::read_dir(&root).map_err(|err| AppError::Internal(err.to_string()))? {
+        let entry = entry.map_err(|err| AppError::Internal(err.to_string()))?;
+        let path = entry.path();
+        if !path.starts_with(&root) {
+            return Err(AppError::Internal("refusing to remove path outside local data directory".to_string()));
+        }
+        let metadata = std::fs::symlink_metadata(&path).map_err(|err| AppError::Internal(err.to_string()))?;
+        if metadata.file_type().is_dir() {
+            std::fs::remove_dir_all(&path).map_err(|err| AppError::Internal(err.to_string()))?;
+        } else {
+            std::fs::remove_file(&path).map_err(|err| AppError::Internal(err.to_string()))?;
+        }
+    }
+    Ok((files, bytes))
+}
+
 fn validate_local_backup_file_name(value: &str) -> AppResult<String> {
     let file_name = value.trim();
     if file_name.is_empty()
@@ -5920,12 +6111,12 @@ fn remote_sync_failure_from_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Re
 
 #[cfg(test)]
 mod project_tests {
-    use super::{backup_dir, normalize_project_key, Database, MailMessageRef};
+    use super::{attachment_dir, backup_dir, exports_dir, normalize_project_key, Database, MailMessageRef};
     use crate::error::AppError;
     use crate::import::ImportedAccount;
     use crate::models::{
         AccountBatchInput, AttachmentInfo, AutomationRunQuery, ClaimProjectAccountInput,
-        ClearAutomationRunsInput, CreateGroupInput, CreateProjectInput, DeleteMailMessagesInput,
+        ClearAutomationRunsInput, ClearLocalDataInput, CreateGroupInput, CreateProjectInput, DeleteMailMessagesInput,
         DownloadAllAttachmentsInput, DownloadAttachmentInput, ExportAccountsInput, ExportMailMessagesInput,
         MailMessageQuery, MarkMailMessagesInput, ProjectAccountActionInput, RefreshInput,
         RestoreBackupInput, RevealAccountSecretsInput, RetryQueueItemInput, RetryQueueQuery,
@@ -6723,6 +6914,94 @@ mod project_tests {
         assert_eq!(accounts_export.item_count, 1);
         let csv = std::fs::read_to_string(&accounts_export.path).expect("read csv export");
         assert!(csv.contains("one@example.com"));
+    }
+
+    #[test]
+    fn reports_and_clears_local_retention_data() {
+        let root = std::env::temp_dir().join(format!("outlook-email-retention-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: root.join("test.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "
+                INSERT INTO accounts (id, email, status, group_id, provider, account_type)
+                VALUES (1, 'local@example.com', 'active', 1, 'imap', 'imap')
+                ",
+                [],
+            )
+            .expect("insert account");
+        db.conn
+            .execute(
+                "
+                INSERT INTO retained_mail_messages
+                (id, account_id, folder, provider_message_id, subject, received_at, received_at_sort,
+                 is_read, body_cached, raw_mime)
+                VALUES (10, 1, 'inbox', 'm1', 'Hello', '2026-01-01T00:00:00Z', 1, 0, 1, ?)
+                ",
+                params![b"raw message"],
+            )
+            .expect("insert retained message");
+        db.conn
+            .execute(
+                "
+                INSERT INTO temp_email_messages
+                (message_id, email_address, from_address, subject, content, html_content, has_html, timestamp, raw_content)
+                VALUES ('t1', 'temp@example.com', 'sender@example.com', 'Hi', 'body', '', 0, 1, 'raw')
+                ",
+                [],
+            )
+            .expect("insert temp message");
+
+        let attachments = attachment_dir(&db.db_path).expect("attachment dir");
+        std::fs::create_dir_all(&attachments).expect("create attachments");
+        std::fs::write(attachments.join("one.txt"), b"attachment").expect("write attachment");
+        let exports = exports_dir(&db.db_path).expect("exports dir").join("mail");
+        std::fs::create_dir_all(&exports).expect("create exports");
+        std::fs::write(exports.join("one.html"), b"export").expect("write export");
+
+        let summary = db.local_retention_summary().expect("summary");
+        assert_eq!(summary.mail_message_count, 1);
+        assert_eq!(summary.unread_message_count, 1);
+        assert_eq!(summary.raw_mime_count, 1);
+        assert_eq!(summary.temp_message_count, 1);
+        assert_eq!(summary.attachment_file_count, 1);
+        assert_eq!(summary.export_file_count, 1);
+
+        assert!(db
+            .clear_local_data(ClearLocalDataInput {
+                clear_mail_cache: Some(true),
+                clear_temp_mail_cache: None,
+                clear_attachments: None,
+                clear_exports: None,
+                confirm: "wrong".to_string(),
+            })
+            .is_err());
+
+        let result = db
+            .clear_local_data(ClearLocalDataInput {
+                clear_mail_cache: Some(true),
+                clear_temp_mail_cache: Some(true),
+                clear_attachments: Some(true),
+                clear_exports: Some(true),
+                confirm: "CLEAR LOCAL DATA".to_string(),
+            })
+            .expect("clear local data");
+        assert_eq!(result.deleted_messages, 1);
+        assert_eq!(result.deleted_temp_messages, 1);
+        assert_eq!(result.deleted_files, 2);
+        assert!(result.freed_bytes > 0);
+
+        let summary = db.local_retention_summary().expect("summary after clear");
+        assert_eq!(summary.mail_message_count, 0);
+        assert_eq!(summary.temp_message_count, 0);
+        assert_eq!(summary.attachment_file_count, 0);
+        assert_eq!(summary.export_file_count, 0);
     }
 
     #[test]

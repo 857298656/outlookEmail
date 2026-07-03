@@ -196,6 +196,42 @@ export type RestoreBackupResult = {
   size: number;
 };
 
+export type LocalRetentionSummary = {
+  database_path: string;
+  database_size: number;
+  attachment_file_count: number;
+  attachments_size: number;
+  export_file_count: number;
+  exports_size: number;
+  backup_file_count: number;
+  backups_size: number;
+  mail_message_count: number;
+  unread_message_count: number;
+  raw_mime_count: number;
+  body_cached_count: number;
+  temp_message_count: number;
+  retry_queue_count: number;
+  latest_mail_received_at: string | null;
+  latest_account_refresh_at: string | null;
+};
+
+export type ClearLocalDataInput = {
+  clear_mail_cache?: boolean;
+  clear_temp_mail_cache?: boolean;
+  clear_attachments?: boolean;
+  clear_exports?: boolean;
+  confirm: string;
+};
+
+export type ClearLocalDataResult = {
+  success: boolean;
+  message: string;
+  deleted_messages: number;
+  deleted_temp_messages: number;
+  deleted_files: number;
+  freed_bytes: number;
+};
+
 export type ExportResult = {
   path: string;
   file_name: string;

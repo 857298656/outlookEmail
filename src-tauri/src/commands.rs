@@ -312,6 +312,18 @@ pub fn restore_backup(state: State<'_, AppState>, input: RestoreBackupInput) -> 
 }
 
 #[tauri::command]
+pub fn get_local_retention_summary(state: State<'_, AppState>) -> AppResult<LocalRetentionSummary> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.local_retention_summary()
+}
+
+#[tauri::command]
+pub fn clear_local_data(state: State<'_, AppState>, input: ClearLocalDataInput) -> AppResult<ClearLocalDataResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.clear_local_data(input)
+}
+
+#[tauri::command]
 pub fn list_forwarding_logs(state: State<'_, AppState>, limit: Option<i64>) -> AppResult<Vec<ForwardingLog>> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.list_forwarding_logs(limit)

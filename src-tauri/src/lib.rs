@@ -75,6 +75,8 @@ pub fn run() {
             run_forwarding_job,
             run_backup_job,
             restore_backup,
+            get_local_retention_summary,
+            clear_local_data,
             list_forwarding_logs,
             list_backup_logs,
             scheduler_status,

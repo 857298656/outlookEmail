@@ -7,12 +7,15 @@ import type {
   AutomationRunQuery,
   BackupLog,
   BackupResult,
+  ClearLocalDataInput,
+  ClearLocalDataResult,
   CloudflareChannel,
   ExportResult,
   ForwardingLog,
   Group,
   ImportAccountsResult,
   JobResult,
+  LocalRetentionSummary,
   MailMessage,
   MailMessageQuery,
   MailRawContent,
@@ -126,6 +129,26 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     case "lock_app":
       mockUnlocked = false;
       return status() as T;
+    case "get_local_retention_summary":
+      return mockLocalRetentionSummary() as T;
+    case "clear_local_data": {
+      const input = args?.input as ClearLocalDataInput;
+      if (input.confirm !== "CLEAR LOCAL DATA") throw new Error("type CLEAR LOCAL DATA to confirm local data cleanup");
+      const deletedMessages = input.clear_mail_cache ? mockMessages.length : 0;
+      const deletedTempMessages = input.clear_temp_mail_cache ? mockTempMessages.length : 0;
+      const deletedFiles = (input.clear_attachments ? 2 : 0) + (input.clear_exports ? 2 : 0);
+      const freedBytes = deletedFiles * 512;
+      if (input.clear_mail_cache) mockMessages = [];
+      if (input.clear_temp_mail_cache) mockTempMessages = [];
+      return {
+        success: true,
+        message: `Cleared local data: ${deletedMessages} mail message(s), ${deletedTempMessages} temp message(s), ${deletedFiles} file(s)`,
+        deleted_messages: deletedMessages,
+        deleted_temp_messages: deletedTempMessages,
+        deleted_files: deletedFiles,
+        freed_bytes: freedBytes
+      } as T;
+    }
     case "list_groups":
       return mockGroups as T;
     case "create_group": {
@@ -809,6 +832,28 @@ function status(): AppStatus {
   };
 }
 
+function mockLocalRetentionSummary(): LocalRetentionSummary {
+  const attachmentFileCount = mockMessages.reduce((count, message) => count + message.attachments.length, 0);
+  return {
+    database_path: "browser-preview.sqlite",
+    database_size: 4096 + mockMessages.length * 1024 + mockTempMessages.length * 512,
+    attachment_file_count: attachmentFileCount,
+    attachments_size: attachmentFileCount * 2048,
+    export_file_count: mockBackupLogs.length,
+    exports_size: mockBackupLogs.length * 1024,
+    backup_file_count: mockBackupLogs.length,
+    backups_size: mockBackupLogs.reduce((sum, log) => sum + log.size, 0),
+    mail_message_count: mockMessages.length,
+    unread_message_count: mockMessages.filter((message) => !message.is_read).length,
+    raw_mime_count: mockMessages.length,
+    body_cached_count: mockMessages.filter((message) => message.body).length,
+    temp_message_count: mockTempMessages.length,
+    retry_queue_count: mockRetryQueue.filter((item) => item.status === "pending" || item.status === "failed").length,
+    latest_mail_received_at: mockMessages[0]?.received_at ?? null,
+    latest_account_refresh_at: mockAccounts.find((account) => account.last_refresh_at)?.last_refresh_at ?? null
+  };
+}
+
 function mockExport(fileName: string, itemCount: number): ExportResult {
   return {
     path: `browser-preview/exports/${fileName}`,
@@ -1123,6 +1168,8 @@ export const api = {
   runBackupJob: () => call<BackupResult>("run_backup_job"),
   restoreBackup: (backupLogId: number) =>
     call<RestoreBackupResult>("restore_backup", { input: { backup_log_id: backupLogId, confirm: true } }),
+  getLocalRetentionSummary: () => call<LocalRetentionSummary>("get_local_retention_summary"),
+  clearLocalData: (input: ClearLocalDataInput) => call<ClearLocalDataResult>("clear_local_data", { input }),
   listForwardingLogs: (limit = 100) => call<ForwardingLog[]>("list_forwarding_logs", { limit }),
   listBackupLogs: (limit = 100) => call<BackupLog[]>("list_backup_logs", { limit }),
   schedulerStatus: () => call<SchedulerStatus>("scheduler_status"),

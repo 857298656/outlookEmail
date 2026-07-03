@@ -5,6 +5,7 @@ import {
   ChevronUp,
   Cloud,
   Download,
+  FileText,
   FolderKanban,
   Inbox,
   KeyRound,
@@ -42,6 +43,7 @@ import type {
   ImportAccountsResult,
   MailMessage,
   MailMessageQuery,
+  MailRawContent,
   Project,
   ProjectAccount,
   RefreshLog,
@@ -501,8 +503,11 @@ function App() {
                   }, "已创建本地邮件")
                 : undefined
             }
-            onDownloadAttachment={(message, attachmentId) =>
-              runAction(async () => {
+            onDownloadAttachment={async (message, attachmentId) => {
+              setBusy(true);
+              setError(null);
+              setNotice(null);
+              try {
                 const result = await api.downloadAttachment({
                   account_id: message.account_id,
                   message_id: message.provider_message_id,
@@ -510,8 +515,44 @@ function App() {
                   folder: message.folder
                 });
                 setNotice(`已下载 ${result.file_name}`);
-              })
-            }
+              } catch (err) {
+                setError(readError(err));
+                throw err;
+              } finally {
+                setBusy(false);
+              }
+            }}
+            onDownloadAllAttachments={async (message) => {
+              setBusy(true);
+              setError(null);
+              setNotice(null);
+              try {
+                const result = await api.downloadAllAttachments({
+                  account_id: message.account_id,
+                  message_id: message.provider_message_id,
+                  folder: message.folder
+                });
+                setNotice(exportNotice(result));
+              } catch (err) {
+                setError(readError(err));
+                throw err;
+              } finally {
+                setBusy(false);
+              }
+            }}
+            onViewRawMessage={async (message) => {
+              setBusy(true);
+              setError(null);
+              setNotice(null);
+              try {
+                return await api.getMailRawContent(message.id);
+              } catch (err) {
+                setError(readError(err));
+                throw err;
+              } finally {
+                setBusy(false);
+              }
+            }}
             onRetryRemoteFailure={(retryId) =>
               runAction(async () => {
                 const result = await api.retryQueueItem(retryId);
@@ -967,6 +1008,8 @@ function MailWorkspace({
   onExportMessages,
   onCreateDemo,
   onDownloadAttachment,
+  onDownloadAllAttachments,
+  onViewRawMessage,
   onRetryRemoteFailure,
   onDismissRemoteFailure
 }: {
@@ -995,16 +1038,69 @@ function MailWorkspace({
   onDeleteMessages: (messageIds: number[]) => void;
   onExportMessages: (messageIds: number[]) => void;
   onCreateDemo: () => void;
-  onDownloadAttachment: (message: MailMessage, attachmentId: string) => void;
+  onDownloadAttachment: (message: MailMessage, attachmentId: string) => void | Promise<void>;
+  onDownloadAllAttachments: (message: MailMessage) => Promise<void>;
+  onViewRawMessage: (message: MailMessage) => Promise<MailRawContent>;
   onRetryRemoteFailure: (retryId: number) => void;
   onDismissRemoteFailure: (retryId: number) => void;
 }) {
   const [draftFilters, setDraftFilters] = useState(filters);
+  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState<string | null>(null);
+  const [downloadingAllAttachments, setDownloadingAllAttachments] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [rawContent, setRawContent] = useState<MailRawContent | null>(null);
+  const [rawBusy, setRawBusy] = useState(false);
+  const [rawError, setRawError] = useState<string | null>(null);
   const selectedCount = selectedMessageIds.length;
 
   useEffect(() => {
     setDraftFilters(filters);
   }, [filters]);
+
+  useEffect(() => {
+    setAttachmentError(null);
+    setRawContent(null);
+    setRawError(null);
+    setDownloadingAttachmentId(null);
+    setDownloadingAllAttachments(false);
+  }, [selectedMessage?.id]);
+
+  async function handleDownloadAttachment(message: MailMessage, attachmentId: string) {
+    setAttachmentError(null);
+    setDownloadingAttachmentId(attachmentId);
+    try {
+      await onDownloadAttachment(message, attachmentId);
+    } catch (err) {
+      setAttachmentError(readError(err));
+    } finally {
+      setDownloadingAttachmentId(null);
+    }
+  }
+
+  async function handleDownloadAllAttachments(message: MailMessage) {
+    setAttachmentError(null);
+    setDownloadingAllAttachments(true);
+    try {
+      await onDownloadAllAttachments(message);
+    } catch (err) {
+      setAttachmentError(readError(err));
+    } finally {
+      setDownloadingAllAttachments(false);
+    }
+  }
+
+  async function handleViewRawMessage(message: MailMessage) {
+    setRawError(null);
+    setRawBusy(true);
+    try {
+      setRawContent(await onViewRawMessage(message));
+    } catch (err) {
+      setRawContent(null);
+      setRawError(readError(err));
+    } finally {
+      setRawBusy(false);
+    }
+  }
 
   return (
     <section className="workspaceGrid">
@@ -1206,6 +1302,10 @@ function MailWorkspace({
                   <Trash2 size={14} />
                   删除
                 </button>
+                <button className="button compact secondary" disabled={rawBusy} onClick={() => handleViewRawMessage(selectedMessage)}>
+                  {rawBusy ? <Loader2 className="spin" size={14} /> : <FileText size={14} />}
+                  Raw
+                </button>
                 <button className="button compact secondary" onClick={() => onExportMessages([selectedMessage.id])}>
                   <Download size={14} />
                   导出
@@ -1229,18 +1329,43 @@ function MailWorkspace({
               />
             )}
             <MessageBody body={selectedMessage.body || selectedMessage.body_preview} bodyType={selectedMessage.body_type} />
+            {rawError && <div className="inlineError">{rawError}</div>}
+            {rawContent && (
+              <div className="rawSourcePanel">
+                <div className="rawSourceHeader">
+                  <div>
+                    <strong>{rawContent.file_name}</strong>
+                    <small>{formatBytes(rawContent.size)}</small>
+                  </div>
+                  <button className="iconMini" title="Close raw source" onClick={() => setRawContent(null)}>
+                    <XCircle size={15} />
+                  </button>
+                </div>
+                <pre>{rawContent.content}</pre>
+              </div>
+            )}
             {selectedMessage.attachments.length > 0 && (
               <div className="attachmentList">
                 <h3>附件</h3>
+                <button
+                  className="button compact secondary attachmentDownloadAll"
+                  disabled={downloadingAllAttachments || downloadingAttachmentId !== null}
+                  onClick={() => handleDownloadAllAttachments(selectedMessage)}
+                >
+                  {downloadingAllAttachments ? <Loader2 className="spin" size={14} /> : <Download size={14} />}
+                  All
+                </button>
+                {attachmentError && <div className="inlineError">{attachmentError}</div>}
                 {selectedMessage.attachments.map((attachment) => (
                   <button
                     className="attachmentButton"
                     key={attachment.id}
-                    onClick={() => onDownloadAttachment(selectedMessage, attachment.id)}
+                    disabled={downloadingAllAttachments || downloadingAttachmentId !== null}
+                    onClick={() => handleDownloadAttachment(selectedMessage, attachment.id)}
                   >
-                    <Download size={15} />
+                    {downloadingAttachmentId === attachment.id ? <Loader2 className="spin" size={15} /> : <Download size={15} />}
                     <span>{attachment.name}</span>
-                    <small>{formatBytes(attachment.size)}</small>
+                    <small>{downloadingAttachmentId === attachment.id ? "Downloading" : formatBytes(attachment.size)}</small>
                   </button>
                 ))}
               </div>

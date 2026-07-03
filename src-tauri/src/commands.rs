@@ -177,6 +177,18 @@ pub fn download_attachment(state: State<'_, AppState>, input: DownloadAttachment
 }
 
 #[tauri::command]
+pub fn download_all_attachments(state: State<'_, AppState>, input: DownloadAllAttachmentsInput) -> AppResult<ExportResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.download_all_attachments(input)
+}
+
+#[tauri::command]
+pub fn get_mail_raw_content(state: State<'_, AppState>, message_id: i64) -> AppResult<MailRawContent> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.get_mail_raw_content(message_id)
+}
+
+#[tauri::command]
 pub fn export_mail_messages(state: State<'_, AppState>, input: ExportMailMessagesInput) -> AppResult<ExportResult> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.export_mail_messages(input)

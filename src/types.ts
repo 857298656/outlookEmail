@@ -111,6 +111,13 @@ export type AttachmentInfo = {
   size: number;
 };
 
+export type MailRawContent = {
+  message_id: number;
+  file_name: string;
+  content: string;
+  size: number;
+};
+
 export type Settings = {
   graph_client_id: string;
   oauth_redirect_uri: string;

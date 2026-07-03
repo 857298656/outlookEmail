@@ -1472,17 +1472,12 @@ impl Database {
             .into_iter()
             .next()
             .ok_or_else(|| AppError::InvalidInput("account not found".to_string()))?;
-        let attachment = if should_use_graph(&account) {
-            providers::download_graph_attachment(&account, &input.message_id, &input.attachment_id)?
-        } else {
-            let folder = input
-                .folder
-                .as_deref()
-                .map(normalize_mail_folder)
-                .filter(|value| value != "all");
-            let raw_mime = self.cached_imap_raw_mime(account.id, &input.message_id, folder.as_deref())?;
-            providers::download_imap_attachment_from_raw(&raw_mime, &input.attachment_id)?
-        };
+        let folder = input
+            .folder
+            .as_deref()
+            .map(normalize_mail_folder)
+            .filter(|value| value != "all");
+        let attachment = self.fetch_attachment_content(&account, &input.message_id, &input.attachment_id, folder.as_deref())?;
         let file_name = safe_file_name(&attachment.name);
         let dir = attachment_dir(&self.db_path)?;
         std::fs::create_dir_all(&dir).map_err(|err| AppError::Internal(err.to_string()))?;
@@ -1499,6 +1494,107 @@ impl Database {
             file_name,
             size: attachment.bytes.len() as i64,
         })
+    }
+
+    pub fn download_all_attachments(&self, input: DownloadAllAttachmentsInput) -> AppResult<ExportResult> {
+        self.require_unlocked()?;
+        let account = self
+            .account_credentials(Some(input.account_id))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::InvalidInput("account not found".to_string()))?;
+        let folder = input
+            .folder
+            .as_deref()
+            .map(normalize_mail_folder)
+            .filter(|value| value != "all");
+        let attachment_infos = self.cached_message_attachments(account.id, &input.message_id, folder.as_deref())?;
+        if attachment_infos.is_empty() {
+            return Err(AppError::InvalidInput("message has no cached attachment metadata".to_string()));
+        }
+
+        let mut used_names = HashSet::new();
+        let mut files = Vec::new();
+        for attachment_info in attachment_infos {
+            let downloaded = self
+                .fetch_attachment_content(&account, &input.message_id, &attachment_info.id, folder.as_deref())
+                .map_err(|err| AppError::Internal(format!("failed to download attachment {}: {}", attachment_info.name, err)))?;
+            let display_name = if downloaded.name.trim().is_empty() {
+                attachment_info.name.as_str()
+            } else {
+                downloaded.name.as_str()
+            };
+            files.push((unique_bundle_file_name(&mut used_names, display_name), downloaded.bytes));
+        }
+
+        let dir = attachment_dir(&self.db_path)?;
+        std::fs::create_dir_all(&dir).map_err(|err| AppError::Internal(err.to_string()))?;
+        let requested_file_name = timestamped_file_name("attachments", "zip");
+        let path = unique_path(&dir, &requested_file_name);
+        let size = write_zip_bundle(&path, &files)?;
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(requested_file_name.as_str())
+            .to_string();
+        self.audit(
+            "attachment.bundle_downloaded",
+            "attachment",
+            Some(input.account_id),
+            &format!("{} attachment(s)", files.len()),
+        )?;
+        Ok(ExportResult {
+            path: path.to_string_lossy().to_string(),
+            file_name,
+            size,
+            item_count: files.len(),
+        })
+    }
+
+    pub fn get_mail_raw_content(&self, message_id: i64) -> AppResult<MailRawContent> {
+        self.require_unlocked()?;
+        let (provider_message_id, raw_mime): (String, Option<Vec<u8>>) = self
+            .conn
+            .query_row(
+                "
+                SELECT provider_message_id, raw_mime
+                FROM retained_mail_messages
+                WHERE id = ?
+                ",
+                [message_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| AppError::InvalidInput("message not found".to_string()))?;
+        let raw_mime = raw_mime.ok_or_else(|| {
+            AppError::InvalidInput(
+                "raw MIME is not cached for this message; refresh an IMAP account message before viewing raw source".to_string(),
+            )
+        })?;
+        if raw_mime.is_empty() {
+            return Err(AppError::InvalidInput("cached raw MIME is empty".to_string()));
+        }
+        Ok(MailRawContent {
+            message_id,
+            file_name: format!("message-{}-raw.eml", safe_file_name(&provider_message_id)),
+            content: String::from_utf8_lossy(&raw_mime).to_string(),
+            size: raw_mime.len() as i64,
+        })
+    }
+
+    fn fetch_attachment_content(
+        &self,
+        account: &AccountCredentials,
+        message_id: &str,
+        attachment_id: &str,
+        folder: Option<&str>,
+    ) -> AppResult<DownloadedAttachment> {
+        if should_use_graph(account) {
+            providers::download_graph_attachment(account, message_id, attachment_id)
+        } else {
+            let raw_mime = self.cached_imap_raw_mime(account.id, message_id, folder)?;
+            providers::download_imap_attachment_from_raw(&raw_mime, attachment_id)
+        }
     }
 
     pub fn export_mail_messages(&self, input: ExportMailMessagesInput) -> AppResult<ExportResult> {
@@ -3768,6 +3864,43 @@ impl Database {
         Ok(raw_mime)
     }
 
+    fn cached_message_attachments(&self, account_id: i64, message_id: &str, folder: Option<&str>) -> AppResult<Vec<AttachmentInfo>> {
+        let attachments_json: Option<String> = match folder {
+            Some(folder) => self
+                .conn
+                .query_row(
+                    "
+                    SELECT attachments_json
+                    FROM retained_mail_messages
+                    WHERE account_id = ? AND provider_message_id = ? AND folder = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    ",
+                    params![account_id, message_id, folder],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten(),
+            None => self
+                .conn
+                .query_row(
+                    "
+                    SELECT attachments_json
+                    FROM retained_mail_messages
+                    WHERE account_id = ? AND provider_message_id = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    ",
+                    params![account_id, message_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten(),
+        };
+        let attachments_json = attachments_json.ok_or_else(|| AppError::InvalidInput("cached message not found".to_string()))?;
+        Ok(parse_attachments_json(&attachments_json))
+    }
+
     fn mark_account_refresh_success(&self, account_id: i64, email: &str, count: usize) -> AppResult<()> {
         self.conn.execute(
             "
@@ -5503,6 +5636,140 @@ fn unique_path(dir: &Path, file_name: &str) -> PathBuf {
     dir.join(format!("{stem}-{}{}", uuid::Uuid::new_v4(), extension))
 }
 
+fn unique_bundle_file_name(used_names: &mut HashSet<String>, value: &str) -> String {
+    let file_name = safe_file_name(value);
+    if used_names.insert(file_name.clone()) {
+        return file_name;
+    }
+    let stem = Path::new(&file_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("attachment");
+    let extension = Path::new(&file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{value}"))
+        .unwrap_or_default();
+    for counter in 2..1000 {
+        let candidate = format!("{stem}-{counter}{extension}");
+        if used_names.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    let candidate = format!("{stem}-{}{}", uuid::Uuid::new_v4(), extension);
+    used_names.insert(candidate.clone());
+    candidate
+}
+
+struct ZipCentralEntry {
+    name: Vec<u8>,
+    crc32: u32,
+    size: u32,
+    local_header_offset: u32,
+}
+
+fn write_zip_bundle(path: &Path, files: &[(String, Vec<u8>)]) -> AppResult<i64> {
+    if files.is_empty() {
+        return Err(AppError::InvalidInput("zip bundle requires at least one file".to_string()));
+    }
+    let mut data = Vec::new();
+    let mut central_entries = Vec::new();
+    for (name, bytes) in files {
+        let name_bytes = name.as_bytes();
+        let name_len = zip_u16(name_bytes.len(), "zip file name is too long")?;
+        let size = zip_u32(bytes.len(), "attachment is too large for a standard ZIP bundle")?;
+        let offset = zip_u32(data.len(), "zip bundle is too large")?;
+        let crc = crc32(bytes);
+
+        push_u32(&mut data, 0x0403_4b50);
+        push_u16(&mut data, 20);
+        push_u16(&mut data, 0x0800);
+        push_u16(&mut data, 0);
+        push_u16(&mut data, 0);
+        push_u16(&mut data, 33);
+        push_u32(&mut data, crc);
+        push_u32(&mut data, size);
+        push_u32(&mut data, size);
+        push_u16(&mut data, name_len);
+        push_u16(&mut data, 0);
+        data.extend_from_slice(name_bytes);
+        data.extend_from_slice(bytes);
+
+        central_entries.push(ZipCentralEntry {
+            name: name_bytes.to_vec(),
+            crc32: crc,
+            size,
+            local_header_offset: offset,
+        });
+    }
+
+    let central_offset_usize = data.len();
+    let central_offset = zip_u32(central_offset_usize, "zip central directory offset is too large")?;
+    for entry in &central_entries {
+        let name_len = zip_u16(entry.name.len(), "zip file name is too long")?;
+        push_u32(&mut data, 0x0201_4b50);
+        push_u16(&mut data, 20);
+        push_u16(&mut data, 20);
+        push_u16(&mut data, 0x0800);
+        push_u16(&mut data, 0);
+        push_u16(&mut data, 0);
+        push_u16(&mut data, 33);
+        push_u32(&mut data, entry.crc32);
+        push_u32(&mut data, entry.size);
+        push_u32(&mut data, entry.size);
+        push_u16(&mut data, name_len);
+        push_u16(&mut data, 0);
+        push_u16(&mut data, 0);
+        push_u16(&mut data, 0);
+        push_u16(&mut data, 0);
+        push_u32(&mut data, 0);
+        push_u32(&mut data, entry.local_header_offset);
+        data.extend_from_slice(&entry.name);
+    }
+
+    let central_size = zip_u32(data.len() - central_offset_usize, "zip central directory is too large")?;
+    let entry_count = zip_u16(central_entries.len(), "zip bundle has too many files")?;
+    push_u32(&mut data, 0x0605_4b50);
+    push_u16(&mut data, 0);
+    push_u16(&mut data, 0);
+    push_u16(&mut data, entry_count);
+    push_u16(&mut data, entry_count);
+    push_u32(&mut data, central_size);
+    push_u32(&mut data, central_offset);
+    push_u16(&mut data, 0);
+
+    std::fs::write(path, &data).map_err(|err| AppError::Internal(err.to_string()))?;
+    Ok(data.len() as i64)
+}
+
+fn push_u16(target: &mut Vec<u8>, value: u16) {
+    target.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u32(target: &mut Vec<u8>, value: u32) {
+    target.extend_from_slice(&value.to_le_bytes());
+}
+
+fn zip_u16(value: usize, label: &str) -> AppResult<u16> {
+    u16::try_from(value).map_err(|_| AppError::InvalidInput(label.to_string()))
+}
+
+fn zip_u32(value: usize, label: &str) -> AppResult<u32> {
+    u32::try_from(value).map_err(|_| AppError::InvalidInput(label.to_string()))
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for byte in bytes {
+        crc ^= *byte as u32;
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
 fn normalize_project_key(value: &str) -> String {
     let mut output = String::new();
     let mut last_dash = false;
@@ -5631,7 +5898,7 @@ mod project_tests {
     use crate::models::{
         AccountBatchInput, AttachmentInfo, AutomationRunQuery, ClaimProjectAccountInput,
         ClearAutomationRunsInput, CreateGroupInput, CreateProjectInput, DeleteMailMessagesInput,
-        DownloadAttachmentInput, ExportAccountsInput, ExportMailMessagesInput,
+        DownloadAllAttachmentsInput, DownloadAttachmentInput, ExportAccountsInput, ExportMailMessagesInput,
         MailMessageQuery, MarkMailMessagesInput, ProjectAccountActionInput, RefreshInput,
         RestoreBackupInput, RevealAccountSecretsInput, RetryQueueItemInput, RetryQueueQuery,
         RetryQueueRunInput, UpdateAccountInput, UpdateGroupInput, UpdateGroupProxyInput,
@@ -6500,6 +6767,27 @@ mod project_tests {
 
         assert_eq!(result.file_name, "note.txt");
         assert_eq!(std::fs::read(&result.path).expect("read attachment"), b"Hello IMAP attachment");
+
+        let raw = db.get_mail_raw_content(10).expect("read raw content");
+        assert_eq!(raw.message_id, 10);
+        assert!(raw.file_name.ends_with(".eml"));
+        assert!(raw.content.contains("Subject: Attachment test"));
+
+        let bundle = db
+            .download_all_attachments(DownloadAllAttachmentsInput {
+                account_id: 1,
+                message_id: "42".to_string(),
+                folder: Some("inbox".to_string()),
+            })
+            .expect("download all attachments");
+        assert_eq!(bundle.item_count, 1);
+        assert!(bundle.file_name.ends_with(".zip"));
+        let zip = std::fs::read(&bundle.path).expect("read zip bundle");
+        assert!(zip.starts_with(b"PK\x03\x04"));
+        assert!(zip.windows(b"note.txt".len()).any(|window| window == b"note.txt"));
+        assert!(zip
+            .windows(b"Hello IMAP attachment".len())
+            .any(|window| window == b"Hello IMAP attachment"));
     }
 
     #[test]

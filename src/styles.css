@@ -502,6 +502,11 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.detailActions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .filterRow .select {
   flex: 1 1 110px;
   min-width: 0;
@@ -699,6 +704,70 @@ button:disabled {
   background: #fff;
 }
 
+.inlineError {
+  max-width: 760px;
+  margin: 12px 0;
+  padding: 9px 10px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff7f7;
+  color: #b91c1c;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.rawSourcePanel {
+  max-width: 760px;
+  margin: 16px 0;
+  border: 1px solid #dbe3ec;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.rawSourceHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f8fafc;
+}
+
+.rawSourceHeader div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rawSourceHeader strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #17202a;
+  font-size: 13px;
+}
+
+.rawSourceHeader small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.rawSourcePanel pre {
+  max-height: 380px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  background: #fbfdff;
+  color: #1f2937;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .attachmentList {
   display: grid;
   gap: 8px;
@@ -709,6 +778,10 @@ button:disabled {
 .attachmentList h3 {
   margin: 0 0 4px;
   font-size: 14px;
+}
+
+.attachmentDownloadAll {
+  width: fit-content;
 }
 
 .attachmentButton {
@@ -733,6 +806,11 @@ button:disabled {
 
 .attachmentButton small {
   color: #64748b;
+}
+
+.attachmentButton:disabled {
+  cursor: wait;
+  opacity: 0.75;
 }
 
 .managementGrid,

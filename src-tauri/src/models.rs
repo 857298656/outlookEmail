@@ -672,10 +672,25 @@ pub struct DownloadAttachmentInput {
     pub folder: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct DownloadAllAttachmentsInput {
+    pub account_id: i64,
+    pub message_id: String,
+    pub folder: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DownloadAttachmentResult {
     pub path: String,
     pub file_name: String,
+    pub size: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MailRawContent {
+    pub message_id: i64,
+    pub file_name: String,
+    pub content: String,
     pub size: i64,
 }
 

@@ -53,6 +53,8 @@ pub fn run() {
             generate_oauth_auth_url,
             exchange_oauth_token,
             download_attachment,
+            download_all_attachments,
+            get_mail_raw_content,
             export_mail_messages,
             export_accounts,
             export_project_accounts,

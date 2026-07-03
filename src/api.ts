@@ -15,6 +15,7 @@ import type {
   JobResult,
   MailMessage,
   MailMessageQuery,
+  MailRawContent,
   Project,
   ProjectAccount,
   ProjectAccountEvent,
@@ -1151,6 +1152,9 @@ export const api = {
     call<{ success: boolean; account_id?: number; scope: string; expires_in: number; refresh_token_preview: string }>("exchange_oauth_token", { input }),
   downloadAttachment: (input: { account_id: number; message_id: string; attachment_id: string; folder?: string }) =>
     call<{ path: string; file_name: string; size: number }>("download_attachment", { input }),
+  downloadAllAttachments: (input: { account_id: number; message_id: string; folder?: string }) =>
+    call<ExportResult>("download_all_attachments", { input }),
+  getMailRawContent: (messageId: number) => call<MailRawContent>("get_mail_raw_content", { messageId }),
   listProjects: () => call<Project[]>("list_projects"),
   createProject: (input: {
     name: string;

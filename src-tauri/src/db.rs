@@ -8,8 +8,10 @@ use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, Utc};
 use directories::ProjectDirs;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 pub struct Database {
     conn: Connection,
@@ -29,6 +31,7 @@ struct MailMessageRef {
 #[derive(Debug, Clone)]
 struct ExportMailMessageRow {
     id: i64,
+    account_id: i64,
     account_email: String,
     folder: String,
     provider_message_id: String,
@@ -1644,6 +1647,114 @@ impl Database {
         })
     }
 
+    pub fn create_mail_share(&self, input: CreateMailShareInput) -> AppResult<MailShareRecord> {
+        self.require_unlocked()?;
+        let ids = normalize_message_ids(&input.message_ids)?;
+        let rows = self.export_mail_message_rows(&ids)?;
+        if rows.is_empty() {
+            return Err(AppError::InvalidInput("no matching messages found".to_string()));
+        }
+        let title = input
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("OutlookEmail local share");
+        let expires_in_days = input.expires_in_days.unwrap_or(30).clamp(1, 365);
+        let expires_at = (Utc::now() + ChronoDuration::days(expires_in_days)).to_rfc3339();
+        let content = render_mail_export_html(title, &rows);
+        let file_name = timestamped_file_name("mail-share", "html");
+        let (path, size) = self.write_export_file("shares", &file_name, content.as_bytes())?;
+        let file_name = Path::new(&path)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(file_name.as_str())
+            .to_string();
+        let token = Uuid::new_v4().to_string();
+        let token_hash = share_token_hash(&token);
+        let token_preview = token.chars().take(8).collect::<String>();
+        let message_ids_json = serde_json::to_string(&ids)
+            .map_err(|err| AppError::Internal(format!("serialize share message ids failed: {err}")))?;
+        let account_id = rows[0].account_id;
+        self.conn.execute(
+            "
+            INSERT INTO email_share_links
+            (account_id, token_hash, exported_path, title, file_name, item_count, size, message_ids_json, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ",
+            params![
+                account_id,
+                token_hash,
+                path,
+                title,
+                file_name,
+                rows.len() as i64,
+                size,
+                message_ids_json,
+                expires_at
+            ],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        self.audit("mail_share.created", "share", Some(id), &format!("{} message(s)", rows.len()))?;
+        let mut record = self.get_mail_share_record(id)?;
+        record.token_preview = token_preview;
+        Ok(record)
+    }
+
+    pub fn list_mail_share_records(&self, limit: Option<i64>) -> AppResult<Vec<MailShareRecord>> {
+        self.require_unlocked()?;
+        let limit = limit.unwrap_or(100).clamp(1, 500);
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT s.id, s.account_id, a.email, COALESCE(s.title, ''), s.token_hash,
+                   s.exported_path, COALESCE(s.file_name, ''), COALESCE(s.item_count, 0),
+                   COALESCE(s.size, 0), s.expires_at, s.revoked_at, s.created_at, s.updated_at
+            FROM email_share_links s
+            JOIN accounts a ON a.id = s.account_id
+            ORDER BY s.id DESC
+            LIMIT ?
+            ",
+        )?;
+        let rows = stmt.query_map([limit], mail_share_record_from_row)?;
+        collect_rows(rows)
+    }
+
+    pub fn revoke_mail_share(&self, input: RevokeMailShareInput) -> AppResult<MailShareRecord> {
+        self.require_unlocked()?;
+        let updated = self.conn.execute(
+            "
+            UPDATE email_share_links
+            SET revoked_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND revoked_at IS NULL
+            ",
+            [input.share_id],
+        )?;
+        if updated == 0 {
+            let _ = self.get_mail_share_record(input.share_id)?;
+        }
+        self.audit("mail_share.revoked", "share", Some(input.share_id), "")?;
+        self.get_mail_share_record(input.share_id)
+    }
+
+    fn get_mail_share_record(&self, share_id: i64) -> AppResult<MailShareRecord> {
+        self.conn
+            .query_row(
+                "
+                SELECT s.id, s.account_id, a.email, COALESCE(s.title, ''), s.token_hash,
+                       s.exported_path, COALESCE(s.file_name, ''), COALESCE(s.item_count, 0),
+                       COALESCE(s.size, 0), s.expires_at, s.revoked_at, s.created_at, s.updated_at
+                FROM email_share_links s
+                JOIN accounts a ON a.id = s.account_id
+                WHERE s.id = ?
+                ",
+                [share_id],
+                mail_share_record_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| AppError::InvalidInput("mail share record not found".to_string()))
+    }
+
     pub fn export_accounts(&self, input: ExportAccountsInput) -> AppResult<ExportResult> {
         self.require_unlocked()?;
         let mut accounts = self.list_accounts()?;
@@ -2158,6 +2269,15 @@ impl Database {
             let (files, bytes) = remove_dir_contents(&exports_dir(&self.db_path)?)?;
             deleted_files += files;
             freed_bytes += bytes;
+            self.conn.execute(
+                "
+                UPDATE email_share_links
+                SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE revoked_at IS NULL
+                ",
+                [],
+            )?;
         }
 
         self.audit(
@@ -3189,6 +3309,11 @@ impl Database {
                 account_id INTEGER NOT NULL,
                 token_hash TEXT UNIQUE NOT NULL,
                 exported_path TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                file_name TEXT NOT NULL DEFAULT '',
+                item_count INTEGER NOT NULL DEFAULT 0,
+                size INTEGER NOT NULL DEFAULT 0,
+                message_ids_json TEXT NOT NULL DEFAULT '[]',
                 expires_at TEXT,
                 revoked_at TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -3226,6 +3351,7 @@ impl Database {
         self.ensure_project_columns()?;
         self.ensure_temp_columns()?;
         self.ensure_message_columns()?;
+        self.ensure_share_columns()?;
         Ok(())
     }
 
@@ -3341,6 +3467,25 @@ impl Database {
     fn ensure_message_columns(&self) -> AppResult<()> {
         let columns = table_columns(&self.conn, "retained_mail_messages")?;
         for (name, ddl) in [("raw_mime", "ALTER TABLE retained_mail_messages ADD COLUMN raw_mime BLOB")] {
+            if !columns.iter().any(|column| column == name) {
+                self.conn.execute(ddl, [])?;
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_share_columns(&self) -> AppResult<()> {
+        let columns = table_columns(&self.conn, "email_share_links")?;
+        for (name, ddl) in [
+            ("title", "ALTER TABLE email_share_links ADD COLUMN title TEXT NOT NULL DEFAULT ''"),
+            ("file_name", "ALTER TABLE email_share_links ADD COLUMN file_name TEXT NOT NULL DEFAULT ''"),
+            ("item_count", "ALTER TABLE email_share_links ADD COLUMN item_count INTEGER NOT NULL DEFAULT 0"),
+            ("size", "ALTER TABLE email_share_links ADD COLUMN size INTEGER NOT NULL DEFAULT 0"),
+            (
+                "message_ids_json",
+                "ALTER TABLE email_share_links ADD COLUMN message_ids_json TEXT NOT NULL DEFAULT '[]'",
+            ),
+        ] {
             if !columns.iter().any(|column| column == name) {
                 self.conn.execute(ddl, [])?;
             }
@@ -5020,7 +5165,7 @@ impl Database {
             .join(", ");
         let sql = format!(
             "
-            SELECT m.id, a.email, m.folder, m.provider_message_id, m.subject,
+            SELECT m.id, m.account_id, a.email, m.folder, m.provider_message_id, m.subject,
                    m.sender, m.recipients, m.cc, m.received_at, m.is_read,
                    m.body_preview, m.body, m.body_type, m.attachments_json
             FROM retained_mail_messages m
@@ -5033,19 +5178,20 @@ impl Database {
         let rows = stmt.query_map(params_from_iter(ids.iter()), |row| {
             Ok(ExportMailMessageRow {
                 id: row.get(0)?,
-                account_email: row.get(1)?,
-                folder: row.get(2)?,
-                provider_message_id: row.get(3)?,
-                subject: row.get(4)?,
-                sender: row.get(5)?,
-                recipients: row.get(6)?,
-                cc: row.get(7)?,
-                received_at: row.get(8)?,
-                is_read: row.get::<_, i64>(9)? == 1,
-                body_preview: row.get(10)?,
-                body: row.get(11)?,
-                body_type: row.get(12)?,
-                attachments: parse_attachments_json(row.get::<_, String>(13)?.as_str()),
+                account_id: row.get(1)?,
+                account_email: row.get(2)?,
+                folder: row.get(3)?,
+                provider_message_id: row.get(4)?,
+                subject: row.get(5)?,
+                sender: row.get(6)?,
+                recipients: row.get(7)?,
+                cc: row.get(8)?,
+                received_at: row.get(9)?,
+                is_read: row.get::<_, i64>(10)? == 1,
+                body_preview: row.get(11)?,
+                body: row.get(12)?,
+                body_type: row.get(13)?,
+                attachments: parse_attachments_json(row.get::<_, String>(14)?.as_str()),
             })
         })?;
         collect_rows(rows)
@@ -5710,6 +5856,25 @@ fn retry_next_delay_minutes(next_attempt_at: Option<&str>) -> i64 {
         .and_then(parse_scheduler_timestamp)
         .map(|value| value.signed_duration_since(Utc::now()).num_minutes().max(0))
         .unwrap_or(0)
+}
+
+fn share_token_hash(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn share_record_status(expires_at: Option<&str>, revoked_at: Option<&str>) -> &'static str {
+    if revoked_at.is_some() {
+        return "revoked";
+    }
+    if expires_at
+        .and_then(parse_scheduler_timestamp)
+        .is_some_and(|value| value <= Utc::now())
+    {
+        return "expired";
+    }
+    "active"
 }
 
 fn forwarding_circuit_error(circuit: &ForwardingChannelCircuit) -> String {
@@ -6599,6 +6764,28 @@ fn retry_queue_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RetryQ
     })
 }
 
+fn mail_share_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MailShareRecord> {
+    let token_hash = row.get::<_, String>(4)?;
+    let expires_at = row.get::<_, Option<String>>(9)?;
+    let revoked_at = row.get::<_, Option<String>>(10)?;
+    Ok(MailShareRecord {
+        id: row.get(0)?,
+        account_id: row.get(1)?,
+        account_email: row.get(2)?,
+        title: row.get(3)?,
+        token_preview: token_hash.chars().take(8).collect(),
+        exported_path: row.get(5)?,
+        file_name: row.get(6)?,
+        item_count: row.get(7)?,
+        size: row.get(8)?,
+        status: share_record_status(expires_at.as_deref(), revoked_at.as_deref()).to_string(),
+        expires_at,
+        revoked_at,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+    })
+}
+
 fn remote_sync_failure_from_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<RemoteSyncFailure>> {
     let retry_id = row.get::<_, Option<i64>>(14)?;
     Ok(match retry_id {
@@ -6625,10 +6812,11 @@ mod project_tests {
     use crate::import::ImportedAccount;
     use crate::models::{
         AccountBatchInput, AttachmentInfo, AutomationRunQuery, ClaimProjectAccountInput,
-        ClearAutomationRunsInput, ClearLocalDataInput, CreateGroupInput, CreateProjectInput, DeleteMailMessagesInput,
+        ClearAutomationRunsInput, ClearLocalDataInput, CreateGroupInput, CreateMailShareInput,
+        CreateProjectInput, DeleteMailMessagesInput,
         DownloadAllAttachmentsInput, DownloadAttachmentInput, ExportAccountsInput, ExportMailMessagesInput,
         MailMessageQuery, MarkMailMessagesInput, ProjectAccountActionInput, RefreshInput,
-        RestoreBackupInput, RevealAccountSecretsInput, RetryQueueItemInput, RetryQueueQuery,
+        RestoreBackupInput, RevealAccountSecretsInput, RevokeMailShareInput, RetryQueueItemInput, RetryQueueQuery,
         RetryQueueRunInput, UpdateAccountInput, UpdateGroupInput, UpdateGroupProxyInput,
         UpdateTempEmailInput, Settings,
     };
@@ -7423,6 +7611,81 @@ mod project_tests {
         assert_eq!(accounts_export.item_count, 1);
         let csv = std::fs::read_to_string(&accounts_export.path).expect("read csv export");
         assert!(csv.contains("one@example.com"));
+    }
+
+    #[test]
+    fn creates_lists_and_revokes_local_mail_shares() {
+        let root = std::env::temp_dir().join(format!("outlook-email-share-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: root.join("test.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "INSERT INTO accounts (id, email, status, group_id) VALUES (1, 'one@example.com', 'active', 1)",
+                [],
+            )
+            .expect("insert account");
+        db.conn
+            .execute(
+                "
+                INSERT INTO retained_mail_messages
+                (id, account_id, folder, provider_message_id, subject, sender, recipients,
+                 received_at, received_at_sort, body_preview, body)
+                VALUES (10, 1, 'inbox', 'share-message', 'Share me', 'sender@example.com',
+                        'one@example.com', '2026-01-01T00:00:00Z', 1, 'preview', 'share body')
+                ",
+                [],
+            )
+            .expect("insert message");
+
+        let share = db
+            .create_mail_share(CreateMailShareInput {
+                message_ids: vec![10],
+                title: Some("Local share".to_string()),
+                expires_in_days: Some(7),
+            })
+            .expect("create share");
+        assert_eq!(share.account_email, "one@example.com");
+        assert_eq!(share.item_count, 1);
+        assert_eq!(share.status, "active");
+        assert!(share.token_preview.len() >= 8);
+        assert!(share.exported_path.ends_with(".html"));
+        assert!(std::path::Path::new(&share.exported_path).exists());
+        let html = std::fs::read_to_string(&share.exported_path).expect("read share html");
+        assert!(html.contains("share body"));
+
+        let shares = db.list_mail_share_records(Some(10)).expect("shares");
+        assert_eq!(shares.len(), 1);
+        assert_eq!(shares[0].id, share.id);
+        assert_eq!(shares[0].status, "active");
+
+        let revoked = db
+            .revoke_mail_share(RevokeMailShareInput { share_id: share.id })
+            .expect("revoke share");
+        assert_eq!(revoked.status, "revoked");
+        assert!(revoked.revoked_at.is_some());
+
+        let expired = db
+            .create_mail_share(CreateMailShareInput {
+                message_ids: vec![10],
+                title: Some("Expired share".to_string()),
+                expires_in_days: Some(1),
+            })
+            .expect("create second share");
+        db.conn
+            .execute(
+                "UPDATE email_share_links SET expires_at = datetime('now', '-1 day') WHERE id = ?",
+                [expired.id],
+            )
+            .expect("expire share");
+        let shares = db.list_mail_share_records(Some(10)).expect("shares after expire");
+        let expired = shares.iter().find(|item| item.id == expired.id).expect("expired share");
+        assert_eq!(expired.status, "expired");
     }
 
     #[test]

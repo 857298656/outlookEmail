@@ -195,6 +195,24 @@ pub fn export_mail_messages(state: State<'_, AppState>, input: ExportMailMessage
 }
 
 #[tauri::command]
+pub fn create_mail_share(state: State<'_, AppState>, input: CreateMailShareInput) -> AppResult<MailShareRecord> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.create_mail_share(input)
+}
+
+#[tauri::command]
+pub fn list_mail_share_records(state: State<'_, AppState>, limit: Option<i64>) -> AppResult<Vec<MailShareRecord>> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.list_mail_share_records(limit)
+}
+
+#[tauri::command]
+pub fn revoke_mail_share(state: State<'_, AppState>, input: RevokeMailShareInput) -> AppResult<MailShareRecord> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.revoke_mail_share(input)
+}
+
+#[tauri::command]
 pub fn export_accounts(state: State<'_, AppState>, input: Option<ExportAccountsInput>) -> AppResult<ExportResult> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.export_accounts(input.unwrap_or(ExportAccountsInput {

@@ -20,6 +20,7 @@ import type {
   MailMessage,
   MailMessageQuery,
   MailRawContent,
+  MailShareRecord,
   Project,
   ProjectAccount,
   ProjectAccountEvent,
@@ -103,6 +104,7 @@ let mockSchedulerStatus: SchedulerStatus = {
 let mockAutomationRuns: AutomationRun[] = [];
 let mockRetryQueue: RetryQueueItem[] = [];
 let mockRefreshLogs: RefreshLog[] = [];
+let mockMailShareRecords: MailShareRecord[] = [];
 
 function isTauriRuntime() {
   return "__TAURI_INTERNALS__" in window;
@@ -664,6 +666,42 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       const count = mockMessages.filter((message) => input.message_ids.includes(message.id)).length;
       return mockExport("mail-export.html", count) as T;
     }
+    case "create_mail_share": {
+      const input = args?.input as { message_ids: number[]; title?: string; expires_in_days?: number };
+      const selected = mockMessages.filter((message) => input.message_ids.includes(message.id));
+      const now = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + Math.max(1, Math.min(input.expires_in_days ?? 30, 365)) * 86_400_000).toISOString();
+      const record: MailShareRecord = {
+        id: Date.now(),
+        account_id: selected[0]?.account_id ?? 0,
+        account_email: mockAccounts.find((account) => account.id === selected[0]?.account_id)?.email ?? "",
+        title: input.title?.trim() || "OutlookEmail local share",
+        token_preview: Math.random().toString(36).slice(2, 10),
+        exported_path: "browser-preview/exports/shares/mail-share.html",
+        file_name: "mail-share.html",
+        item_count: selected.length,
+        size: Math.max(128, selected.length * 512),
+        status: "active",
+        expires_at: expiresAt,
+        revoked_at: null,
+        created_at: now,
+        updated_at: now
+      };
+      mockMailShareRecords = [record, ...mockMailShareRecords];
+      return record as T;
+    }
+    case "list_mail_share_records":
+      return mockMailShareRecords.map(refreshMockShareStatus).slice(0, (args?.limit as number | undefined) ?? 100) as T;
+    case "revoke_mail_share": {
+      const input = args?.input as { share_id: number };
+      const now = new Date().toISOString();
+      mockMailShareRecords = mockMailShareRecords.map((record) =>
+        record.id === input.share_id ? { ...record, status: "revoked", revoked_at: now, updated_at: now } : record
+      );
+      const record = mockMailShareRecords.find((item) => item.id === input.share_id);
+      if (!record) throw new Error("mail share record not found");
+      return refreshMockShareStatus(record) as T;
+    }
     case "export_accounts": {
       const input = args?.input as { group_id?: number | null; account_ids?: number[] } | undefined;
       const selected = input?.account_ids ? new Set(input.account_ids) : null;
@@ -945,6 +983,12 @@ function mockExport(fileName: string, itemCount: number): ExportResult {
     size: Math.max(128, itemCount * 96),
     item_count: itemCount
   };
+}
+
+function refreshMockShareStatus(record: MailShareRecord): MailShareRecord {
+  if (record.revoked_at) return { ...record, status: "revoked" };
+  if (record.expires_at && Date.parse(record.expires_at) <= Date.now()) return { ...record, status: "expired" };
+  return { ...record, status: "active" };
 }
 
 function recordMockAutomationRun(jobType: string, triggerType: string, result: JobResult): JobResult {
@@ -1255,6 +1299,10 @@ export const api = {
     call<JobResult>("delete_mail_messages", { input: { message_ids: messageIds, sync_remote: syncRemote } }),
   exportMailMessages: (messageIds: number[], title?: string) =>
     call<ExportResult>("export_mail_messages", { input: { message_ids: messageIds, title } }),
+  createMailShare: (messageIds: number[], title?: string, expiresInDays = 30) =>
+    call<MailShareRecord>("create_mail_share", { input: { message_ids: messageIds, title, expires_in_days: expiresInDays } }),
+  listMailShareRecords: (limit = 100) => call<MailShareRecord[]>("list_mail_share_records", { limit }),
+  revokeMailShare: (shareId: number) => call<MailShareRecord>("revoke_mail_share", { input: { share_id: shareId } }),
   exportAccounts: (groupId?: number | null, accountIds?: number[]) =>
     call<ExportResult>("export_accounts", { input: { group_id: groupId ?? null, account_ids: accountIds } }),
   exportProjectAccounts: (projectId: number) =>

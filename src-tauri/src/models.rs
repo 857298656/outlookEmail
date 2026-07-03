@@ -818,6 +818,36 @@ pub struct ExportMailMessagesInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct CreateMailShareInput {
+    pub message_ids: Vec<i64>,
+    pub title: Option<String>,
+    pub expires_in_days: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RevokeMailShareInput {
+    pub share_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MailShareRecord {
+    pub id: i64,
+    pub account_id: i64,
+    pub account_email: String,
+    pub title: String,
+    pub token_preview: String,
+    pub exported_path: String,
+    pub file_name: String,
+    pub item_count: i64,
+    pub size: i64,
+    pub status: String,
+    pub expires_at: Option<String>,
+    pub revoked_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ExportAccountsInput {
     pub group_id: Option<i64>,
     pub account_ids: Option<Vec<i64>>,

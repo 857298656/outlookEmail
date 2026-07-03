@@ -507,6 +507,28 @@ button:disabled {
   justify-content: flex-end;
 }
 
+.compactNumberField {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  border: 1px solid #cfd8e3;
+  border-radius: 8px;
+  padding: 0 8px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.compactNumberField input {
+  width: 52px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #17202a;
+  font: inherit;
+  text-align: center;
+}
+
 .filterRow .select {
   flex: 1 1 110px;
   min-width: 0;
@@ -692,6 +714,68 @@ button:disabled {
   display: flex;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.mailSharePanel {
+  display: grid;
+  gap: 8px;
+  max-width: 760px;
+  margin: 0 0 18px;
+  padding: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.mailShareHeader,
+.mailShareRow,
+.mailShareActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mailShareHeader {
+  justify-content: space-between;
+  color: #17202a;
+  font-size: 13px;
+}
+
+.mailShareHeader span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.mailShareRow {
+  justify-content: space-between;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.mailShareRow > div:first-child {
+  min-width: 0;
+}
+
+.mailShareRow strong,
+.mailShareRow small,
+.mailShareRow code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mailShareRow strong {
+  color: #17202a;
+  font-size: 13px;
+}
+
+.mailShareRow small,
+.mailShareRow code {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
 }
 
 .messageHtmlFrame {
@@ -1195,6 +1279,12 @@ button:disabled {
 .status-removed {
   background: #e5e7eb;
   color: #4b5563;
+}
+
+.status-expired,
+.status-revoked {
+  background: #e5e7eb;
+  color: #475569;
 }
 
 .status-never,

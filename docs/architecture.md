@@ -26,6 +26,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Cached message field-token search, filters, multi-field sorting, pagination, batch read/unread/delete actions, and remote failure surfacing
 - Sandboxed HTML body rendering for cached mailbox and temp-mail messages
 - Local HTML/CSV exports for cached mail, account inventory, and project account pools
+- Local mail share records with generated HTML files, expiration, and revocation
 - GPTMail, DuckMail, and Cloudflare temp-mail management
 - SMTP, Telegram, and WeCom forwarding for cached messages
 - Retry queue for failed account refreshes, remote mail actions, forwarding sends, temp-mail refreshes, and WebDAV backups
@@ -56,12 +57,8 @@ The application is a single-user local desktop app. It does not expose a public 
 - Scheduled jobs only run while the local workspace is unlocked. Each scheduler tick also retries due pending retry queue items with backoff, including account refresh, temp-mail refresh, and backup retries.
 - Manual and scheduled automation jobs append status, counts, duration, and detail into `automation_runs`; the Settings UI can filter by job, trigger, status, and detail text before clearing matching rows. Retry jobs are recorded as `retry`.
 - Projects synchronize all-account, group, or tag account scope into `project_accounts` and record claim/result events in `project_account_events`.
-- Exports are generated from local SQLite data under the app data `exports` directory. Mail HTML export escapes message content rather than executing raw message HTML.
+- Exports are generated from local SQLite data under the app data `exports` directory. Mail HTML export escapes message content rather than executing raw message HTML. Local mail shares reuse the same HTML export path, store revocable records in `email_share_links`, and mark active shares revoked when export files are cleared.
 
 ## Next provider work
 
-- IMAP XOAUTH2 login
-- More provider-specific folder discovery
-- Revocable share-link workflow and optional local HTTP API
-- Scheduler history dashboard and richer retry observability
-- Cloudflare AI username generation and advanced batch generation
+- Optional local HTTP API remains deferred.

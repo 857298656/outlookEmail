@@ -239,6 +239,23 @@ export type ExportResult = {
   item_count: number;
 };
 
+export type MailShareRecord = {
+  id: number;
+  account_id: number;
+  account_email: string;
+  title: string;
+  token_preview: string;
+  exported_path: string;
+  file_name: string;
+  item_count: number;
+  size: number;
+  status: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type SchedulerStatus = {
   last_refresh_at: string | null;
   last_forwarding_at: string | null;

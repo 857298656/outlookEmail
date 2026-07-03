@@ -20,6 +20,7 @@ import {
   RotateCcw,
   Search,
   Settings as SettingsIcon,
+  Share2,
   Tags,
   Trash2,
   Upload,
@@ -48,6 +49,7 @@ import type {
   MailMessage,
   MailMessageQuery,
   MailRawContent,
+  MailShareRecord,
   Project,
   ProjectAccount,
   RefreshLog,
@@ -87,6 +89,7 @@ function App() {
   const [cloudflareChannels, setCloudflareChannels] = useState<CloudflareChannel[]>([]);
   const [forwardingLogs, setForwardingLogs] = useState<ForwardingLog[]>([]);
   const [backupLogs, setBackupLogs] = useState<BackupLog[]>([]);
+  const [mailShareRecords, setMailShareRecords] = useState<MailShareRecord[]>([]);
   const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
   const [retryQueue, setRetryQueue] = useState<RetryQueueItem[]>([]);
   const [refreshLogs, setRefreshLogs] = useState<RefreshLog[]>([]);
@@ -205,6 +208,10 @@ function App() {
     setProjectAccounts(selectedProject ? await api.listProjectAccounts(selectedProject.id) : []);
   }
 
+  async function loadMailShares() {
+    setMailShareRecords(await api.listMailShareRecords(80));
+  }
+
   async function loadAutomation() {
     const [
       nextSettings,
@@ -257,6 +264,7 @@ function App() {
     if (!status?.unlocked) return;
     loadWorkspace().catch((err) => setError(readError(err)));
     loadProjects().catch((err) => setError(readError(err)));
+    loadMailShares().catch((err) => setError(readError(err)));
     loadAutomation().catch((err) => setError(readError(err)));
     loadTempWorkspace().catch((err) => setError(readError(err)));
   }, [status?.unlocked]);
@@ -464,6 +472,7 @@ function App() {
             selectedAccountId={selectedAccountId}
             selectedMessage={selectedMessage}
             selectedMessageIds={selectedMessageIds}
+            mailShareRecords={mailShareRecords}
             folder={folder}
             filters={mailFilters}
             page={mailPage}
@@ -533,6 +542,20 @@ function App() {
               runAction(async () => {
                 const result = await api.exportMailMessages(messageIds, "OutlookEmail 邮件导出");
                 setNotice(exportNotice(result));
+              })
+            }
+            onCreateMailShare={(messageIds, expiresInDays) =>
+              runAction(async () => {
+                const result = await api.createMailShare(messageIds, "OutlookEmail 本地分享", expiresInDays);
+                setNotice(`已创建本地分享：${result.file_name}`);
+                await loadMailShares();
+              })
+            }
+            onRevokeMailShare={(shareId) =>
+              runAction(async () => {
+                await api.revokeMailShare(shareId);
+                await loadMailShares();
+                setNotice("本地分享已撤销");
               })
             }
             onCreateDemo={() =>
@@ -978,6 +1001,7 @@ function App() {
                 await loadStatus();
                 await loadWorkspace(null, "all", restoredFilters, 0);
                 await loadProjects();
+                await loadMailShares();
                 await loadAutomation();
                 await loadTempWorkspace(null);
               })
@@ -1000,6 +1024,7 @@ function App() {
                 setNotice(formatResultMessage(result.message));
                 await loadStatus();
                 await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
+                await loadMailShares();
                 await loadTempWorkspace(selectedTempEmail);
                 await loadAutomation();
               })
@@ -1088,6 +1113,7 @@ function MailWorkspace({
   selectedAccountId,
   selectedMessage,
   selectedMessageIds,
+  mailShareRecords,
   folder,
   filters,
   page,
@@ -1105,6 +1131,8 @@ function MailWorkspace({
   onMarkMessages,
   onDeleteMessages,
   onExportMessages,
+  onCreateMailShare,
+  onRevokeMailShare,
   onCreateDemo,
   onDownloadAttachment,
   onDownloadAllAttachments,
@@ -1119,6 +1147,7 @@ function MailWorkspace({
   selectedAccountId?: number;
   selectedMessage?: MailMessage;
   selectedMessageIds: number[];
+  mailShareRecords: MailShareRecord[];
   folder: string;
   filters: MailFilters;
   page: number;
@@ -1136,6 +1165,8 @@ function MailWorkspace({
   onMarkMessages: (messageIds: number[], isRead: boolean) => void;
   onDeleteMessages: (messageIds: number[]) => void;
   onExportMessages: (messageIds: number[]) => void;
+  onCreateMailShare: (messageIds: number[], expiresInDays: number) => void;
+  onRevokeMailShare: (shareId: number) => void;
   onCreateDemo: () => void;
   onDownloadAttachment: (message: MailMessage, attachmentId: string) => void | Promise<void>;
   onDownloadAllAttachments: (message: MailMessage) => Promise<void>;
@@ -1150,7 +1181,15 @@ function MailWorkspace({
   const [rawContent, setRawContent] = useState<MailRawContent | null>(null);
   const [rawBusy, setRawBusy] = useState(false);
   const [rawError, setRawError] = useState<string | null>(null);
+  const [shareExpiresInDays, setShareExpiresInDays] = useState(30);
   const selectedCount = selectedMessageIds.length;
+  const visibleShareRecords = useMemo(
+    () =>
+      selectedAccountId
+        ? mailShareRecords.filter((record) => record.account_id === selectedAccountId)
+        : mailShareRecords,
+    [mailShareRecords, selectedAccountId]
+  );
 
   useEffect(() => {
     setDraftFilters(filters);
@@ -1338,6 +1377,10 @@ function MailWorkspace({
               <Download size={14} />
               导出
             </button>
+            <button className="button compact secondary" onClick={() => onCreateMailShare(selectedMessageIds, shareExpiresInDays)}>
+              <Share2 size={14} />
+              分享
+            </button>
             <button className="button compact ghost" onClick={onClearSelection}>
               清除
             </button>
@@ -1405,6 +1448,21 @@ function MailWorkspace({
                   {rawBusy ? <Loader2 className="spin" size={14} /> : <FileText size={14} />}
                   Raw
                 </button>
+                <label className="compactNumberField">
+                  <span>过期</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={shareExpiresInDays}
+                    onChange={(event) => setShareExpiresInDays(Math.max(1, Math.min(365, Number(event.target.value) || 1)))}
+                  />
+                  <span>天</span>
+                </label>
+                <button className="button compact secondary" onClick={() => onCreateMailShare([selectedMessage.id], shareExpiresInDays)}>
+                  <Share2 size={14} />
+                  分享
+                </button>
                 <button className="button compact secondary" onClick={() => onExportMessages([selectedMessage.id])}>
                   <Download size={14} />
                   导出
@@ -1427,6 +1485,7 @@ function MailWorkspace({
                 onDismiss={onDismissRemoteFailure}
               />
             )}
+            <MailSharePanel records={visibleShareRecords} busy={busy} onRevoke={onRevokeMailShare} />
             <MessageBody body={selectedMessage.body || selectedMessage.body_preview} bodyType={selectedMessage.body_type} />
             {rawError && <div className="inlineError">{rawError}</div>}
             {rawContent && (
@@ -4350,6 +4409,45 @@ function RemoteFailurePanel({
   );
 }
 
+function MailSharePanel({
+  records,
+  busy,
+  onRevoke
+}: {
+  records: MailShareRecord[];
+  busy: boolean;
+  onRevoke: (shareId: number) => void;
+}) {
+  if (records.length === 0) return null;
+  return (
+    <div className="mailSharePanel">
+      <div className="mailShareHeader">
+        <strong>本地分享记录</strong>
+        <span>{records.length} 条</span>
+      </div>
+      {records.slice(0, 6).map((record) => (
+        <div className="mailShareRow" key={record.id}>
+          <div>
+            <strong>{record.title || record.file_name}</strong>
+            <small>
+              {record.item_count} 封 · {formatBytes(record.size) || "0 B"} · {record.expires_at ? formatDate(record.expires_at) : "不过期"}
+            </small>
+            <code>{record.exported_path}</code>
+          </div>
+          <div className="mailShareActions">
+            <StatusPill status={record.status} />
+            {record.status === "active" && (
+              <button className="iconMini danger" title="撤销本地分享" disabled={busy} onClick={() => onRevoke(record.id)}>
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function IconButton({
   children,
   active,
@@ -4501,6 +4599,8 @@ function formatStatus(status: string) {
     success: "成功",
     failed: "失败",
     pending: "待处理",
+    expired: "已过期",
+    revoked: "已撤销",
     healthy: "健康",
     degraded: "降级",
     open: "熔断",

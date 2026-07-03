@@ -107,8 +107,8 @@ function App() {
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const selectedMessage = messages.find((message) => message.id === selectedMessageId);
   const selectedTempMessage = tempMessages.find((message) => message.message_id === selectedTempMessageId);
-  const railIdentity = selectedAccount?.email ?? accounts[0]?.email ?? "设置";
-  const railInitial = railIdentity === "设置" ? "设" : railIdentity.slice(0, 1).toUpperCase();
+  const railIdentity = selectedAccount?.email ?? accounts[0]?.email ?? "管理员";
+  const railInitial = railIdentity === "管理员" ? "管" : railIdentity.slice(0, 1).toUpperCase();
   const filteredAccounts = useMemo(() => {
     if (selectedGroupId === "all") return accounts;
     return accounts.filter((account) => account.group_id === selectedGroupId);
@@ -337,7 +337,7 @@ function App() {
                 }}
               >
                 <SettingsIcon size={18} />
-                <span>配置</span>
+                <span>设置</span>
               </button>
               <div className="railMenuDivider" />
               <button
@@ -699,7 +699,7 @@ function App() {
               runAction(async () => {
                 setSettings(await api.updateSettings(nextSettings));
                 await loadAutomation();
-              }, "配置已保存")
+              }, "设置已保存")
             }
             onRunForwarding={() =>
               runAction(async () => {
@@ -803,7 +803,7 @@ function LockScreen({
         <h1>{initialized ? "解锁工作区" : "创建本地工作区"}</h1>
         <p>
           {initialized
-            ? "输入本地应用密码，用于解密敏感配置并打开邮箱工作区。"
+            ? "输入本地应用密码，用于解密敏感设置并打开邮箱工作区。"
             : "设置至少 8 位本地密码，用于保护 SQLite 中加密保存的邮箱凭据。"}
         </p>
         <input
@@ -1932,7 +1932,7 @@ function AccountEditor({
   if (!account) {
     return (
       <div className="panel">
-        <EmptyState icon={<KeyRound size={24} />} text="请选择一个账号配置授权。" />
+        <EmptyState icon={<KeyRound size={24} />} text="请选择一个账号设置授权。" />
       </div>
     );
   }
@@ -1942,7 +1942,7 @@ function AccountEditor({
   return (
     <div className="panel">
       <div className="panelHeader">
-        <h2>授权配置</h2>
+        <h2>授权设置</h2>
         <KeyRound size={18} />
       </div>
       <div className="formLine">
@@ -2158,7 +2158,7 @@ function SettingsView({
     <section className="settingsGrid">
       <div className="panel">
         <div className="panelHeader">
-          <h2>服务商配置</h2>
+          <h2>服务商设置</h2>
           <SettingsIcon size={18} />
         </div>
         <Field label="Microsoft Graph 客户端 ID" value={draft.graph_client_id} onChange={(value) => setField("graph_client_id", value)} />
@@ -2303,7 +2303,7 @@ function SettingsView({
         </div>
         <button className="button primary" disabled={busy} onClick={() => onSave(draft)}>
           {busy ? <Loader2 className="spin" size={16} /> : <SettingsIcon size={16} />}
-          保存配置
+          保存设置
         </button>
       </div>
 

@@ -321,6 +321,7 @@ impl Database {
                 created_at: row.get(12)?,
                 updated_at: row.get(13)?,
                 tags: Vec::new(),
+                aliases: Vec::new(),
                 has_password: !row.get::<_, String>(14)?.is_empty(),
                 has_refresh_token: !row.get::<_, String>(15)?.is_empty(),
                 has_imap_password: !row.get::<_, String>(16)?.is_empty(),
@@ -332,6 +333,7 @@ impl Database {
         let mut accounts = collect_rows(rows)?;
         for account in &mut accounts {
             account.tags = self.tags_for_account(account.id)?;
+            account.aliases = self.aliases_for_account(account.id)?;
         }
         Ok(accounts)
     }
@@ -389,6 +391,7 @@ impl Database {
             .query_row("SELECT id FROM accounts WHERE id = ?", [input.id], |row| row.get::<_, i64>(0))
             .optional()?
             .ok_or_else(|| AppError::InvalidInput("account not found".to_string()))?;
+        self.ensure_primary_email_is_not_alias(existing_id, &email)?;
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
 
         self.conn.execute(
@@ -451,6 +454,14 @@ impl Database {
         if let Some(tag_ids) = input.tag_ids {
             self.replace_account_tags(existing_id, tag_ids)?;
         }
+        if let Some(aliases) = input.aliases {
+            self.replace_account_aliases(existing_id, &email, aliases)?;
+        } else {
+            self.conn.execute(
+                "DELETE FROM account_aliases WHERE account_id = ? AND alias_email = ?",
+                params![existing_id, email],
+            )?;
+        }
 
         self.audit("account.updated", "account", Some(existing_id), "")?;
         self.list_accounts()?
@@ -470,7 +481,7 @@ impl Database {
         self.require_unlocked()?;
         let mut stmt = self.conn.prepare(
             "
-            SELECT id, name, project_key, COALESCE(description, ''), scope_mode, status, created_at, updated_at
+            SELECT id, name, project_key, COALESCE(description, ''), scope_mode, use_alias_email, status, created_at, updated_at
             FROM projects
             ORDER BY updated_at DESC, id DESC
             ",
@@ -482,20 +493,22 @@ impl Database {
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
+                row.get::<_, i64>(5)? == 1,
                 row.get::<_, String>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
             ))
         })?;
         let mut projects = Vec::new();
         for row in rows {
-            let (id, name, project_key, description, scope_mode, status, created_at, updated_at) = row?;
+            let (id, name, project_key, description, scope_mode, use_alias_email, status, created_at, updated_at) = row?;
             projects.push(Project {
                 id,
                 name,
                 project_key,
                 description,
                 scope_mode,
+                use_alias_email,
                 status,
                 group_ids: self.project_group_ids(id)?,
                 tag_ids: self.project_tag_ids(id)?,
@@ -538,10 +551,16 @@ impl Database {
 
         self.conn.execute(
             "
-            INSERT INTO projects (name, project_key, description, scope_mode, status)
-            VALUES (?, ?, ?, ?, 'active')
+            INSERT INTO projects (name, project_key, description, scope_mode, use_alias_email, status)
+            VALUES (?, ?, ?, ?, ?, 'active')
             ",
-            params![name, project_key, input.description.unwrap_or_default(), scope_mode],
+            params![
+                name,
+                project_key,
+                input.description.unwrap_or_default(),
+                scope_mode,
+                input.use_alias_email.unwrap_or(false).then_some(1).unwrap_or(0)
+            ],
         )?;
         let project_id = self.conn.last_insert_rowid();
         self.replace_project_group_scope(project_id, input.group_ids.unwrap_or_default())?;
@@ -553,14 +572,16 @@ impl Database {
 
     pub fn sync_project_scope(&self, project_id: i64) -> AppResult<Project> {
         self.require_unlocked()?;
-        let scope_mode: String = self
+        let (scope_mode, use_alias_email): (String, bool) = self
             .conn
-            .query_row("SELECT scope_mode FROM projects WHERE id = ?", [project_id], |row| row.get(0))
+            .query_row("SELECT scope_mode, use_alias_email FROM projects WHERE id = ?", [project_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? == 1))
+            })
             .optional()?
             .ok_or_else(|| AppError::InvalidInput("project not found".to_string()))?;
         let group_ids = self.project_group_ids(project_id)?;
         let tag_ids = self.project_tag_ids(project_id)?;
-        let accounts = self.accounts_for_project_scope(&scope_mode, &group_ids, &tag_ids)?;
+        let accounts = self.accounts_for_project_scope(&scope_mode, use_alias_email, &group_ids, &tag_ids)?;
         for (account_id, email) in &accounts {
             let normalized = email.trim().to_ascii_lowercase();
             self.conn.execute(
@@ -1223,6 +1244,7 @@ impl Database {
         csv.push_str(&csv_row(&[
             "id",
             "email",
+            "aliases",
             "group",
             "remark",
             "status",
@@ -1238,6 +1260,7 @@ impl Database {
             csv.push_str(&csv_row(&[
                 account.id.to_string(),
                 account.email.clone(),
+                account.aliases.join("; "),
                 account.group_name.clone().unwrap_or_default(),
                 account.remark.clone(),
                 account.status.clone(),
@@ -2469,6 +2492,7 @@ impl Database {
         )?;
         self.ensure_default_data()?;
         self.ensure_account_columns()?;
+        self.ensure_project_columns()?;
         self.ensure_temp_columns()?;
         self.ensure_message_columns()?;
         Ok(())
@@ -2496,6 +2520,19 @@ impl Database {
                 "ALTER TABLE accounts ADD COLUMN refresh_token_updated_at TEXT",
             ),
         ] {
+            if !columns.iter().any(|column| column == name) {
+                self.conn.execute(ddl, [])?;
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_project_columns(&self) -> AppResult<()> {
+        let columns = table_columns(&self.conn, "projects")?;
+        for (name, ddl) in [(
+            "use_alias_email",
+            "ALTER TABLE projects ADD COLUMN use_alias_email INTEGER NOT NULL DEFAULT 0",
+        )] {
             if !columns.iter().any(|column| column == name) {
                 self.conn.execute(ddl, [])?;
             }
@@ -2689,6 +2726,124 @@ impl Database {
         collect_rows(rows)
     }
 
+    fn aliases_for_account(&self, account_id: i64) -> AppResult<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT alias_email
+            FROM account_aliases
+            WHERE account_id = ?
+            ORDER BY created_at ASC, id ASC
+            ",
+        )?;
+        let rows = stmt.query_map([account_id], |row| row.get::<_, String>(0))?;
+        collect_rows(rows)
+    }
+
+    fn primary_alias_for_account(&self, account_id: i64) -> AppResult<Option<String>> {
+        self.conn
+            .query_row(
+                "
+                SELECT alias_email
+                FROM account_aliases
+                WHERE account_id = ?
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1
+                ",
+                [account_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(AppError::from)
+    }
+
+    fn ensure_primary_email_is_not_alias(&self, account_id: i64, email: &str) -> AppResult<()> {
+        let conflict = self
+            .conn
+            .query_row(
+                "SELECT account_id FROM account_aliases WHERE alias_email = ? AND account_id != ? LIMIT 1",
+                params![email, account_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if conflict.is_some() {
+            return Err(AppError::InvalidInput(
+                "account email conflicts with another account alias".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn normalize_account_aliases(
+        &self,
+        account_id: i64,
+        primary_email: &str,
+        aliases: Vec<String>,
+    ) -> AppResult<Vec<String>> {
+        let mut normalized_aliases = Vec::new();
+        let mut seen = HashSet::new();
+        for value in aliases {
+            let alias = normalize_email(&value).map_err(|_| {
+                AppError::InvalidInput("account alias email is invalid".to_string())
+            })?;
+            if alias == primary_email {
+                return Err(AppError::InvalidInput(
+                    "account alias cannot equal the primary email".to_string(),
+                ));
+            }
+            if !seen.insert(alias.clone()) {
+                continue;
+            }
+
+            let primary_conflict = self
+                .conn
+                .query_row(
+                    "SELECT id FROM accounts WHERE email = ? AND id != ? LIMIT 1",
+                    params![alias, account_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?;
+            if primary_conflict.is_some() {
+                return Err(AppError::InvalidInput(
+                    "account alias conflicts with another primary email".to_string(),
+                ));
+            }
+
+            let alias_conflict = self
+                .conn
+                .query_row(
+                    "SELECT account_id FROM account_aliases WHERE alias_email = ? AND account_id != ? LIMIT 1",
+                    params![alias, account_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?;
+            if alias_conflict.is_some() {
+                return Err(AppError::InvalidInput(
+                    "account alias conflicts with another account alias".to_string(),
+                ));
+            }
+            normalized_aliases.push(alias);
+        }
+        Ok(normalized_aliases)
+    }
+
+    fn replace_account_aliases(
+        &self,
+        account_id: i64,
+        primary_email: &str,
+        aliases: Vec<String>,
+    ) -> AppResult<()> {
+        let aliases = self.normalize_account_aliases(account_id, primary_email, aliases)?;
+        self.conn
+            .execute("DELETE FROM account_aliases WHERE account_id = ?", [account_id])?;
+        for alias in aliases {
+            self.conn.execute(
+                "INSERT INTO account_aliases (account_id, alias_email) VALUES (?, ?)",
+                params![account_id, alias],
+            )?;
+        }
+        Ok(())
+    }
+
     fn replace_account_tags(&self, account_id: i64, tag_ids: Vec<i64>) -> AppResult<()> {
         self.conn
             .execute("DELETE FROM account_tags WHERE account_id = ?", [account_id])?;
@@ -2767,7 +2922,13 @@ impl Database {
         Ok(stats)
     }
 
-    fn accounts_for_project_scope(&self, scope_mode: &str, group_ids: &[i64], tag_ids: &[i64]) -> AppResult<Vec<(i64, String)>> {
+    fn accounts_for_project_scope(
+        &self,
+        scope_mode: &str,
+        use_alias_email: bool,
+        group_ids: &[i64],
+        tag_ids: &[i64],
+    ) -> AppResult<Vec<(i64, String)>> {
         if scope_mode == "groups" && group_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -2799,7 +2960,7 @@ impl Database {
             _ => "SELECT id, email FROM accounts WHERE status = 'active' ORDER BY email".to_string(),
         };
         let mut stmt = self.conn.prepare(&sql)?;
-        if scope_mode == "groups" {
+        let mut accounts = if scope_mode == "groups" {
             let params = rusqlite::params_from_iter(group_ids.iter());
             let rows = stmt.query_map(params, |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
             collect_rows(rows)
@@ -2810,7 +2971,15 @@ impl Database {
         } else {
             let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
             collect_rows(rows)
+        }?;
+        if use_alias_email {
+            for (account_id, email) in &mut accounts {
+                if let Some(alias) = self.primary_alias_for_account(*account_id)? {
+                    *email = alias;
+                }
+            }
         }
+        Ok(accounts)
     }
 
     fn project_account_ids(&self, project_id: i64) -> AppResult<Vec<(i64, Option<i64>, String, String)>> {
@@ -4854,6 +5023,7 @@ fn remote_sync_failure_from_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Re
 #[cfg(test)]
 mod project_tests {
     use super::{backup_dir, normalize_project_key, Database, MailMessageRef};
+    use crate::error::AppError;
     use crate::models::{
         AutomationRunQuery, ClaimProjectAccountInput, ClearAutomationRunsInput,
         AttachmentInfo, CreateProjectInput, DeleteMailMessagesInput, DownloadAttachmentInput,
@@ -4894,6 +5064,7 @@ mod project_tests {
                 project_key: None,
                 description: None,
                 scope_mode: Some("all".to_string()),
+                use_alias_email: None,
                 group_ids: None,
                 tag_ids: None,
             })
@@ -4961,6 +5132,7 @@ mod project_tests {
             refresh_token: None,
             imap_password: None,
             tag_ids: Some(vec![10]),
+            aliases: None,
         })
         .expect("tag core account");
         db.update_account(UpdateAccountInput {
@@ -4979,6 +5151,7 @@ mod project_tests {
             refresh_token: None,
             imap_password: None,
             tag_ids: Some(vec![11]),
+            aliases: None,
         })
         .expect("tag warmup account");
         db.update_account(UpdateAccountInput {
@@ -4997,6 +5170,7 @@ mod project_tests {
             refresh_token: None,
             imap_password: None,
             tag_ids: Some(vec![10]),
+            aliases: None,
         })
         .expect("tag disabled account");
 
@@ -5006,6 +5180,7 @@ mod project_tests {
                 project_key: None,
                 description: None,
                 scope_mode: Some("tags".to_string()),
+                use_alias_email: None,
                 group_ids: None,
                 tag_ids: Some(vec![10]),
             })
@@ -5019,6 +5194,124 @@ mod project_tests {
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].email, "core@example.com");
         assert_eq!(db.list_accounts().expect("accounts")[0].tags[0].name, "ProjectCore");
+    }
+
+    #[test]
+    fn account_aliases_are_listed_and_validated() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "
+                INSERT INTO accounts (id, email, status, group_id)
+                VALUES
+                    (1, 'one@example.com', 'active', 1),
+                    (2, 'two@example.com', 'active', 1)
+                ",
+                [],
+            )
+            .expect("insert accounts");
+
+        let account_input = |id: i64, email: &str, aliases: Vec<&str>| UpdateAccountInput {
+            id,
+            email: email.to_string(),
+            group_id: Some(1),
+            remark: None,
+            status: Some("active".to_string()),
+            provider: None,
+            account_type: None,
+            imap_host: None,
+            imap_port: None,
+            forward_enabled: None,
+            password: None,
+            client_id: None,
+            refresh_token: None,
+            imap_password: None,
+            tag_ids: None,
+            aliases: Some(aliases.into_iter().map(str::to_string).collect()),
+        };
+
+        let updated = db
+            .update_account(account_input(
+                1,
+                "one@example.com",
+                vec!["Alias@One.com", "alias-one@example.com", "ALIAS@ONE.COM"],
+            ))
+            .expect("update aliases");
+        assert_eq!(updated.aliases, vec!["alias@one.com", "alias-one@example.com"]);
+
+        let listed = db
+            .list_accounts()
+            .expect("list accounts")
+            .into_iter()
+            .find(|account| account.id == 1)
+            .expect("listed account");
+        assert_eq!(listed.aliases, vec!["alias@one.com", "alias-one@example.com"]);
+
+        let primary_conflict = db.update_account(account_input(1, "one@example.com", vec!["two@example.com"]));
+        assert!(matches!(primary_conflict, Err(AppError::InvalidInput(_))));
+
+        let alias_conflict = db.update_account(account_input(2, "two@example.com", vec!["alias@one.com"]));
+        assert!(matches!(alias_conflict, Err(AppError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn project_scope_can_use_account_alias_email() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "INSERT INTO accounts (id, email, status, group_id) VALUES (1, 'primary@example.com', 'active', 1)",
+                [],
+            )
+            .expect("insert account");
+        db.update_account(UpdateAccountInput {
+            id: 1,
+            email: "primary@example.com".to_string(),
+            group_id: Some(1),
+            remark: None,
+            status: Some("active".to_string()),
+            provider: None,
+            account_type: None,
+            imap_host: None,
+            imap_port: None,
+            forward_enabled: None,
+            password: None,
+            client_id: None,
+            refresh_token: None,
+            imap_password: None,
+            tag_ids: None,
+            aliases: Some(vec!["alias@example.com".to_string(), "second@example.com".to_string()]),
+        })
+        .expect("set alias");
+
+        let project = db
+            .create_project(CreateProjectInput {
+                name: "Alias Project".to_string(),
+                project_key: None,
+                description: None,
+                scope_mode: Some("all".to_string()),
+                use_alias_email: Some(true),
+                group_ids: None,
+                tag_ids: None,
+            })
+            .expect("create project");
+        assert!(project.use_alias_email);
+
+        let accounts = db.list_project_accounts(project.id).expect("project accounts");
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].email, "alias@example.com");
+        assert_eq!(accounts[0].normalized_email, "alias@example.com");
     }
 
     #[test]

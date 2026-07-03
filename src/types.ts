@@ -39,6 +39,7 @@ export type Account = {
   created_at: string;
   updated_at: string;
   tags: Tag[];
+  aliases: string[];
   has_password: boolean;
   has_refresh_token: boolean;
   has_imap_password: boolean;
@@ -289,6 +290,7 @@ export type Project = {
   project_key: string;
   description: string;
   scope_mode: string;
+  use_alias_email: boolean;
   status: string;
   group_ids: number[];
   tag_ids: number[];

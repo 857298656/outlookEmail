@@ -188,6 +188,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
           tags: [],
+          aliases: [],
           has_password: Boolean(parts[1]),
           has_refresh_token: Boolean(parts[3]),
           has_imap_password: false,
@@ -466,6 +467,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         project_key?: string;
         description?: string;
         scope_mode?: string;
+        use_alias_email?: boolean;
         group_ids?: number[];
         tag_ids?: number[];
       };
@@ -475,6 +477,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         project_key: input.project_key || input.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
         description: input.description ?? "",
         scope_mode: input.scope_mode ?? "all",
+        use_alias_email: Boolean(input.use_alias_email),
         status: "active",
         group_ids: input.group_ids ?? [],
         tag_ids: input.tag_ids ?? [],
@@ -535,13 +538,15 @@ function syncMockProject(projectId: number) {
     return true;
   });
   for (const account of scopedAccounts) {
-    if (!mockProjectAccounts.some((item) => item.project_id === project.id && item.normalized_email === account.email)) {
+    const email = project.use_alias_email && account.aliases[0] ? account.aliases[0] : account.email;
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!mockProjectAccounts.some((item) => item.project_id === project.id && item.normalized_email === normalizedEmail)) {
       mockProjectAccounts.push({
         id: Date.now() + mockProjectAccounts.length,
         project_id: project.id,
         account_id: account.id,
-        email: account.email,
-        normalized_email: account.email,
+        email,
+        normalized_email: normalizedEmail,
         status: "toClaim",
         claim_token: null,
         claimed_at: null,
@@ -554,6 +559,17 @@ function syncMockProject(projectId: number) {
       });
     }
   }
+  const targetEmails = new Set(
+    scopedAccounts.map((account) => {
+      const email = project.use_alias_email && account.aliases[0] ? account.aliases[0] : account.email;
+      return email.trim().toLowerCase();
+    })
+  );
+  mockProjectAccounts = mockProjectAccounts.map((item) =>
+    item.project_id === project.id && item.status !== "removed" && !targetEmails.has(item.normalized_email)
+      ? { ...item, status: "removed", updated_at: new Date().toISOString() }
+      : item
+  );
   updateMockProjectStats(projectId);
 }
 
@@ -819,6 +835,7 @@ export const api = {
     refresh_token?: string;
     imap_password?: string;
     tag_ids?: number[];
+    aliases?: string[];
   }) => call<Account>("update_account", { input }),
   importAccounts: (input: { raw: string; group_id?: number | null }) =>
     call<ImportAccountsResult>("import_accounts", { input }),
@@ -895,6 +912,7 @@ export const api = {
     project_key?: string;
     description?: string;
     scope_mode?: string;
+    use_alias_email?: boolean;
     group_ids?: number[];
     tag_ids?: number[];
   }) =>

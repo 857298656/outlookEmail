@@ -45,6 +45,7 @@ pub struct Account {
     pub created_at: String,
     pub updated_at: String,
     pub tags: Vec<Tag>,
+    pub aliases: Vec<String>,
     pub has_password: bool,
     pub has_refresh_token: bool,
     pub has_imap_password: bool,
@@ -461,6 +462,7 @@ pub struct Project {
     pub project_key: String,
     pub description: String,
     pub scope_mode: String,
+    pub use_alias_email: bool,
     pub status: String,
     pub group_ids: Vec<i64>,
     pub tag_ids: Vec<i64>,
@@ -517,6 +519,7 @@ pub struct CreateProjectInput {
     pub project_key: Option<String>,
     pub description: Option<String>,
     pub scope_mode: Option<String>,
+    pub use_alias_email: Option<bool>,
     pub group_ids: Option<Vec<i64>>,
     pub tag_ids: Option<Vec<i64>>,
 }
@@ -550,6 +553,7 @@ pub struct UpdateAccountInput {
     pub refresh_token: Option<String>,
     pub imap_password: Option<String>,
     pub tag_ids: Option<Vec<i64>>,
+    pub aliases: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

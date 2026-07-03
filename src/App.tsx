@@ -1173,9 +1173,27 @@ function AccountsView({
   const [tagName, setTagName] = useState("");
   const [colorIndex, setColorIndex] = useState(0);
   const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>(accounts[0]?.id);
+  const [accountSearch, setAccountSearch] = useState("");
   const [oauthUrl, setOauthUrl] = useState("");
   const [oauthCallback, setOauthCallback] = useState("");
-  const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? accounts[0];
+  const visibleAccounts = useMemo(() => {
+    const keyword = accountSearch.trim().toLowerCase();
+    if (!keyword) return accounts;
+    return accounts.filter((account) => {
+      const haystack = [
+        account.email,
+        account.remark,
+        account.group_name ?? "",
+        ...account.aliases,
+        ...account.tags.map((tag) => tag.name)
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(keyword);
+    });
+  }, [accounts, accountSearch]);
+  const selectedAccount =
+    visibleAccounts.find((account) => account.id === selectedAccountId) ?? visibleAccounts[0] ?? accounts[0];
   const parsedRows = useMemo(() => parseAccountRows(raw), [raw]);
 
   return (
@@ -1280,12 +1298,20 @@ function AccountsView({
         <div className="panelHeader">
           <h2>邮箱库存</h2>
           <div className="rowActions">
-            <span>{accounts.length} 个账号</span>
+            <span>{visibleAccounts.length}/{accounts.length} 个账号</span>
             <button className="iconMini" title="导出账号" disabled={accounts.length === 0 || busy} onClick={() => onExportAccounts()}>
               <Download size={15} />
             </button>
           </div>
         </div>
+        <label className="searchBox">
+          <Search size={15} />
+          <input
+            value={accountSearch}
+            placeholder="搜索邮箱、别名、备注、分组或标签"
+            onChange={(event) => setAccountSearch(event.target.value)}
+          />
+        </label>
         <div className="table">
           <div className="tableHeader">
             <span>邮箱</span>
@@ -1294,13 +1320,16 @@ function AccountsView({
             <span>凭据</span>
             <span />
           </div>
-          {accounts.map((account) => (
+          {visibleAccounts.map((account) => (
             <div
               className={selectedAccount?.id === account.id ? "tableRow active" : "tableRow"}
               key={account.id}
               onClick={() => setSelectedAccountId(account.id)}
             >
-              <span>{account.email}</span>
+              <span className="accountText">
+                <strong>{account.email}</strong>
+                {account.aliases.length > 0 && <small>{account.aliases.join(", ")}</small>}
+              </span>
               <span>{account.group_name ?? "无"}</span>
               <span>{formatStatus(account.last_refresh_status)}</span>
               <span>{account.has_refresh_token ? "Graph" : account.has_imap_password || account.has_password ? "IMAP" : "无"}</span>
@@ -1639,6 +1668,7 @@ function ProjectsView({
     project_key?: string;
     description?: string;
     scope_mode?: string;
+    use_alias_email?: boolean;
     group_ids?: number[];
     tag_ids?: number[];
   }) => void;
@@ -1653,6 +1683,7 @@ function ProjectsView({
   const [projectKey, setProjectKey] = useState("");
   const [description, setDescription] = useState("");
   const [scopeMode, setScopeMode] = useState("all");
+  const [useAliasEmail, setUseAliasEmail] = useState(false);
   const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<number[]>([]);
 
@@ -1686,6 +1717,14 @@ function ProjectsView({
             <option value="groups">指定分组</option>
             <option value="tags">指定标签</option>
           </select>
+          <label className="checkLine toggleLine">
+            <input
+              type="checkbox"
+              checked={useAliasEmail}
+              onChange={(event) => setUseAliasEmail(event.target.checked)}
+            />
+            <span>项目账号池优先使用账号别名</span>
+          </label>
           {scopeMode === "groups" && (
             <div className="groupPicker">
               {groups.map((group) => (
@@ -1737,12 +1776,14 @@ function ProjectsView({
                 project_key: projectKey || undefined,
                 description,
                 scope_mode: scopeMode,
+                use_alias_email: useAliasEmail,
                 group_ids: scopeMode === "groups" ? selectedGroupIds : [],
                 tag_ids: scopeMode === "tags" ? selectedTagIds : []
               });
               setName("");
               setProjectKey("");
               setDescription("");
+              setUseAliasEmail(false);
             }}
           >
             <Plus size={16} />
@@ -1775,6 +1816,7 @@ function ProjectsView({
               <div>
                 <h2>{selectedProject.name}</h2>
                 <p>{selectedProject.description || selectedProject.project_key}</p>
+                {selectedProject.use_alias_email && <span className="chip">使用账号别名</span>}
               </div>
               <div className="topActions">
                 <button className="button secondary" disabled={busy} onClick={() => onSync(selectedProject.id)}>
@@ -1906,7 +1948,8 @@ function AccountEditor({
     client_id: "",
     refresh_token: "",
     imap_password: "",
-    tag_ids: [] as number[]
+    tag_ids: [] as number[],
+    aliasesText: ""
   });
 
   useEffect(() => {
@@ -1924,7 +1967,8 @@ function AccountEditor({
       client_id: settings?.graph_client_id ?? "",
       refresh_token: "",
       imap_password: "",
-      tag_ids: account.tags.map((tag) => tag.id)
+      tag_ids: account.tags.map((tag) => tag.id),
+      aliasesText: account.aliases.join("\n")
     });
     onOauthCallbackChange("");
   }, [account?.id, account?.updated_at, settings?.graph_client_id]);
@@ -1980,6 +2024,12 @@ function AccountEditor({
         />
         <span>转发此账号的缓存邮件</span>
       </label>
+      <textarea
+        className="textarea compact"
+        value={draft.aliasesText}
+        placeholder="别名邮箱，每行一个；项目池开启别名时会优先使用第一个"
+        onChange={(event) => setDraft({ ...draft, aliasesText: event.target.value })}
+      />
       {tags.length > 0 && (
         <div className="groupPicker tagPicker">
           {tags.map((tag) => (
@@ -2089,7 +2139,8 @@ function AccountEditor({
             password: draft.password || undefined,
             imap_password: draft.imap_password || undefined,
             refresh_token: draft.refresh_token || undefined,
-            tag_ids: draft.tag_ids
+            tag_ids: draft.tag_ids,
+            aliases: parseAliasText(draft.aliasesText)
           })
         }
       >
@@ -2660,6 +2711,14 @@ function formatDate(value: string) {
 function formatUnixDate(value: number) {
   if (!value) return "";
   return formatDate(new Date(value * 1000).toISOString());
+}
+
+function parseAliasText(value: string) {
+  const aliases = value
+    .split(/[\n,;]+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  return Array.from(new Set(aliases));
 }
 
 function formatBytes(value: number) {

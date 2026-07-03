@@ -245,24 +245,24 @@ function App() {
     <div className="appShell">
       <aside className="rail">
         <div className="brandMark">OE</div>
-        <IconButton active={view === "mail"} title="Mailbox" onClick={() => setView("mail")}>
+        <IconButton active={view === "mail"} title="邮箱" onClick={() => setView("mail")}>
           <Inbox size={20} />
         </IconButton>
-        <IconButton active={view === "accounts"} title="Accounts" onClick={() => setView("accounts")}>
+        <IconButton active={view === "accounts"} title="账号" onClick={() => setView("accounts")}>
           <Users size={20} />
         </IconButton>
-        <IconButton active={view === "temp"} title="Temp Mail" onClick={() => setView("temp")}>
+        <IconButton active={view === "temp"} title="临时邮箱" onClick={() => setView("temp")}>
           <Cloud size={20} />
         </IconButton>
-        <IconButton active={view === "projects"} title="Projects" onClick={() => setView("projects")}>
+        <IconButton active={view === "projects"} title="项目" onClick={() => setView("projects")}>
           <FolderKanban size={20} />
         </IconButton>
-        <IconButton active={view === "settings"} title="Settings" onClick={() => setView("settings")}>
+        <IconButton active={view === "settings"} title="设置" onClick={() => setView("settings")}>
           <SettingsIcon size={20} />
         </IconButton>
         <div className="railSpacer" />
         <IconButton
-          title="Lock"
+          title="锁定"
           onClick={() =>
             runAction(async () => {
               setStatus(await api.lock());
@@ -276,8 +276,8 @@ function App() {
       <main className="mainSurface">
         <header className="topBar">
           <div>
-            <h1>OutlookEmail Desktop</h1>
-            <p>{status.account_count} accounts · {status.message_count} cached messages</p>
+            <h1>OutlookEmail 桌面版</h1>
+            <p>{status.account_count} 个账号 · {status.message_count} 封缓存邮件</p>
           </div>
           <div className="topActions">
             {notice && <span className="notice">{notice}</span>}
@@ -287,7 +287,7 @@ function App() {
               onClick={() =>
                 runAction(async () => {
                   const result = await api.runRefreshJob(selectedAccountId);
-                  setNotice(result.message);
+                  setNotice(formatResultMessage(result.message));
                   await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
                   await loadStatus();
                 })
@@ -295,7 +295,7 @@ function App() {
               disabled={busy}
             >
               {busy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-              Refresh
+              刷新
             </button>
           </div>
         </header>
@@ -360,7 +360,7 @@ function App() {
             onMarkMessages={(messageIds, isRead) =>
               runAction(async () => {
                 const result = await api.markMessagesRead(messageIds, isRead);
-                setNotice(result.message);
+                setNotice(formatResultMessage(result.message));
                 await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage);
                 await loadAutomation();
               })
@@ -368,7 +368,7 @@ function App() {
             onDeleteMessages={(messageIds) =>
               runAction(async () => {
                 const result = await api.deleteMessages(messageIds);
-                setNotice(result.message);
+                setNotice(formatResultMessage(result.message));
                 await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage);
                 await loadStatus();
                 await loadAutomation();
@@ -376,7 +376,7 @@ function App() {
             }
             onExportMessages={(messageIds) =>
               runAction(async () => {
-                const result = await api.exportMailMessages(messageIds, "OutlookEmail message export");
+                const result = await api.exportMailMessages(messageIds, "OutlookEmail 邮件导出");
                 setNotice(exportNotice(result));
               })
             }
@@ -386,7 +386,7 @@ function App() {
                     await api.createDemoMessage(selectedAccountId);
                     setMailPage(0);
                     await loadWorkspace(selectedAccountId, folder, mailFilters, 0);
-                  }, "Local message created")
+                  }, "已创建本地邮件")
                 : undefined
             }
             onDownloadAttachment={(message, attachmentId) =>
@@ -397,13 +397,13 @@ function App() {
                   attachment_id: attachmentId,
                   folder: message.folder
                 });
-                setNotice(`Downloaded ${result.file_name}`);
+                setNotice(`已下载 ${result.file_name}`);
               })
             }
             onRetryRemoteFailure={(retryId) =>
               runAction(async () => {
                 const result = await api.retryQueueItem(retryId);
-                setNotice(result.message);
+                setNotice(formatResultMessage(result.message));
                 await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage);
                 await loadAutomation();
               })
@@ -411,7 +411,7 @@ function App() {
             onDismissRemoteFailure={(retryId) =>
               runAction(async () => {
                 const result = await api.dismissRetryItem(retryId);
-                setNotice(result.message);
+                setNotice(formatResultMessage(result.message));
                 await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage);
                 await loadAutomation();
               })
@@ -431,26 +431,26 @@ function App() {
                 await api.importAccounts({ raw, group_id: groupId });
                 await loadWorkspace(selectedAccountId, folder);
                 await loadStatus();
-              }, "Accounts imported")
+              }, "账号已导入")
             }
             onCreateGroup={(name, color) =>
               runAction(async () => {
                 await api.createGroup({ name, color });
                 await loadWorkspace(selectedAccountId, folder);
-              }, "Group created")
+              }, "分组已创建")
             }
             onCreateTag={(name, color) =>
               runAction(async () => {
                 await api.createTag({ name, color });
                 await loadWorkspace(selectedAccountId, folder);
-              }, "Tag created")
+              }, "标签已创建")
             }
             onDeleteAccount={(accountId) =>
               runAction(async () => {
                 await api.deleteAccount(accountId);
                 await loadWorkspace(undefined, folder);
                 await loadStatus();
-              }, "Account deleted")
+              }, "账号已删除")
             }
             onExportAccounts={(groupId) =>
               runAction(async () => {
@@ -462,13 +462,13 @@ function App() {
               runAction(async () => {
                 await api.updateAccount(input);
                 await loadWorkspace(input.id, folder);
-              }, "Account saved")
+              }, "账号已保存")
             }
             onGenerateOAuthUrl={(input) => api.generateOAuthAuthUrl(input)}
             onExchangeOAuthToken={(input) =>
               runAction(async () => {
                 const result = await api.exchangeOAuthToken(input);
-                setNotice(`OAuth saved: ${result.refresh_token_preview}`);
+                setNotice(`OAuth 已保存：${result.refresh_token_preview}`);
                 await loadWorkspace(input.account_id, folder);
               })
             }
@@ -496,19 +496,19 @@ function App() {
               runAction(async () => {
                 const created = await api.generateTempEmail(input);
                 await loadTempWorkspace(created.email);
-              }, "Temp email generated")
+              }, "临时邮箱已生成")
             }
             onImport={(input) =>
               runAction(async () => {
                 const result = await api.importTempEmails(input);
                 await loadTempWorkspace();
-                setNotice(`Imported ${result.imported}, skipped ${result.skipped}`);
+                setNotice(`已导入 ${result.imported} 个，跳过 ${result.skipped} 个`);
               })
             }
             onRefresh={(email) =>
               runAction(async () => {
                 const result = await api.refreshTempEmailMessages(email);
-                setNotice(result.message);
+                setNotice(formatResultMessage(result.message));
                 await loadTempWorkspace(email);
               })
             }
@@ -516,24 +516,24 @@ function App() {
               runAction(async () => {
                 await api.deleteTempEmail(email);
                 await loadTempWorkspace(undefined);
-              }, "Temp email deleted")
+              }, "临时邮箱已删除")
             }
             onSaveChannel={(input) =>
               runAction(async () => {
                 await api.upsertCloudflareChannel(input);
                 await loadTempWorkspace(selectedTempEmail);
-              }, "Cloudflare channel saved")
+              }, "Cloudflare 通道已保存")
             }
             onDeleteChannel={(channelId) =>
               runAction(async () => {
                 await api.deleteCloudflareChannel(channelId);
                 await loadTempWorkspace(selectedTempEmail);
-              }, "Cloudflare channel deleted")
+              }, "Cloudflare 通道已删除")
             }
             onTestChannel={(channelId) =>
               runAction(async () => {
                 const result = await api.testCloudflareChannel(channelId);
-                setNotice(result.message);
+                setNotice(formatResultMessage(result.message));
               })
             }
           />
@@ -550,7 +550,7 @@ function App() {
               runAction(async () => {
                 const project = await api.createProject(input);
                 await loadProjects(project.id);
-              }, "Project created")
+              }, "项目已创建")
             }
             onSelect={(projectId) =>
               runAction(async () => {
@@ -561,13 +561,13 @@ function App() {
               runAction(async () => {
                 await api.syncProjectScope(projectId);
                 await loadProjects(projectId);
-              }, "Project synced")
+              }, "项目已同步")
             }
             onClaim={(projectId) =>
               runAction(async () => {
                 const claimed = await api.claimProjectAccount({ project_id: projectId, lease_minutes: 30 });
                 await loadProjects(projectId);
-                setNotice(claimed ? `Claimed ${claimed.email}` : "No claimable accounts");
+                setNotice(claimed ? `已领取 ${claimed.email}` : "没有可领取账号");
               })
             }
             onExport={(projectId) =>
@@ -584,7 +584,7 @@ function App() {
                 if (action === "remove") await api.removeProjectAccount(projectAccountId);
                 if (action === "restore") await api.restoreProjectAccount(projectAccountId);
                 await loadProjects(projectId);
-              }, "Project account updated")
+              }, "项目账号已更新")
             }
           />
         )}
@@ -603,19 +603,19 @@ function App() {
               runAction(async () => {
                 setSettings(await api.updateSettings(nextSettings));
                 await loadAutomation();
-              }, "Settings saved")
+              }, "设置已保存")
             }
             onRunForwarding={() =>
               runAction(async () => {
                 const result = await api.runForwardingJob({ limit: 50 });
-                setNotice(result.message);
+                setNotice(formatResultMessage(result.message));
                 await loadAutomation();
               })
             }
             onRunBackup={() =>
               runAction(async () => {
                 const result = await api.runBackupJob();
-                setNotice(result.message);
+                setNotice(formatResultMessage(result.message));
                 await loadAutomation();
               })
             }
@@ -632,7 +632,7 @@ function App() {
                 setFolder("all");
                 setMailFilters(restoredFilters);
                 setMailPage(0);
-                setNotice(`${result.message}. Safety snapshot: ${result.safety_backup_path}`);
+                setNotice(`${formatResultMessage(result.message)}。安全快照：${result.safety_backup_path}`);
                 await loadStatus();
                 await loadWorkspace(null, "all", restoredFilters, 0);
                 await loadProjects();
@@ -648,28 +648,28 @@ function App() {
             onClearAutomationRuns={(query) =>
               runAction(async () => {
                 const result = await api.clearAutomationRuns(query);
-                setNotice(result.message);
+                setNotice(formatResultMessage(result.message));
                 setAutomationRuns(await api.listAutomationRuns(query, 80));
               })
             }
             onRunRetryQueue={() =>
               runAction(async () => {
                 const result = await api.runRetryQueue(20);
-                setNotice(result.message);
+                setNotice(formatResultMessage(result.message));
                 await loadAutomation();
               })
             }
             onRetryQueueItem={(retryId) =>
               runAction(async () => {
                 const result = await api.retryQueueItem(retryId);
-                setNotice(result.message);
+                setNotice(formatResultMessage(result.message));
                 await loadAutomation();
               })
             }
             onDismissRetryItem={(retryId) =>
               runAction(async () => {
                 const result = await api.dismissRetryItem(retryId);
-                setNotice(result.message);
+                setNotice(formatResultMessage(result.message));
                 setRetryQueue(await api.listRetryQueue({}, 80));
               })
             }
@@ -704,24 +704,24 @@ function LockScreen({
         <div className="lockIcon">
           <KeyRound size={28} />
         </div>
-        <h1>{initialized ? "Unlock workspace" : "Create local workspace"}</h1>
+        <h1>{initialized ? "解锁工作区" : "创建本地工作区"}</h1>
         <p>
           {initialized
-            ? "Enter your local app password to decrypt secrets and open the mailbox workspace."
-            : "Set an 8+ character local password. It protects encrypted mailbox credentials in SQLite."}
+            ? "输入本地应用密码，用于解密敏感配置并打开邮箱工作区。"
+            : "设置至少 8 位本地密码，用于保护 SQLite 中加密保存的邮箱凭据。"}
         </p>
         <input
           className="input"
           type="password"
           minLength={8}
           value={password}
-          placeholder="Local app password"
+          placeholder="本地应用密码"
           onChange={(event) => setPassword(event.target.value)}
         />
         {error && <div className="formError">{error}</div>}
         <button className="button primary fullWidth" disabled={busy || password.length < 8}>
           {busy ? <Loader2 className="spin" size={16} /> : <Lock size={16} />}
-          {initialized ? "Unlock" : "Create workspace"}
+          {initialized ? "解锁" : "创建工作区"}
         </button>
       </form>
     </div>
@@ -798,11 +798,11 @@ function MailWorkspace({
     <section className="workspaceGrid">
       <aside className="pane groupPane">
         <div className="paneHeader">
-          <h2>Groups</h2>
+          <h2>分组</h2>
         </div>
         <button className={selectedGroupId === "all" ? "listRow active" : "listRow"} onClick={() => onGroupChange("all")}>
           <Archive size={16} />
-          <span>All accounts</span>
+          <span>全部账号</span>
           <b>{accounts.length}</b>
         </button>
         {groups.map((group) => (
@@ -820,14 +820,14 @@ function MailWorkspace({
 
       <aside className="pane accountPane">
         <div className="paneHeader">
-          <h2>Accounts</h2>
-          <button className="iconMini" title="Create local test message" onClick={onCreateDemo} disabled={!selectedAccountId}>
+          <h2>账号</h2>
+          <button className="iconMini" title="创建本地测试邮件" onClick={onCreateDemo} disabled={!selectedAccountId}>
             <Plus size={16} />
           </button>
         </div>
         <div className="searchBox">
           <Search size={15} />
-          <span>Search coming soon</span>
+          <span>账号搜索即将支持</span>
         </div>
         {accounts.map((account) => (
           <button
@@ -838,21 +838,21 @@ function MailWorkspace({
             <span className="mailAvatar">{account.email.slice(0, 2).toUpperCase()}</span>
             <span className="accountText">
               <strong>{account.email}</strong>
-              <small>{account.last_refresh_status} · {account.message_count} messages</small>
+              <small>{formatStatus(account.last_refresh_status)} · {account.message_count} 封邮件</small>
             </span>
           </button>
         ))}
-        {accounts.length === 0 && <EmptyState icon={<Mail size={24} />} text="Import accounts to start." />}
+        {accounts.length === 0 && <EmptyState icon={<Mail size={24} />} text="导入账号后开始使用。" />}
       </aside>
 
       <section className="pane messagePane">
         <div className="paneHeader">
-          <h2>Messages</h2>
+          <h2>邮件</h2>
           <select className="select" value={folder} onChange={(event) => onFolderChange(event.target.value)}>
-            <option value="all">All</option>
-            <option value="inbox">Inbox</option>
-            <option value="junkemail">Junk</option>
-            <option value="deleteditems">Deleted</option>
+            <option value="all">全部</option>
+            <option value="inbox">收件箱</option>
+            <option value="junkemail">垃圾邮件</option>
+            <option value="deleteditems">已删除</option>
           </select>
         </div>
         <div className="messageTools">
@@ -860,7 +860,7 @@ function MailWorkspace({
             <Search size={15} />
             <input
               value={draftFilters.search}
-              placeholder="Search sender, subject, body"
+              placeholder="搜索发件人、主题、正文"
               onChange={(event) => setDraftFilters({ ...draftFilters, search: event.target.value })}
               onKeyDown={(event) => {
                 if (event.key === "Enter") onFilterApply(draftFilters);
@@ -873,66 +873,66 @@ function MailWorkspace({
               value={draftFilters.readState}
               onChange={(event) => setDraftFilters({ ...draftFilters, readState: event.target.value as MailFilters["readState"] })}
             >
-              <option value="all">All mail</option>
-              <option value="unread">Unread</option>
-              <option value="read">Read</option>
+              <option value="all">全部邮件</option>
+              <option value="unread">未读</option>
+              <option value="read">已读</option>
             </select>
             <select
               className="select"
               value={draftFilters.attachmentFilter}
               onChange={(event) => setDraftFilters({ ...draftFilters, attachmentFilter: event.target.value as MailFilters["attachmentFilter"] })}
             >
-              <option value="all">Any files</option>
-              <option value="attachments">Has files</option>
-              <option value="plain">No files</option>
+              <option value="all">全部附件状态</option>
+              <option value="attachments">有附件</option>
+              <option value="plain">无附件</option>
             </select>
             <select
               className="select"
               value={draftFilters.sortBy}
               onChange={(event) => setDraftFilters({ ...draftFilters, sortBy: event.target.value as MailFilters["sortBy"] })}
             >
-              <option value="date">Date</option>
-              <option value="subject">Subject</option>
-              <option value="sender">Sender</option>
-              <option value="read">Status</option>
-              <option value="attachments">Files</option>
-              <option value="folder">Folder</option>
+              <option value="date">日期</option>
+              <option value="subject">主题</option>
+              <option value="sender">发件人</option>
+              <option value="read">状态</option>
+              <option value="attachments">附件</option>
+              <option value="folder">文件夹</option>
             </select>
             <select
               className="select"
               value={draftFilters.sortOrder}
               onChange={(event) => setDraftFilters({ ...draftFilters, sortOrder: event.target.value as MailFilters["sortOrder"] })}
             >
-              <option value="desc">Desc</option>
-              <option value="asc">Asc</option>
+              <option value="desc">降序</option>
+              <option value="asc">升序</option>
             </select>
             <button className="button compact secondary" onClick={() => onFilterApply(draftFilters)}>
               <Search size={14} />
-              Apply
+              应用
             </button>
           </div>
         </div>
         {selectedCount > 0 && (
           <div className="bulkBar">
-            <span>{selectedCount} selected</span>
+            <span>已选择 {selectedCount} 封</span>
             <button className="button compact secondary" onClick={() => onMarkMessages(selectedMessageIds, true)}>
               <CheckCircle2 size={14} />
-              Read
+              标为已读
             </button>
             <button className="button compact secondary" onClick={() => onMarkMessages(selectedMessageIds, false)}>
               <Mail size={14} />
-              Unread
+              标为未读
             </button>
             <button className="button compact danger" onClick={() => onDeleteMessages(selectedMessageIds)}>
               <Trash2 size={14} />
-              Delete
+              删除
             </button>
             <button className="button compact secondary" onClick={() => onExportMessages(selectedMessageIds)}>
               <Download size={14} />
-              Export
+              导出
             </button>
             <button className="button compact ghost" onClick={onClearSelection}>
-              Clear
+              清除
             </button>
           </div>
         )}
@@ -940,38 +940,38 @@ function MailWorkspace({
           <div key={message.id} className={selectedMessage?.id === message.id ? "messageRow active" : "messageRow"}>
             <input
               type="checkbox"
-              aria-label={`Select ${message.subject || "message"}`}
+              aria-label={`选择 ${message.subject || "邮件"}`}
               checked={selectedMessageIds.includes(message.id)}
               onChange={() => onToggleMessageSelect(message.id)}
             />
             <button className={message.is_read ? "messageOpen" : "messageOpen unread"} onClick={() => onMessageSelect(message.id)}>
               <span className="messageTop">
-                <strong>{message.subject || "(no subject)"}</strong>
+                <strong>{message.subject || "（无主题）"}</strong>
                 <small>{formatDate(message.received_at)}</small>
               </span>
               <span className="sender">{message.sender}</span>
               {message.remote_sync_failure && (
                 <span className="remoteFailureInline">
                   <XCircle size={12} />
-                  {formatRemoteFailureAction(message.remote_sync_failure.action)} failed remotely
+                  {formatRemoteFailureAction(message.remote_sync_failure.action)} 远端同步失败
                 </span>
               )}
               <span className="preview">{message.body_preview}</span>
             </button>
           </div>
         ))}
-        {messages.length === 0 && <EmptyState icon={<Inbox size={24} />} text="No cached messages yet." />}
+        {messages.length === 0 && <EmptyState icon={<Inbox size={24} />} text="暂无缓存邮件。" />}
         {messages.length > 0 && (
           <div className="pagerBar">
             <button className="button compact secondary" onClick={onSelectVisibleMessages}>
-              Select page
+              选择本页
             </button>
-            <span>Page {page + 1}</span>
+            <span>第 {page + 1} 页</span>
             <button className="button compact secondary" disabled={page === 0} onClick={() => onPageChange(page - 1)}>
-              Previous
+              上一页
             </button>
             <button className="button compact secondary" disabled={!hasNextPage} onClick={() => onPageChange(page + 1)}>
-              Next
+              下一页
             </button>
           </div>
         )}
@@ -982,30 +982,30 @@ function MailWorkspace({
           <>
             <div className="detailHeader">
               <div>
-                <h2>{selectedMessage.subject || "(no subject)"}</h2>
+                <h2>{selectedMessage.subject || "（无主题）"}</h2>
                 <p>{selectedMessage.sender}</p>
               </div>
               <div className="detailActions">
                 <button className="button compact secondary" onClick={() => onMarkMessages([selectedMessage.id], !selectedMessage.is_read)}>
                   {selectedMessage.is_read ? <Mail size={14} /> : <CheckCircle2 size={14} />}
-                  {selectedMessage.is_read ? "Unread" : "Read"}
+                  {selectedMessage.is_read ? "标为未读" : "标为已读"}
                 </button>
                 <button className="button compact danger" onClick={() => onDeleteMessages([selectedMessage.id])}>
                   <Trash2 size={14} />
-                  Delete
+                  删除
                 </button>
                 <button className="button compact secondary" onClick={() => onExportMessages([selectedMessage.id])}>
                   <Download size={14} />
-                  Export
+                  导出
                 </button>
               </div>
             </div>
             <div className="metaGrid">
-              <span>Folder</span>
+              <span>文件夹</span>
               <strong>{selectedMessage.folder}</strong>
-              <span>Status</span>
-              <strong>{selectedMessage.is_read ? "Read" : "Unread"}</strong>
-              <span>Received</span>
+              <span>状态</span>
+              <strong>{selectedMessage.is_read ? "已读" : "未读"}</strong>
+              <span>接收时间</span>
               <strong>{formatDate(selectedMessage.received_at)}</strong>
             </div>
             {selectedMessage.remote_sync_failure && (
@@ -1019,7 +1019,7 @@ function MailWorkspace({
             <MessageBody body={selectedMessage.body || selectedMessage.body_preview} bodyType={selectedMessage.body_type} />
             {selectedMessage.attachments.length > 0 && (
               <div className="attachmentList">
-                <h3>Attachments</h3>
+                <h3>附件</h3>
                 {selectedMessage.attachments.map((attachment) => (
                   <button
                     className="attachmentButton"
@@ -1035,7 +1035,7 @@ function MailWorkspace({
             )}
           </>
         ) : (
-          <EmptyState icon={<Mail size={24} />} text="Select a message." />
+          <EmptyState icon={<Mail size={24} />} text="请选择一封邮件。" />
         )}
       </article>
     </section>
@@ -1086,14 +1086,14 @@ function AccountsView({
     <section className="managementGrid">
       <div className="panel">
         <div className="panelHeader">
-          <h2>Import accounts</h2>
+          <h2>导入账号</h2>
           <Upload size={18} />
         </div>
         <textarea
           className="textarea"
           value={raw}
           onChange={(event) => setRaw(event.target.value)}
-          placeholder="email----password----client_id----refresh_token----remark"
+          placeholder="邮箱----密码----client_id----refresh_token----备注"
         />
         <div className="formLine">
           <select className="select grow" value={groupId ?? ""} onChange={(event) => setGroupId(Number(event.target.value))}>
@@ -1105,18 +1105,18 @@ function AccountsView({
           </select>
           <button className="button primary" disabled={busy || parsedRows.length === 0} onClick={() => onImport(raw, groupId)}>
             <Download size={16} />
-            Import {parsedRows.length || ""}
+            导入 {parsedRows.length || ""}
           </button>
         </div>
       </div>
 
       <div className="panel">
         <div className="panelHeader">
-          <h2>Groups and tags</h2>
+          <h2>分组和标签</h2>
           <Tags size={18} />
         </div>
         <div className="formLine">
-          <input className="input grow" value={groupName} placeholder="New group" onChange={(event) => setGroupName(event.target.value)} />
+          <input className="input grow" value={groupName} placeholder="新分组" onChange={(event) => setGroupName(event.target.value)} />
           <button
             className="button secondary"
             disabled={!groupName.trim()}
@@ -1127,7 +1127,7 @@ function AccountsView({
             }}
           >
             <Plus size={16} />
-            Group
+            分组
           </button>
         </div>
         <div className="chipCloud">
@@ -1139,7 +1139,7 @@ function AccountsView({
           ))}
         </div>
         <div className="formLine">
-          <input className="input grow" value={tagName} placeholder="New tag" onChange={(event) => setTagName(event.target.value)} />
+          <input className="input grow" value={tagName} placeholder="新标签" onChange={(event) => setTagName(event.target.value)} />
           <button
             className="button secondary"
             disabled={!tagName.trim()}
@@ -1150,7 +1150,7 @@ function AccountsView({
             }}
           >
             <Plus size={16} />
-            Tag
+            标签
           </button>
         </div>
         <div className="chipCloud">
@@ -1182,20 +1182,20 @@ function AccountsView({
 
       <div className="panel widePanel">
         <div className="panelHeader">
-          <h2>Mailbox inventory</h2>
+          <h2>邮箱库存</h2>
           <div className="rowActions">
-            <span>{accounts.length} accounts</span>
-            <button className="iconMini" title="Export accounts" disabled={accounts.length === 0 || busy} onClick={() => onExportAccounts()}>
+            <span>{accounts.length} 个账号</span>
+            <button className="iconMini" title="导出账号" disabled={accounts.length === 0 || busy} onClick={() => onExportAccounts()}>
               <Download size={15} />
             </button>
           </div>
         </div>
         <div className="table">
           <div className="tableHeader">
-            <span>Email</span>
-            <span>Group</span>
-            <span>Status</span>
-            <span>Secrets</span>
+            <span>邮箱</span>
+            <span>分组</span>
+            <span>状态</span>
+            <span>凭据</span>
             <span />
           </div>
           {accounts.map((account) => (
@@ -1205,12 +1205,12 @@ function AccountsView({
               onClick={() => setSelectedAccountId(account.id)}
             >
               <span>{account.email}</span>
-              <span>{account.group_name ?? "None"}</span>
-              <span>{account.last_refresh_status}</span>
-              <span>{account.has_refresh_token ? "Graph" : account.has_imap_password || account.has_password ? "IMAP" : "None"}</span>
+              <span>{account.group_name ?? "无"}</span>
+              <span>{formatStatus(account.last_refresh_status)}</span>
+              <span>{account.has_refresh_token ? "Graph" : account.has_imap_password || account.has_password ? "IMAP" : "无"}</span>
               <button
                 className="iconMini danger"
-                title="Delete account"
+                title="删除账号"
                 onClick={(event) => {
                   event.stopPropagation();
                   onDeleteAccount(account.id);
@@ -1294,7 +1294,7 @@ function TempEmailsView({
     <section className="tempGrid">
       <aside className="panel tempControlPanel">
         <div className="panelHeader">
-          <h2>Temp mail</h2>
+          <h2>临时邮箱</h2>
           <Cloud size={18} />
         </div>
         <div className="formLine">
@@ -1305,7 +1305,7 @@ function TempEmailsView({
           </select>
           {provider === "cloudflare" && (
             <select className="select grow" value={channelId ?? ""} onChange={(event) => setChannelId(Number(event.target.value) || null)}>
-              <option value="">Channel</option>
+              <option value="">通道</option>
               {channels.map((channel) => (
                 <option key={channel.id} value={channel.id}>
                   {channel.name}
@@ -1318,17 +1318,17 @@ function TempEmailsView({
           <input
             className="input grow"
             value={provider === "gptmail" ? prefix : username}
-            placeholder={provider === "gptmail" ? "Prefix" : "Username"}
+            placeholder={provider === "gptmail" ? "前缀" : "用户名"}
             onChange={(event) => (provider === "gptmail" ? setPrefix(event.target.value) : setUsername(event.target.value))}
           />
-          <input className="input grow" value={domain} placeholder="Domain" onChange={(event) => setDomain(event.target.value)} />
+          <input className="input grow" value={domain} placeholder="域名" onChange={(event) => setDomain(event.target.value)} />
         </div>
         {provider === "duckmail" && (
           <input
             className="input fullWidth tempPassword"
             type="password"
             value={password}
-            placeholder="DuckMail password"
+            placeholder="DuckMail 密码"
             onChange={(event) => setPassword(event.target.value)}
           />
         )}
@@ -1347,14 +1347,14 @@ function TempEmailsView({
           }
         >
           {busy ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
-          Generate
+          生成
         </button>
 
         <textarea
           className="textarea compact tempImportBox"
           value={importRaw}
           onChange={(event) => setImportRaw(event.target.value)}
-          placeholder={provider === "duckmail" ? "email----password" : "email@example.com"}
+          placeholder={provider === "duckmail" ? "邮箱----密码" : "邮箱地址"}
         />
         <button
           className="button secondary fullWidth"
@@ -1362,13 +1362,13 @@ function TempEmailsView({
           onClick={() => onImport({ raw: importRaw, provider, channel_id: provider === "cloudflare" ? channelId : undefined })}
         >
           <Upload size={16} />
-          Import
+          导入
         </button>
       </aside>
 
       <aside className="panel tempListPanel">
         <div className="panelHeader">
-          <h2>Addresses</h2>
+          <h2>地址</h2>
           <span>{tempEmails.length}</span>
         </div>
         <div className="tempRows">
@@ -1376,22 +1376,22 @@ function TempEmailsView({
             <button key={item.id} className={selectedEmail === item.email ? "tempEmailRow active" : "tempEmailRow"} onClick={() => onSelect(item.email)}>
               <strong>{item.email}</strong>
               <small>
-                {item.provider} 路 {item.message_count} messages 路 {item.last_refresh_status}
+                {item.provider} · {item.message_count} 条消息 · {formatStatus(item.last_refresh_status)}
               </small>
             </button>
           ))}
         </div>
-        {tempEmails.length === 0 && <EmptyState icon={<Cloud size={24} />} text="No temp emails yet." />}
+        {tempEmails.length === 0 && <EmptyState icon={<Cloud size={24} />} text="暂无临时邮箱。" />}
       </aside>
 
       <section className="panel tempMessagePanel">
         <div className="panelHeader">
-          <h2>{selectedTemp?.email ?? "Messages"}</h2>
+          <h2>{selectedTemp?.email ?? "消息"}</h2>
           <div className="rowActions">
-            <button className="iconMini" title="Refresh" disabled={!selectedEmail || busy} onClick={() => selectedEmail && onRefresh(selectedEmail)}>
+            <button className="iconMini" title="刷新" disabled={!selectedEmail || busy} onClick={() => selectedEmail && onRefresh(selectedEmail)}>
               <RefreshCw size={15} />
             </button>
-            <button className="iconMini danger" title="Delete" disabled={!selectedEmail || busy} onClick={() => selectedEmail && onDelete(selectedEmail)}>
+            <button className="iconMini danger" title="删除" disabled={!selectedEmail || busy} onClick={() => selectedEmail && onDelete(selectedEmail)}>
               <Trash2 size={15} />
             </button>
           </div>
@@ -1404,7 +1404,7 @@ function TempEmailsView({
               onClick={() => onMessageSelect(message.message_id)}
             >
               <span className="messageTop">
-                <strong>{message.subject || "(no subject)"}</strong>
+                <strong>{message.subject || "（无主题）"}</strong>
                 <small>{message.timestamp ? formatUnixDate(message.timestamp) : formatDate(message.created_at)}</small>
               </span>
               <span className="sender">{message.from_address}</span>
@@ -1412,20 +1412,20 @@ function TempEmailsView({
             </button>
           ))}
         </div>
-        {messages.length === 0 && <EmptyState icon={<Mail size={24} />} text="No cached temp messages." />}
+        {messages.length === 0 && <EmptyState icon={<Mail size={24} />} text="暂无缓存临时邮件。" />}
       </section>
 
       <article className="panel tempDetailPanel">
         {selectedMessage ? (
           <>
             <div className="detailHeader">
-              <h2>{selectedMessage.subject || "(no subject)"}</h2>
+              <h2>{selectedMessage.subject || "（无主题）"}</h2>
               <p>{selectedMessage.from_address}</p>
             </div>
             <div className="metaGrid">
-              <span>Mailbox</span>
+              <span>邮箱</span>
               <strong>{selectedMessage.email_address}</strong>
-              <span>Received</span>
+              <span>接收时间</span>
               <strong>{selectedMessage.timestamp ? formatUnixDate(selectedMessage.timestamp) : formatDate(selectedMessage.created_at)}</strong>
             </div>
             <MessageBody
@@ -1434,43 +1434,43 @@ function TempEmailsView({
             />
           </>
         ) : (
-          <EmptyState icon={<Mail size={24} />} text="Select a temp message." />
+          <EmptyState icon={<Mail size={24} />} text="请选择一封临时邮件。" />
         )}
       </article>
 
       <section className="panel widePanel">
         <div className="panelHeader">
-          <h2>Cloudflare channels</h2>
+          <h2>Cloudflare 通道</h2>
           <Cloud size={18} />
         </div>
         <div className="channelEditor">
-          <input className="input" value={channelDraft.name} placeholder="Name" onChange={(event) => setChannelDraft({ ...channelDraft, name: event.target.value })} />
+          <input className="input" value={channelDraft.name} placeholder="名称" onChange={(event) => setChannelDraft({ ...channelDraft, name: event.target.value })} />
           <input
             className="input"
             value={channelDraft.worker_domain}
-            placeholder="Worker domain"
+            placeholder="Worker 域名"
             onChange={(event) => setChannelDraft({ ...channelDraft, worker_domain: event.target.value })}
           />
           <input
             className="input"
             value={channelDraft.email_domains}
-            placeholder="Domains, comma separated"
+            placeholder="域名，逗号分隔"
             onChange={(event) => setChannelDraft({ ...channelDraft, email_domains: event.target.value })}
           />
           <input
             className="input"
             type="password"
             value={channelDraft.admin_password}
-            placeholder="Admin password"
+            placeholder="管理密码"
             onChange={(event) => setChannelDraft({ ...channelDraft, admin_password: event.target.value })}
           />
           <label className="checkLine">
             <input type="checkbox" checked={channelDraft.enabled} onChange={(event) => setChannelDraft({ ...channelDraft, enabled: event.target.checked })} />
-            <span>Enabled</span>
+            <span>启用</span>
           </label>
           <label className="checkLine">
             <input type="checkbox" checked={channelDraft.is_default} onChange={(event) => setChannelDraft({ ...channelDraft, is_default: event.target.checked })} />
-            <span>Default</span>
+            <span>默认</span>
           </label>
           <button
             className="button primary"
@@ -1489,7 +1489,7 @@ function TempEmailsView({
             }}
           >
             <SettingsIcon size={16} />
-            Save
+            保存
           </button>
         </div>
         <div className="cloudflareChannelRows">
@@ -1502,13 +1502,13 @@ function TempEmailsView({
               <span>{channel.email_domains.join(", ")}</span>
               <StatusPill status={channel.enabled ? "success" : "removed"} />
               <span className="rowActions">
-                <button className="iconMini" title="Edit" onClick={() => setChannelDraft({ id: channel.id, name: channel.name, worker_domain: channel.worker_domain, email_domains: channel.email_domains.join(", "), admin_password: "", enabled: channel.enabled, is_default: channel.is_default })}>
+                <button className="iconMini" title="编辑" onClick={() => setChannelDraft({ id: channel.id, name: channel.name, worker_domain: channel.worker_domain, email_domains: channel.email_domains.join(", "), admin_password: "", enabled: channel.enabled, is_default: channel.is_default })}>
                   <SettingsIcon size={15} />
                 </button>
-                <button className="iconMini" title="Test" onClick={() => onTestChannel(channel.id)}>
+                <button className="iconMini" title="测试" onClick={() => onTestChannel(channel.id)}>
                   <RefreshCw size={15} />
                 </button>
-                <button className="iconMini danger" title="Delete" disabled={channel.reference_count > 0} onClick={() => onDeleteChannel(channel.id)}>
+                <button className="iconMini danger" title="删除" disabled={channel.reference_count > 0} onClick={() => onDeleteChannel(channel.id)}>
                   <Trash2 size={15} />
                 </button>
               </span>
@@ -1573,22 +1573,22 @@ function ProjectsView({
     <section className="projectsGrid">
       <aside className="panel projectListPanel">
         <div className="panelHeader">
-          <h2>Projects</h2>
+          <h2>项目</h2>
           <FolderKanban size={18} />
         </div>
         <div className="projectCreate">
-          <input className="input" value={name} placeholder="Project name" onChange={(event) => setName(event.target.value)} />
-          <input className="input" value={projectKey} placeholder="Project key, optional" onChange={(event) => setProjectKey(event.target.value)} />
+          <input className="input" value={name} placeholder="项目名称" onChange={(event) => setName(event.target.value)} />
+          <input className="input" value={projectKey} placeholder="项目标识，可选" onChange={(event) => setProjectKey(event.target.value)} />
           <textarea
             className="textarea compact"
             value={description}
-            placeholder="Description"
+            placeholder="描述"
             onChange={(event) => setDescription(event.target.value)}
           />
           <select className="select" value={scopeMode} onChange={(event) => setScopeMode(event.target.value)}>
-            <option value="all">All active accounts</option>
-            <option value="groups">Selected groups</option>
-            <option value="tags">Selected tags</option>
+            <option value="all">全部启用账号</option>
+            <option value="groups">指定分组</option>
+            <option value="tags">指定标签</option>
           </select>
           {scopeMode === "groups" && (
             <div className="groupPicker">
@@ -1650,7 +1650,7 @@ function ProjectsView({
             }}
           >
             <Plus size={16} />
-            Create project
+            创建项目
           </button>
         </div>
 
@@ -1666,7 +1666,7 @@ function ProjectsView({
             >
               <strong>{project.name}</strong>
               <small>{project.project_key}</small>
-              <span>{project.stats.to_claim} claimable · {project.stats.success} done</span>
+              <span>{project.stats.to_claim} 个可领取 · {project.stats.success} 个已完成</span>
             </button>
           ))}
         </div>
@@ -1683,34 +1683,34 @@ function ProjectsView({
               <div className="topActions">
                 <button className="button secondary" disabled={busy} onClick={() => onSync(selectedProject.id)}>
                   <RefreshCw size={16} />
-                  Sync
+                  同步
                 </button>
                 <button className="button secondary" disabled={busy || accounts.length === 0} onClick={() => onExport(selectedProject.id)}>
                   <Download size={16} />
-                  Export
+                  导出
                 </button>
                 <button className="button primary" disabled={busy} onClick={() => onClaim(selectedProject.id)}>
                   <Archive size={16} />
-                  Claim
+                  领取
                 </button>
               </div>
             </div>
 
             <div className="statStrip">
-              <Stat label="Total" value={selectedProject.stats.total} />
-              <Stat label="Claimable" value={selectedProject.stats.to_claim} />
-              <Stat label="Claimed" value={selectedProject.stats.claimed} />
-              <Stat label="Success" value={selectedProject.stats.success} />
-              <Stat label="Failed" value={selectedProject.stats.failed} />
-              <Stat label="Removed" value={selectedProject.stats.removed} />
+              <Stat label="总数" value={selectedProject.stats.total} />
+              <Stat label="可领取" value={selectedProject.stats.to_claim} />
+              <Stat label="已领取" value={selectedProject.stats.claimed} />
+              <Stat label="成功" value={selectedProject.stats.success} />
+              <Stat label="失败" value={selectedProject.stats.failed} />
+              <Stat label="已移除" value={selectedProject.stats.removed} />
             </div>
 
             <div className="projectAccountTable">
               <div className="projectTableHeader">
-                <span>Email</span>
-                <span>Status</span>
-                <span>Claims</span>
-                <span>Lease</span>
+                <span>邮箱</span>
+                <span>状态</span>
+                <span>领取次数</span>
+                <span>租约</span>
                 <span />
               </div>
               {accounts.map((account) => (
@@ -1725,23 +1725,23 @@ function ProjectsView({
                   <span className="rowActions">
                     {account.status === "claimed" && (
                       <>
-                        <button className="iconMini" title="Success" onClick={() => onAction(selectedProject.id, "success", account.id)}>
+                        <button className="iconMini" title="标记成功" onClick={() => onAction(selectedProject.id, "success", account.id)}>
                           <CheckCircle2 size={15} />
                         </button>
-                        <button className="iconMini danger" title="Failed" onClick={() => onAction(selectedProject.id, "failed", account.id)}>
+                        <button className="iconMini danger" title="标记失败" onClick={() => onAction(selectedProject.id, "failed", account.id)}>
                           <XCircle size={15} />
                         </button>
-                        <button className="iconMini" title="Release" onClick={() => onAction(selectedProject.id, "release", account.id)}>
+                        <button className="iconMini" title="释放" onClick={() => onAction(selectedProject.id, "release", account.id)}>
                           <RefreshCw size={15} />
                         </button>
                       </>
                     )}
                     {account.status !== "removed" ? (
-                      <button className="iconMini danger" title="Remove" onClick={() => onAction(selectedProject.id, "remove", account.id)}>
+                      <button className="iconMini danger" title="移除" onClick={() => onAction(selectedProject.id, "remove", account.id)}>
                         <Trash2 size={15} />
                       </button>
                     ) : (
-                      <button className="iconMini" title="Restore" onClick={() => onAction(selectedProject.id, "restore", account.id)}>
+                      <button className="iconMini" title="恢复" onClick={() => onAction(selectedProject.id, "restore", account.id)}>
                         <RefreshCw size={15} />
                       </button>
                     )}
@@ -1749,10 +1749,10 @@ function ProjectsView({
                 </div>
               ))}
             </div>
-            {accounts.length === 0 && <EmptyState icon={<FolderKanban size={24} />} text="Sync project scope to populate accounts." />}
+            {accounts.length === 0 && <EmptyState icon={<FolderKanban size={24} />} text="同步项目范围后会填充账号。" />}
           </>
         ) : (
-          <EmptyState icon={<FolderKanban size={24} />} text="Create a project to start assigning accounts." />
+          <EmptyState icon={<FolderKanban size={24} />} text="创建项目后开始分配账号。" />
         )}
       </section>
     </section>
@@ -1769,7 +1769,7 @@ function Stat({ label, value }: { label: string; value: number }) {
 }
 
 function StatusPill({ status }: { status: string }) {
-  return <span className={`statusPill status-${status}`}>{status}</span>;
+  return <span className={`statusPill status-${status}`}>{formatStatus(status)}</span>;
 }
 
 function AccountEditor({
@@ -1836,7 +1836,7 @@ function AccountEditor({
   if (!account) {
     return (
       <div className="panel">
-        <EmptyState icon={<KeyRound size={24} />} text="Select an account to configure authorization." />
+        <EmptyState icon={<KeyRound size={24} />} text="请选择一个账号配置授权。" />
       </div>
     );
   }
@@ -1846,7 +1846,7 @@ function AccountEditor({
   return (
     <div className="panel">
       <div className="panelHeader">
-        <h2>Authorization</h2>
+        <h2>授权配置</h2>
         <KeyRound size={18} />
       </div>
       <div className="formLine">
@@ -1872,7 +1872,7 @@ function AccountEditor({
         <input
           className="input grow"
           value={draft.remark}
-          placeholder="Remark"
+          placeholder="备注"
           onChange={(event) => setDraft({ ...draft, remark: event.target.value })}
         />
       </div>
@@ -1882,7 +1882,7 @@ function AccountEditor({
           checked={draft.forward_enabled}
           onChange={(event) => setDraft({ ...draft, forward_enabled: event.target.checked })}
         />
-        <span>Forward cached messages for this account</span>
+        <span>转发此账号的缓存邮件</span>
       </label>
       {tags.length > 0 && (
         <div className="groupPicker tagPicker">
@@ -1910,7 +1910,7 @@ function AccountEditor({
         <input
           className="input grow"
           value={draft.client_id}
-          placeholder="Microsoft client id"
+          placeholder="Microsoft 客户端 ID"
           onChange={(event) => setDraft({ ...draft, client_id: event.target.value })}
         />
         <button
@@ -1919,7 +1919,7 @@ function AccountEditor({
           onClick={() => onGenerateOAuthUrl({ client_id: draft.client_id, redirect_uri: redirectUri, login_hint: draft.email })}
         >
           <KeyRound size={16} />
-          OAuth URL
+          OAuth 链接
         </button>
       </div>
       {oauthUrl && <textarea className="textarea compact" readOnly value={oauthUrl} />}
@@ -1927,7 +1927,7 @@ function AccountEditor({
         <input
           className="input grow"
           value={oauthCallback}
-          placeholder="Paste callback URL or authorization code"
+          placeholder="粘贴回调 URL 或授权码"
           onChange={(event) => onOauthCallbackChange(event.target.value)}
         />
         <button
@@ -1942,14 +1942,14 @@ function AccountEditor({
             })
           }
         >
-          Save OAuth
+          保存 OAuth
         </button>
       </div>
       <div className="formLine">
         <input
           className="input grow"
           value={draft.imap_host}
-          placeholder="IMAP host"
+          placeholder="IMAP 主机"
           onChange={(event) => setDraft({ ...draft, imap_host: event.target.value })}
         />
         <input
@@ -1964,14 +1964,14 @@ function AccountEditor({
           className="input grow"
           type="password"
           value={draft.password}
-          placeholder="Account password, optional"
+          placeholder="账号密码，可选"
           onChange={(event) => setDraft({ ...draft, password: event.target.value })}
         />
         <input
           className="input grow"
           type="password"
           value={draft.imap_password}
-          placeholder="IMAP password, optional"
+          placeholder="IMAP 密码，可选"
           onChange={(event) => setDraft({ ...draft, imap_password: event.target.value })}
         />
       </div>
@@ -1998,7 +1998,7 @@ function AccountEditor({
         }
       >
         {busy ? <Loader2 className="spin" size={16} /> : <SettingsIcon size={16} />}
-        Save account
+        保存账号
       </button>
     </div>
   );
@@ -2062,20 +2062,20 @@ function SettingsView({
     <section className="settingsGrid">
       <div className="panel">
         <div className="panelHeader">
-          <h2>Provider settings</h2>
+          <h2>服务商设置</h2>
           <SettingsIcon size={18} />
         </div>
-        <Field label="Microsoft Graph client ID" value={draft.graph_client_id} onChange={(value) => setField("graph_client_id", value)} />
-        <Field label="OAuth redirect URI" value={draft.oauth_redirect_uri} onChange={(value) => setField("oauth_redirect_uri", value)} />
-        <Field label="GPTMail base URL" value={draft.gptmail_base_url} onChange={(value) => setField("gptmail_base_url", value)} />
-        <SecretField label="GPTMail API key" value={draft.gptmail_api_key} onChange={(value) => setField("gptmail_api_key", value)} />
-        <Field label="DuckMail base URL" value={draft.duckmail_base_url} onChange={(value) => setField("duckmail_base_url", value)} />
-        <SecretField label="DuckMail API key" value={draft.duckmail_api_key} onChange={(value) => setField("duckmail_api_key", value)} />
+        <Field label="Microsoft Graph 客户端 ID" value={draft.graph_client_id} onChange={(value) => setField("graph_client_id", value)} />
+        <Field label="OAuth 回调地址" value={draft.oauth_redirect_uri} onChange={(value) => setField("oauth_redirect_uri", value)} />
+        <Field label="GPTMail 基础地址" value={draft.gptmail_base_url} onChange={(value) => setField("gptmail_base_url", value)} />
+        <SecretField label="GPTMail API 密钥" value={draft.gptmail_api_key} onChange={(value) => setField("gptmail_api_key", value)} />
+        <Field label="DuckMail 基础地址" value={draft.duckmail_base_url} onChange={(value) => setField("duckmail_base_url", value)} />
+        <SecretField label="DuckMail API 密钥" value={draft.duckmail_api_key} onChange={(value) => setField("duckmail_api_key", value)} />
       </div>
 
       <div className="panel">
         <div className="panelHeader">
-          <h2>Scheduler</h2>
+          <h2>调度器</h2>
           <RefreshCw size={18} />
         </div>
         <label className="checkLine toggleLine">
@@ -2084,17 +2084,17 @@ function SettingsView({
             checked={draft.scheduler_refresh_enabled}
             onChange={(event) => setField("scheduler_refresh_enabled", event.target.checked)}
           />
-          <span>Scheduled mailbox refresh</span>
+          <span>定时刷新邮箱</span>
         </label>
         <div className="formLine">
           <NumberField
-            label="Refresh interval"
+            label="刷新间隔"
             value={draft.scheduler_refresh_interval_minutes}
             min={1}
             onChange={(value) => setField("scheduler_refresh_interval_minutes", value)}
           />
           <NumberField
-            label="Messages per account"
+            label="每账号邮件数"
             value={draft.scheduler_refresh_top}
             min={1}
             max={50}
@@ -2107,10 +2107,10 @@ function SettingsView({
             checked={draft.forwarding_enabled}
             onChange={(event) => setField("forwarding_enabled", event.target.checked)}
           />
-          <span>Scheduled forwarding</span>
+          <span>定时转发</span>
         </label>
         <NumberField
-          label="Forwarding interval"
+          label="转发间隔"
           value={draft.forwarding_interval_minutes}
           min={1}
           onChange={(value) => setField("forwarding_interval_minutes", value)}
@@ -2121,10 +2121,10 @@ function SettingsView({
             checked={draft.backup_enabled}
             onChange={(event) => setField("backup_enabled", event.target.checked)}
           />
-          <span>Scheduled WebDAV backup</span>
+          <span>定时 WebDAV 备份</span>
         </label>
         <NumberField
-          label="Backup interval"
+          label="备份间隔"
           value={draft.backup_interval_minutes}
           min={1}
           onChange={(value) => setField("backup_interval_minutes", value)}
@@ -2133,39 +2133,39 @@ function SettingsView({
 
       <div className="panel">
         <div className="panelHeader">
-          <h2>Forwarding channels</h2>
+          <h2>转发通道</h2>
           <Mail size={18} />
         </div>
         <div className="formLine">
-          <Field label="SMTP host" value={draft.forward_smtp_host} onChange={(value) => setField("forward_smtp_host", value)} />
+          <Field label="SMTP 主机" value={draft.forward_smtp_host} onChange={(value) => setField("forward_smtp_host", value)} />
           <NumberField
-            label="Port"
+            label="端口"
             value={draft.forward_smtp_port}
             min={1}
             max={65535}
             onChange={(value) => setField("forward_smtp_port", value)}
           />
         </div>
-        <Field label="SMTP username" value={draft.forward_smtp_username} onChange={(value) => setField("forward_smtp_username", value)} />
+        <Field label="SMTP 用户名" value={draft.forward_smtp_username} onChange={(value) => setField("forward_smtp_username", value)} />
         <SecretField
-          label="SMTP password"
+          label="SMTP 密码"
           value={draft.forward_smtp_password}
           onChange={(value) => setField("forward_smtp_password", value)}
         />
-        <Field label="SMTP from" value={draft.forward_smtp_from} onChange={(value) => setField("forward_smtp_from", value)} />
-        <Field label="SMTP recipients" value={draft.forward_smtp_to} onChange={(value) => setField("forward_smtp_to", value)} />
+        <Field label="SMTP 发件人" value={draft.forward_smtp_from} onChange={(value) => setField("forward_smtp_from", value)} />
+        <Field label="SMTP 收件人" value={draft.forward_smtp_to} onChange={(value) => setField("forward_smtp_to", value)} />
         <SecretField
-          label="Telegram bot token"
+          label="Telegram 机器人 Token"
           value={draft.forward_telegram_bot_token}
           onChange={(value) => setField("forward_telegram_bot_token", value)}
         />
         <Field
-          label="Telegram chat ID"
+          label="Telegram 会话 ID"
           value={draft.forward_telegram_chat_id}
           onChange={(value) => setField("forward_telegram_chat_id", value)}
         />
         <SecretField
-          label="WeCom webhook"
+          label="企业微信 Webhook"
           value={draft.forward_wecom_webhook}
           onChange={(value) => setField("forward_wecom_webhook", value)}
         />
@@ -2173,66 +2173,66 @@ function SettingsView({
 
       <div className="panel">
         <div className="panelHeader">
-          <h2>WebDAV backup</h2>
+          <h2>WebDAV 备份</h2>
           <Archive size={18} />
         </div>
-        <Field label="WebDAV URL" value={draft.webdav_url} onChange={(value) => setField("webdav_url", value)} />
-        <Field label="WebDAV username" value={draft.webdav_username} onChange={(value) => setField("webdav_username", value)} />
-        <SecretField label="WebDAV password" value={draft.webdav_password} onChange={(value) => setField("webdav_password", value)} />
+        <Field label="WebDAV 地址" value={draft.webdav_url} onChange={(value) => setField("webdav_url", value)} />
+        <Field label="WebDAV 用户名" value={draft.webdav_username} onChange={(value) => setField("webdav_username", value)} />
+        <SecretField label="WebDAV 密码" value={draft.webdav_password} onChange={(value) => setField("webdav_password", value)} />
         <div className="actionGrid">
           <button className="button secondary" disabled={busy} onClick={onRunForwarding}>
             {busy ? <Loader2 className="spin" size={16} /> : <Mail size={16} />}
-            Run forwarding
+            运行转发
           </button>
           <button className="button secondary" disabled={busy} onClick={onRunBackup}>
             {busy ? <Loader2 className="spin" size={16} /> : <Archive size={16} />}
-            Run backup
+            运行备份
           </button>
         </div>
       </div>
 
       <div className="panel widePanel">
         <div className="panelHeader">
-          <h2>Local storage and runs</h2>
+          <h2>本地存储和运行状态</h2>
           <Lock size={18} />
         </div>
         <div className="storageLine">
-          <span>SQLite database</span>
+          <span>SQLite 数据库</span>
           <code>{status.db_path}</code>
         </div>
         <div className="runStatusGrid">
-          <RunStatus label="Refresh" value={schedulerStatus?.last_refresh_at} />
-          <RunStatus label="Forwarding" value={schedulerStatus?.last_forwarding_at} />
-          <RunStatus label="Backup" value={schedulerStatus?.last_backup_at} />
+          <RunStatus label="刷新" value={schedulerStatus?.last_refresh_at} />
+          <RunStatus label="转发" value={schedulerStatus?.last_forwarding_at} />
+          <RunStatus label="备份" value={schedulerStatus?.last_backup_at} />
         </div>
         <button className="button primary" disabled={busy} onClick={() => onSave(draft)}>
           {busy ? <Loader2 className="spin" size={16} /> : <SettingsIcon size={16} />}
-          Save settings
+          保存设置
         </button>
       </div>
 
       <div className="panel widePanel">
         <div className="panelHeader">
-          <h2>Retry queue</h2>
+          <h2>重试队列</h2>
           <RotateCcw size={18} />
         </div>
         <div className="tableActions">
           <button className="button secondary" disabled={busy || retryQueue.length === 0} onClick={onRunRetryQueue}>
             {busy ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />}
-            Run due retries
+            运行到期重试
           </button>
         </div>
         <div className="logTable retryQueueTable">
           <div className="logHeader">
-            <span>Time</span>
-            <span>Task</span>
-            <span>Status</span>
-            <span>Account</span>
-            <span>Target</span>
-            <span>Attempts</span>
-            <span>Next</span>
-            <span>Error</span>
-            <span>Actions</span>
+            <span>时间</span>
+            <span>任务</span>
+            <span>状态</span>
+            <span>账号</span>
+            <span>目标</span>
+            <span>次数</span>
+            <span>下次</span>
+            <span>错误</span>
+            <span>操作</span>
           </div>
           {retryQueue.map((item) => (
             <div className="logRow" key={item.id}>
@@ -2245,22 +2245,22 @@ function SettingsView({
               <span>{item.next_attempt_at ? formatDate(item.next_attempt_at) : "-"}</span>
               <span>{item.error_message}</span>
               <span className="rowActions">
-                <button className="iconMini" title="Retry now" disabled={busy} onClick={() => onRetryQueueItem(item.id)}>
+                <button className="iconMini" title="立即重试" disabled={busy} onClick={() => onRetryQueueItem(item.id)}>
                   <RotateCcw size={14} />
                 </button>
-                <button className="iconMini danger" title="Dismiss" disabled={busy} onClick={() => onDismissRetryItem(item.id)}>
+                <button className="iconMini danger" title="忽略" disabled={busy} onClick={() => onDismissRetryItem(item.id)}>
                   <Trash2 size={14} />
                 </button>
               </span>
             </div>
           ))}
         </div>
-        {retryQueue.length === 0 && <EmptyState icon={<RotateCcw size={24} />} text="No retry items pending." />}
+        {retryQueue.length === 0 && <EmptyState icon={<RotateCcw size={24} />} text="暂无待处理重试项。" />}
       </div>
 
       <div className="panel widePanel">
         <div className="panelHeader">
-          <h2>Automation history</h2>
+          <h2>自动化历史</h2>
           <RefreshCw size={18} />
         </div>
         <div className="automationFilters">
@@ -2269,34 +2269,34 @@ function SettingsView({
             value={runFilters.job_type}
             onChange={(event) => setRunFilters({ ...runFilters, job_type: event.target.value })}
           >
-            <option value="all">All jobs</option>
-            <option value="refresh">Refresh</option>
-            <option value="forwarding">Forwarding</option>
-            <option value="backup">Backup</option>
-            <option value="retry">Retry</option>
+            <option value="all">全部任务</option>
+            <option value="refresh">刷新</option>
+            <option value="forwarding">转发</option>
+            <option value="backup">备份</option>
+            <option value="retry">重试</option>
           </select>
           <select
             className="select"
             value={runFilters.trigger_type}
             onChange={(event) => setRunFilters({ ...runFilters, trigger_type: event.target.value })}
           >
-            <option value="all">All triggers</option>
-            <option value="manual">Manual</option>
-            <option value="schedule">Schedule</option>
+            <option value="all">全部触发</option>
+            <option value="manual">手动</option>
+            <option value="schedule">定时</option>
           </select>
           <select
             className="select"
             value={runFilters.status}
             onChange={(event) => setRunFilters({ ...runFilters, status: event.target.value })}
           >
-            <option value="all">All statuses</option>
-            <option value="success">Success</option>
-            <option value="failed">Failed</option>
+            <option value="all">全部状态</option>
+            <option value="success">成功</option>
+            <option value="failed">失败</option>
           </select>
           <input
             className="input grow"
             value={runFilters.search}
-            placeholder="Search detail"
+            placeholder="搜索详情"
             onChange={(event) => setRunFilters({ ...runFilters, search: event.target.value })}
             onKeyDown={(event) => {
               if (event.key === "Enter") onFilterAutomationRuns(automationRunQuery());
@@ -2304,7 +2304,7 @@ function SettingsView({
           />
           <button className="button secondary" disabled={busy} onClick={() => onFilterAutomationRuns(automationRunQuery())}>
             <Search size={16} />
-            Apply
+            应用
           </button>
           <button
             className="button danger"
@@ -2312,52 +2312,52 @@ function SettingsView({
             onClick={() => {
               const query = automationRunQuery();
               const clearAll = !query.job_type && !query.trigger_type && !query.status && !query.search;
-              if (window.confirm(clearAll ? "Clear all automation history?" : "Clear matching automation history?")) {
+              if (window.confirm(clearAll ? "确认清空全部自动化历史？" : "确认清理匹配的自动化历史？")) {
                 onClearAutomationRuns({ ...query, clear_all: clearAll });
               }
             }}
           >
             <Trash2 size={16} />
-            Clear
+            清理
           </button>
         </div>
         <div className="logTable automationLogTable">
           <div className="logHeader">
-            <span>Time</span>
-            <span>Job</span>
-            <span>Trigger</span>
-            <span>Status</span>
-            <span>Counts</span>
-            <span>Duration</span>
-            <span>Detail</span>
+            <span>时间</span>
+            <span>任务</span>
+            <span>触发</span>
+            <span>状态</span>
+            <span>数量</span>
+            <span>耗时</span>
+            <span>详情</span>
           </div>
           {automationRuns.map((run) => (
             <div className="logRow" key={run.id}>
               <span>{formatDate(run.finished_at)}</span>
-              <span>{run.job_type}</span>
-              <span>{run.trigger_type}</span>
+              <span>{formatAutomationJob(run.job_type)}</span>
+              <span>{formatAutomationTrigger(run.trigger_type)}</span>
               <StatusPill status={run.status} />
-              <span>{run.refreshed} ok / {run.failed} failed</span>
+              <span>{run.refreshed} 成功 / {run.failed} 失败</span>
               <span>{formatDuration(run.duration_ms)}</span>
-              <span>{run.message}</span>
+              <span>{formatResultMessage(run.message)}</span>
             </div>
           ))}
         </div>
-        {automationRuns.length === 0 && <EmptyState icon={<RefreshCw size={24} />} text="No automation runs yet." />}
+        {automationRuns.length === 0 && <EmptyState icon={<RefreshCw size={24} />} text="暂无自动化运行记录。" />}
       </div>
 
       <div className="panel widePanel">
         <div className="panelHeader">
-          <h2>Forwarding logs</h2>
+          <h2>转发日志</h2>
           <Mail size={18} />
         </div>
         <div className="logTable forwardingLogTable">
           <div className="logHeader">
-            <span>Time</span>
-            <span>Account</span>
-            <span>Channel</span>
-            <span>Status</span>
-            <span>Detail</span>
+            <span>时间</span>
+            <span>账号</span>
+            <span>通道</span>
+            <span>状态</span>
+            <span>详情</span>
           </div>
           {forwardingLogs.map((log) => (
             <div className="logRow" key={log.id}>
@@ -2369,22 +2369,22 @@ function SettingsView({
             </div>
           ))}
         </div>
-        {forwardingLogs.length === 0 && <EmptyState icon={<Mail size={24} />} text="No forwarding runs yet." />}
+        {forwardingLogs.length === 0 && <EmptyState icon={<Mail size={24} />} text="暂无转发记录。" />}
       </div>
 
       <div className="panel widePanel">
         <div className="panelHeader">
-          <h2>Backup logs</h2>
+          <h2>备份日志</h2>
           <Archive size={18} />
         </div>
         <div className="logTable backupLogTable">
           <div className="logHeader">
-            <span>Time</span>
-            <span>File</span>
-            <span>Status</span>
-            <span>Size</span>
-            <span>Target</span>
-            <span>Actions</span>
+            <span>时间</span>
+            <span>文件</span>
+            <span>状态</span>
+            <span>大小</span>
+            <span>目标</span>
+            <span>操作</span>
           </div>
           {backupLogs.map((log) => (
             <div className="logRow" key={log.id}>
@@ -2396,10 +2396,10 @@ function SettingsView({
               <span className="rowActions">
                 <button
                   className="iconMini"
-                  title="Restore backup"
+                  title="恢复备份"
                   disabled={busy || log.status !== "success"}
                   onClick={() => {
-                    if (window.confirm("Restore the current workspace from this backup? A safety snapshot will be created first.")) {
+                    if (window.confirm("确认从此备份恢复当前工作区？恢复前会先创建安全快照。")) {
                       onRestoreBackup(log.id);
                     }
                   }}
@@ -2410,7 +2410,7 @@ function SettingsView({
             </div>
           ))}
         </div>
-        {backupLogs.length === 0 && <EmptyState icon={<Archive size={24} />} text="No backups yet." />}
+        {backupLogs.length === 0 && <EmptyState icon={<Archive size={24} />} text="暂无备份记录。" />}
       </div>
     </section>
   );
@@ -2466,7 +2466,7 @@ function RunStatus({ label, value }: { label: string; value?: string | null }) {
   return (
     <div className="runStatus">
       <span>{label}</span>
-      <strong>{value ? formatDate(value) : "Never"}</strong>
+      <strong>{value ? formatDate(value) : "从未"}</strong>
     </div>
   );
 }
@@ -2476,7 +2476,7 @@ function MessageBody({ body, bodyType }: { body: string; bodyType?: string | nul
     return (
       <iframe
         className="messageHtmlFrame"
-        title="Message body"
+        title="邮件正文"
         sandbox=""
         referrerPolicy="no-referrer"
         srcDoc={buildSandboxedEmailHtml(body)}
@@ -2500,21 +2500,21 @@ function RemoteFailurePanel({
   return (
     <div className="remoteFailurePanel">
       <div>
-        <strong>{formatRemoteFailureAction(failure.action)} failed on the remote mailbox</strong>
+        <strong>{formatRemoteFailureAction(failure.action)}在远端邮箱执行失败</strong>
         <p>{failure.error_message}</p>
         <small>
-          {failure.status} · {failure.attempts} / {failure.max_attempts} attempts
-          {failure.next_attempt_at ? ` · next ${formatDate(failure.next_attempt_at)}` : ""}
+          {formatStatus(failure.status)} · {failure.attempts} / {failure.max_attempts} 次
+          {failure.next_attempt_at ? ` · 下次 ${formatDate(failure.next_attempt_at)}` : ""}
         </small>
       </div>
       <div className="remoteFailureActions">
         <button className="button compact secondary" disabled={busy} onClick={() => onRetry(failure.retry_id)}>
           <RotateCcw size={14} />
-          Retry
+          重试
         </button>
         <button className="button compact ghost" disabled={busy} onClick={() => onDismiss(failure.retry_id)}>
           <Trash2 size={14} />
-          Dismiss
+          忽略
         </button>
       </div>
     </div>
@@ -2552,7 +2552,7 @@ function formatDate(value: string) {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("zh-CN", {
     month: "short",
     day: "2-digit",
     hour: "2-digit",
@@ -2579,25 +2579,138 @@ function formatDuration(value: number) {
 }
 
 function formatRetryTask(item: RetryQueueItem) {
-  if (item.task_type === "mail_mark") return item.action === "mark_read" ? "Mark read" : "Mark unread";
-  if (item.task_type === "mail_delete") return "Delete mail";
-  if (item.task_type === "forward_message") return "Forward mail";
-  if (item.task_type === "temp_refresh") return "Refresh temp mail";
-  if (item.task_type === "refresh_account") return "Refresh account";
-  if (item.task_type === "backup_job") return "Run backup";
+  if (item.task_type === "mail_mark") return item.action === "mark_read" ? "标记已读" : "标记未读";
+  if (item.task_type === "mail_delete") return "删除邮件";
+  if (item.task_type === "forward_message") return "转发邮件";
+  if (item.task_type === "temp_refresh") return "刷新临时邮箱";
+  if (item.task_type === "refresh_account") return "刷新账号";
+  if (item.task_type === "backup_job") return "执行备份";
   return item.task_type;
 }
 
 function formatRemoteFailureAction(action: string) {
-  if (action === "mark_read") return "Mark read";
-  if (action === "mark_unread") return "Mark unread";
-  if (action === "delete") return "Delete mail";
-  return action || "Remote sync";
+  if (action === "mark_read") return "标记已读";
+  if (action === "mark_unread") return "标记未读";
+  if (action === "delete") return "删除邮件";
+  return action || "远端同步";
+}
+
+function formatStatus(status: string) {
+  const map: Record<string, string> = {
+    active: "启用",
+    disabled: "停用",
+    never: "从未",
+    success: "成功",
+    failed: "失败",
+    pending: "待处理",
+    removed: "已移除",
+    toClaim: "可领取",
+    claimed: "已领取",
+    read: "已读",
+    unread: "未读"
+  };
+  return map[status] ?? status;
+}
+
+function formatAutomationJob(job: string) {
+  const map: Record<string, string> = {
+    refresh: "刷新",
+    forwarding: "转发",
+    backup: "备份",
+    retry: "重试"
+  };
+  return map[job] ?? job;
+}
+
+function formatAutomationTrigger(trigger: string) {
+  const map: Record<string, string> = {
+    manual: "手动",
+    schedule: "定时"
+  };
+  return map[trigger] ?? trigger;
+}
+
+function formatResultMessage(message: string) {
+  if (!message) return message;
+  if (message === "No retry item(s) due") return "暂无到期重试项";
+  if (message === "Refresh job accepted. Provider adapters are available in the Tauri runtime.") {
+    return "刷新任务已接收。服务商适配器将在 Tauri 运行时可用。";
+  }
+  if (message === "Backup preview completed") return "备份预览已完成";
+  if (message === "Temp mailbox refreshed") return "临时邮箱已刷新";
+  if (message === "Cloudflare channel connected") return "Cloudflare 通道连接成功";
+  if (message === "uploaded") return "已上传";
+
+  const localMailFailure = message.match(/^(Marked read|Marked unread|Deleted) (\d+) local message\(s\), (\d+) remote sync failed: (.+)$/);
+  if (localMailFailure) {
+    const [, action, changed, failed, detail] = localMailFailure;
+    return `${formatMailAction(action, changed, "本地邮件")}，${failed} 封远端同步失败：${detail}`;
+  }
+
+  const simpleMail = message.match(/^(Marked read|Marked unread|Deleted) (\d+) message\(s\)$/);
+  if (simpleMail) {
+    const [, action, count] = simpleMail;
+    return formatMailAction(action, count, "邮件");
+  }
+
+  const refreshedWithFailures = message.match(/^Refreshed (\d+) account\(s\), (\d+) failed: (.+)$/);
+  if (refreshedWithFailures) {
+    const [, refreshed, failed, detail] = refreshedWithFailures;
+    return `已刷新 ${refreshed} 个账号，${failed} 个失败：${detail}`;
+  }
+
+  const refreshed = message.match(/^Refreshed (\d+) account\(s\)$/);
+  if (refreshed) return `已刷新 ${refreshed[1]} 个账号`;
+
+  const refreshedTemp = message.match(/^Refreshed (\d+) temp message\(s\)$/);
+  if (refreshedTemp) return `已刷新 ${refreshedTemp[1]} 条临时邮件`;
+
+  const forwardedWithFailures = message.match(/^Forwarded (\d+) message channel\(s\), (\d+) failed: (.+)$/);
+  if (forwardedWithFailures) {
+    const [, forwarded, failed, detail] = forwardedWithFailures;
+    return `已转发 ${forwarded} 个消息通道，${failed} 个失败：${detail}`;
+  }
+
+  const forwarded = message.match(/^Forwarded (\d+) message channel\(s\), skipped (\d+)$/);
+  if (forwarded) return `已转发 ${forwarded[1]} 个消息通道，跳过 ${forwarded[2]} 个`;
+
+  const forwardedPreview = message.match(/^Forwarded (\d+) preview item\(s\)$/);
+  if (forwardedPreview) return `已转发 ${forwardedPreview[1]} 个预览项`;
+
+  const retriedWithFailures = message.match(/^Retried (\d+) item\(s\), (\d+) failed: (.+)$/);
+  if (retriedWithFailures) {
+    const [, retried, failed, detail] = retriedWithFailures;
+    return `已重试 ${retried} 项，${failed} 项失败：${detail}`;
+  }
+
+  const retried = message.match(/^Retried (\d+) item\(s\)$/);
+  if (retried) return `已重试 ${retried[1]} 项`;
+
+  const dismissed = message.match(/^Dismissed (\d+) retry item\(s\)$/);
+  if (dismissed) return `已忽略 ${dismissed[1]} 个重试项`;
+
+  const cleared = message.match(/^Cleared (\d+) automation run\(s\)$/);
+  if (cleared) return `已清理 ${cleared[1]} 条自动化记录`;
+
+  const uploaded = message.match(/^Uploaded (.+)$/);
+  if (uploaded) return `已上传 ${uploaded[1]}`;
+
+  const restored = message.match(/^Restored local backup (.+)$/);
+  if (restored) return `已恢复本地备份 ${restored[1]}`;
+
+  return message;
+}
+
+function formatMailAction(action: string, count: string, target: string) {
+  if (action === "Marked read") return `已将 ${count} 封${target}标记为已读`;
+  if (action === "Marked unread") return `已将 ${count} 封${target}标记为未读`;
+  if (action === "Deleted") return `已删除 ${count} 封${target}`;
+  return action;
 }
 
 function exportNotice(result: ExportResult) {
   const size = formatBytes(result.size);
-  return `Exported ${result.item_count} item(s) to ${result.path}${size ? ` (${size})` : ""}`;
+  return `已导出 ${result.item_count} 项到 ${result.path}${size ? `（${size}）` : ""}`;
 }
 
 function readError(err: unknown) {

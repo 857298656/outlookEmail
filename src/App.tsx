@@ -1,6 +1,8 @@
 import {
   Archive,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Cloud,
   Download,
   FolderKanban,
@@ -96,6 +98,7 @@ function App() {
   const [selectedMessageIds, setSelectedMessageIds] = useState<number[]>([]);
   const [view, setView] = useState<View>("mail");
   const [railExpanded, setRailExpanded] = useState(false);
+  const [railMenuOpen, setRailMenuOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -103,6 +106,8 @@ function App() {
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const selectedMessage = messages.find((message) => message.id === selectedMessageId);
   const selectedTempMessage = tempMessages.find((message) => message.message_id === selectedTempMessageId);
+  const railIdentity = selectedAccount?.email ?? accounts[0]?.email ?? "本地工作区";
+  const railInitial = railIdentity === "本地工作区" ? "本" : railIdentity.slice(0, 1).toUpperCase();
   const filteredAccounts = useMemo(() => {
     if (selectedGroupId === "all") return accounts;
     return accounts.filter((account) => account.group_id === selectedGroupId);
@@ -258,32 +263,90 @@ function App() {
             {railExpanded ? <PanelLeftClose size={19} /> : <PanelLeftOpen size={19} />}
           </button>
         </div>
-        <IconButton active={view === "mail"} title="邮箱" onClick={() => setView("mail")}>
+        <IconButton
+          active={view === "mail"}
+          title="邮箱"
+          onClick={() => {
+            setView("mail");
+            setRailMenuOpen(false);
+          }}
+        >
           <Inbox size={20} />
         </IconButton>
-        <IconButton active={view === "accounts"} title="账号" onClick={() => setView("accounts")}>
+        <IconButton
+          active={view === "accounts"}
+          title="账号"
+          onClick={() => {
+            setView("accounts");
+            setRailMenuOpen(false);
+          }}
+        >
           <Users size={20} />
         </IconButton>
-        <IconButton active={view === "temp"} title="临时邮箱" onClick={() => setView("temp")}>
+        <IconButton
+          active={view === "temp"}
+          title="临时邮箱"
+          onClick={() => {
+            setView("temp");
+            setRailMenuOpen(false);
+          }}
+        >
           <Cloud size={20} />
         </IconButton>
-        <IconButton active={view === "projects"} title="项目" onClick={() => setView("projects")}>
+        <IconButton
+          active={view === "projects"}
+          title="项目"
+          onClick={() => {
+            setView("projects");
+            setRailMenuOpen(false);
+          }}
+        >
           <FolderKanban size={20} />
         </IconButton>
-        <IconButton active={view === "settings"} title="设置" onClick={() => setView("settings")}>
-          <SettingsIcon size={20} />
-        </IconButton>
         <div className="railSpacer" />
-        <IconButton
-          title="锁定"
-          onClick={() =>
-            runAction(async () => {
-              setStatus(await api.lock());
-            })
-          }
-        >
-          <Lock size={20} />
-        </IconButton>
+        <div className="railAccountArea">
+          {railMenuOpen && (
+            <div className="railAccountMenu">
+              <div className="railMenuHeader">{railIdentity}</div>
+              <button
+                className="railMenuItem"
+                onClick={() => {
+                  setView("settings");
+                  setRailMenuOpen(false);
+                }}
+              >
+                <SettingsIcon size={18} />
+                <span>设置</span>
+              </button>
+              <div className="railMenuDivider" />
+              <button
+                className="railMenuItem"
+                onClick={() =>
+                  runAction(async () => {
+                    setRailMenuOpen(false);
+                    setStatus(await api.lock());
+                  })
+                }
+              >
+                <Lock size={18} />
+                <span>锁定工作区</span>
+              </button>
+            </div>
+          )}
+          <button
+            className={railMenuOpen ? "railAccountButton active" : "railAccountButton"}
+            title="工作区菜单"
+            aria-label="工作区菜单"
+            onClick={() => setRailMenuOpen((current) => !current)}
+          >
+            <span className="railAvatar">{railInitial}</span>
+            <span className="railAccountText">
+              <strong>{railIdentity}</strong>
+              <small>本地工作区</small>
+            </span>
+            {railMenuOpen ? <ChevronDown className="railAccountChevron" size={16} /> : <ChevronUp className="railAccountChevron" size={16} />}
+          </button>
+        </div>
       </aside>
 
       <main className="mainSurface">

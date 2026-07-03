@@ -338,6 +338,17 @@ button:disabled {
   text-align: left;
 }
 
+.remoteFailureInline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  max-width: 100%;
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .messageOpen.unread .messageTop strong {
   color: #0f172a;
   font-weight: 800;
@@ -413,6 +424,45 @@ button:disabled {
   white-space: pre-wrap;
   line-height: 1.6;
   color: #273444;
+}
+
+.remoteFailurePanel {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 760px;
+  margin: 0 0 18px;
+  padding: 12px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff7f7;
+  color: #7f1d1d;
+}
+
+.remoteFailurePanel strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.remoteFailurePanel p {
+  margin: 0 0 5px;
+  color: #991b1b;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.remoteFailurePanel small {
+  color: #b45309;
+  font-size: 12px;
+}
+
+.remoteFailureActions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .messageHtmlFrame {

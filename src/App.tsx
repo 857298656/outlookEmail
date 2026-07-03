@@ -39,6 +39,7 @@ import type {
   Project,
   ProjectAccount,
   RetryQueueItem,
+  RemoteSyncFailure,
   SchedulerStatus,
   Settings,
   Tag,
@@ -312,6 +313,7 @@ function App() {
             filters={mailFilters}
             page={mailPage}
             hasNextPage={messages.length === mailPageSize}
+            busy={busy}
             onGroupChange={(groupId) => {
               setSelectedGroupId(groupId);
               const nextAccount = groupId === "all" ? accounts[0] : accounts.find((account) => account.group_id === groupId);
@@ -360,6 +362,7 @@ function App() {
                 const result = await api.markMessagesRead(messageIds, isRead);
                 setNotice(result.message);
                 await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage);
+                await loadAutomation();
               })
             }
             onDeleteMessages={(messageIds) =>
@@ -368,6 +371,7 @@ function App() {
                 setNotice(result.message);
                 await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage);
                 await loadStatus();
+                await loadAutomation();
               })
             }
             onExportMessages={(messageIds) =>
@@ -394,6 +398,22 @@ function App() {
                   folder: message.folder
                 });
                 setNotice(`Downloaded ${result.file_name}`);
+              })
+            }
+            onRetryRemoteFailure={(retryId) =>
+              runAction(async () => {
+                const result = await api.retryQueueItem(retryId);
+                setNotice(result.message);
+                await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage);
+                await loadAutomation();
+              })
+            }
+            onDismissRemoteFailure={(retryId) =>
+              runAction(async () => {
+                const result = await api.dismissRetryItem(retryId);
+                setNotice(result.message);
+                await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage);
+                await loadAutomation();
               })
             }
           />
@@ -719,6 +739,7 @@ function MailWorkspace({
   filters,
   page,
   hasNextPage,
+  busy,
   onGroupChange,
   onAccountSelect,
   onFolderChange,
@@ -732,7 +753,9 @@ function MailWorkspace({
   onDeleteMessages,
   onExportMessages,
   onCreateDemo,
-  onDownloadAttachment
+  onDownloadAttachment,
+  onRetryRemoteFailure,
+  onDismissRemoteFailure
 }: {
   groups: Group[];
   accounts: Account[];
@@ -745,6 +768,7 @@ function MailWorkspace({
   filters: MailFilters;
   page: number;
   hasNextPage: boolean;
+  busy: boolean;
   onGroupChange: (groupId: number | "all") => void;
   onAccountSelect: (accountId: number) => void;
   onFolderChange: (folder: string) => void;
@@ -759,6 +783,8 @@ function MailWorkspace({
   onExportMessages: (messageIds: number[]) => void;
   onCreateDemo: () => void;
   onDownloadAttachment: (message: MailMessage, attachmentId: string) => void;
+  onRetryRemoteFailure: (retryId: number) => void;
+  onDismissRemoteFailure: (retryId: number) => void;
 }) {
   const [draftFilters, setDraftFilters] = useState(filters);
   const selectedCount = selectedMessageIds.length;
@@ -923,6 +949,12 @@ function MailWorkspace({
                 <small>{formatDate(message.received_at)}</small>
               </span>
               <span className="sender">{message.sender}</span>
+              {message.remote_sync_failure && (
+                <span className="remoteFailureInline">
+                  <XCircle size={12} />
+                  {formatRemoteFailureAction(message.remote_sync_failure.action)} failed remotely
+                </span>
+              )}
               <span className="preview">{message.body_preview}</span>
             </button>
           </div>
@@ -975,6 +1007,14 @@ function MailWorkspace({
               <span>Received</span>
               <strong>{formatDate(selectedMessage.received_at)}</strong>
             </div>
+            {selectedMessage.remote_sync_failure && (
+              <RemoteFailurePanel
+                failure={selectedMessage.remote_sync_failure}
+                busy={busy}
+                onRetry={onRetryRemoteFailure}
+                onDismiss={onDismissRemoteFailure}
+              />
+            )}
             <MessageBody body={selectedMessage.body || selectedMessage.body_preview} bodyType={selectedMessage.body_type} />
             {selectedMessage.attachments.length > 0 && (
               <div className="attachmentList">
@@ -2381,6 +2421,41 @@ function MessageBody({ body, bodyType }: { body: string; bodyType?: string | nul
   return <div className="messageBody">{body}</div>;
 }
 
+function RemoteFailurePanel({
+  failure,
+  busy,
+  onRetry,
+  onDismiss
+}: {
+  failure: RemoteSyncFailure;
+  busy: boolean;
+  onRetry: (retryId: number) => void;
+  onDismiss: (retryId: number) => void;
+}) {
+  return (
+    <div className="remoteFailurePanel">
+      <div>
+        <strong>{formatRemoteFailureAction(failure.action)} failed on the remote mailbox</strong>
+        <p>{failure.error_message}</p>
+        <small>
+          {failure.status} · {failure.attempts} / {failure.max_attempts} attempts
+          {failure.next_attempt_at ? ` · next ${formatDate(failure.next_attempt_at)}` : ""}
+        </small>
+      </div>
+      <div className="remoteFailureActions">
+        <button className="button compact secondary" disabled={busy} onClick={() => onRetry(failure.retry_id)}>
+          <RotateCcw size={14} />
+          Retry
+        </button>
+        <button className="button compact ghost" disabled={busy} onClick={() => onDismiss(failure.retry_id)}>
+          <Trash2 size={14} />
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function IconButton({
   children,
   active,
@@ -2446,6 +2521,13 @@ function formatRetryTask(item: RetryQueueItem) {
   if (item.task_type === "refresh_account") return "Refresh account";
   if (item.task_type === "backup_job") return "Run backup";
   return item.task_type;
+}
+
+function formatRemoteFailureAction(action: string) {
+  if (action === "mark_read") return "Mark read";
+  if (action === "mark_unread") return "Mark unread";
+  if (action === "delete") return "Delete mail";
+  return action || "Remote sync";
 }
 
 function exportNotice(result: ExportResult) {

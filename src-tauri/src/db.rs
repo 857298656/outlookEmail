@@ -780,29 +780,42 @@ impl Database {
         let offset = query.offset.unwrap_or(0).max(0);
         let mut sql = String::from(
             r#"
-            SELECT id, account_id, folder, provider_message_id, subject, sender, recipients,
-                   received_at, is_read, has_attachments, body_preview, body, body_type,
-                   attachments_json
-            FROM retained_mail_messages
+            SELECT m.id, m.account_id, m.folder, m.provider_message_id, m.subject, m.sender, m.recipients,
+                   m.received_at, m.is_read, m.has_attachments, m.body_preview, m.body, m.body_type,
+                   m.attachments_json,
+                   rq.id, rq.task_type, rq.status, rq.action, rq.error_message,
+                   rq.attempts, rq.max_attempts, rq.next_attempt_at, rq.last_attempt_at,
+                   rq.updated_at
+            FROM retained_mail_messages m
+            LEFT JOIN retry_queue rq ON rq.id = (
+                SELECT latest.id
+                FROM retry_queue latest
+                WHERE latest.task_type IN ('mail_mark', 'mail_delete')
+                  AND latest.status IN ('pending', 'failed')
+                  AND latest.account_id = m.account_id
+                  AND latest.message_id = m.provider_message_id
+                ORDER BY latest.id DESC
+                LIMIT 1
+            )
             WHERE 1 = 1
             "#,
         );
         let mut values = Vec::new();
         if let Some(account_id) = query.account_id {
-            sql.push_str(" AND account_id = ?");
+            sql.push_str(" AND m.account_id = ?");
             values.push(SqlValue::Integer(account_id));
         }
         if folder != "all" {
-            sql.push_str(" AND folder = ?");
+            sql.push_str(" AND m.folder = ?");
             values.push(SqlValue::Text(folder));
         }
         match read_state.as_str() {
-            "read" => sql.push_str(" AND is_read = 1"),
-            "unread" => sql.push_str(" AND is_read = 0"),
+            "read" => sql.push_str(" AND m.is_read = 1"),
+            "unread" => sql.push_str(" AND m.is_read = 0"),
             _ => {}
         }
         if let Some(has_attachments) = has_attachments {
-            sql.push_str(" AND has_attachments = ?");
+            sql.push_str(" AND m.has_attachments = ?");
             values.push(SqlValue::Integer(if has_attachments { 1 } else { 0 }));
         }
         append_mail_search_terms(&mut sql, &mut values, &search.terms);
@@ -829,6 +842,7 @@ impl Database {
                 body: row.get(11)?,
                 body_type: row.get(12)?,
                 attachments: parse_attachments_json(row.get::<_, String>(13)?.as_str()),
+                remote_sync_failure: remote_sync_failure_from_message_row(row)?,
             })
         })?;
         collect_rows(rows)
@@ -4413,27 +4427,27 @@ fn append_mail_search_terms(sql: &mut String, values: &mut Vec<SqlValue>, terms:
     for term in terms {
         match term {
             MailSearchTerm::Any(value) => {
-                sql.push_str(" AND (subject LIKE ? OR sender LIKE ? OR recipients LIKE ? OR cc LIKE ? OR body_preview LIKE ? OR COALESCE(body, '') LIKE ?)");
+                sql.push_str(" AND (m.subject LIKE ? OR m.sender LIKE ? OR m.recipients LIKE ? OR m.cc LIKE ? OR m.body_preview LIKE ? OR COALESCE(m.body, '') LIKE ?)");
                 push_like_values(values, value, 6);
             }
             MailSearchTerm::Subject(value) => {
-                sql.push_str(" AND subject LIKE ?");
+                sql.push_str(" AND m.subject LIKE ?");
                 push_like_values(values, value, 1);
             }
             MailSearchTerm::Sender(value) => {
-                sql.push_str(" AND sender LIKE ?");
+                sql.push_str(" AND m.sender LIKE ?");
                 push_like_values(values, value, 1);
             }
             MailSearchTerm::Recipient(value) => {
-                sql.push_str(" AND (recipients LIKE ? OR cc LIKE ?)");
+                sql.push_str(" AND (m.recipients LIKE ? OR m.cc LIKE ?)");
                 push_like_values(values, value, 2);
             }
             MailSearchTerm::Body(value) => {
-                sql.push_str(" AND (body_preview LIKE ? OR COALESCE(body, '') LIKE ?)");
+                sql.push_str(" AND (m.body_preview LIKE ? OR COALESCE(m.body, '') LIKE ?)");
                 push_like_values(values, value, 2);
             }
             MailSearchTerm::ProviderId(value) => {
-                sql.push_str(" AND provider_message_id LIKE ?");
+                sql.push_str(" AND m.provider_message_id LIKE ?");
                 push_like_values(values, value, 1);
             }
         }
@@ -4454,12 +4468,12 @@ fn mail_sort_clause(sort_by: Option<&str>, sort_order: Option<&str>) -> AppResul
         value => return Err(AppError::InvalidInput(format!("unsupported mail sort_order: {value}"))),
     };
     let clause = match sort_by.unwrap_or("date").trim().to_ascii_lowercase().as_str() {
-        "" | "date" | "received" | "received_at" => format!("received_at_sort {order}, id {order}"),
-        "subject" => format!("LOWER(subject) {order}, received_at_sort DESC, id DESC"),
-        "sender" | "from" => format!("LOWER(sender) {order}, received_at_sort DESC, id DESC"),
-        "read" | "status" => format!("is_read {order}, received_at_sort DESC, id DESC"),
-        "attachments" | "files" => format!("has_attachments {order}, received_at_sort DESC, id DESC"),
-        "folder" => format!("folder {order}, received_at_sort DESC, id DESC"),
+        "" | "date" | "received" | "received_at" => format!("m.received_at_sort {order}, m.id {order}"),
+        "subject" => format!("LOWER(m.subject) {order}, m.received_at_sort DESC, m.id DESC"),
+        "sender" | "from" => format!("LOWER(m.sender) {order}, m.received_at_sort DESC, m.id DESC"),
+        "read" | "status" => format!("m.is_read {order}, m.received_at_sort DESC, m.id DESC"),
+        "attachments" | "files" => format!("m.has_attachments {order}, m.received_at_sort DESC, m.id DESC"),
+        "folder" => format!("m.folder {order}, m.received_at_sort DESC, m.id DESC"),
         value => return Err(AppError::InvalidInput(format!("unsupported mail sort_by: {value}"))),
     };
     Ok(clause)
@@ -4704,6 +4718,25 @@ fn retry_queue_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RetryQ
         last_attempt_at: row.get(13)?,
         created_at: row.get(14)?,
         updated_at: row.get(15)?,
+    })
+}
+
+fn remote_sync_failure_from_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<RemoteSyncFailure>> {
+    let retry_id = row.get::<_, Option<i64>>(14)?;
+    Ok(match retry_id {
+        Some(retry_id) => Some(RemoteSyncFailure {
+            retry_id,
+            task_type: row.get(15)?,
+            status: row.get(16)?,
+            action: row.get(17)?,
+            error_message: row.get(18)?,
+            attempts: row.get(19)?,
+            max_attempts: row.get(20)?,
+            next_attempt_at: row.get(21)?,
+            last_attempt_at: row.get(22)?,
+            updated_at: row.get(23)?,
+        }),
+        None => None,
     })
 }
 
@@ -5145,6 +5178,21 @@ mod project_tests {
         assert_eq!(queued[0].task_type, "mail_mark");
         assert_eq!(queued[0].action, "mark_read");
 
+        let messages = db
+            .list_messages_query(MailMessageQuery {
+                account_id: Some(1),
+                folder: Some("inbox".to_string()),
+                ..MailMessageQuery::default()
+            })
+            .expect("messages with remote failure");
+        let failure = messages[0]
+            .remote_sync_failure
+            .as_ref()
+            .expect("remote failure");
+        assert_eq!(failure.retry_id, queued[0].id);
+        assert_eq!(failure.action, "mark_read");
+        assert_eq!(failure.status, "pending");
+
         let retried = db
             .run_retry_queue(Some(RetryQueueRunInput {
                 retry_id: Some(queued[0].id),
@@ -5170,6 +5218,15 @@ mod project_tests {
             .list_retry_queue(RetryQueueQuery::default())
             .expect("empty queue")
             .is_empty());
+        assert!(db
+            .list_messages_query(MailMessageQuery {
+                account_id: Some(1),
+                folder: Some("inbox".to_string()),
+                ..MailMessageQuery::default()
+            })
+            .expect("messages after dismiss")[0]
+            .remote_sync_failure
+            .is_none());
     }
 
     #[test]

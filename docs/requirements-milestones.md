@@ -61,6 +61,7 @@
 - Graph 标记已读/未读和删除远端同步尝试。
 - IMAP UID flag 标记已读/未读和删除远端同步尝试。
 - Graph/IMAP 远端标记和删除失败会进入重试队列。
+- Graph/IMAP 远端标记失败会在邮件列表和详情中显示失败状态，并提供快速重试和忽略入口。
 - 设置页支持查看、手动重试和忽略远端操作失败队列项。
 
 ### 项目账号池
@@ -133,6 +134,7 @@
   - `feat: download cached IMAP attachments`
   - `feat: sandbox HTML message rendering`
   - `feat: add advanced mail search and sorting`
+  - `feat: surface remote mail sync failures`
 
 ## 未完成
 
@@ -151,7 +153,7 @@
 
 ### 邮件操作增强
 
-- 远端操作失败的回滚提示和更细的错误可视化。
+- 删除类远端失败的邮件级回滚展示。
 
 ### 分享与外部集成增强
 
@@ -228,7 +230,8 @@
 - 已交付：IMAP 同步缓存 raw MIME，并支持从缓存 MIME 中解析下载附件。
 - 已交付：邮箱和临时邮箱 HTML 正文使用清理后的沙箱 iframe 渲染。
 - 已交付：高级搜索语法和多字段升降序排序。
-- 剩余增强：远端失败回滚提示。
+- 已交付：标记已读/未读远端失败在邮件列表和详情中可视化，并支持快速重试或忽略。
+- 剩余增强：删除类远端失败的邮件级回滚展示。
 
 ### M7：本地导出核心，已完成
 

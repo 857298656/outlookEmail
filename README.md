@@ -12,7 +12,7 @@ This version is intentionally local-first:
 
 ## Current implementation
 
-The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag management, local retained-mail workspace, advanced message search/sort/filter/pagination, sandboxed HTML body rendering, batch read/unread/delete actions, local mail/account/project exports, settings storage, Microsoft Graph OAuth, Graph mailbox sync, Graph attachment metadata/download, basic TLS IMAP sync with cached-MIME attachment download, GPTMail/DuckMail/Cloudflare temp-mail management, SMTP/Telegram/WeCom forwarding, failed-operation retry queue, WebDAV backup and local restore, in-app scheduling with unified task history, desktop project account pools, and Windows desktop bundling.
+The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag management, local retained-mail workspace, advanced message search/sort/filter/pagination, sandboxed HTML body rendering, batch read/unread/delete actions with remote failure surfacing, local mail/account/project exports, settings storage, Microsoft Graph OAuth, Graph mailbox sync, Graph attachment metadata/download, basic TLS IMAP sync with cached-MIME attachment download, GPTMail/DuckMail/Cloudflare temp-mail management, SMTP/Telegram/WeCom forwarding, failed-operation retry queue, WebDAV backup and local restore, in-app scheduling with unified task history, desktop project account pools, and Windows desktop bundling.
 
 See [`docs/requirements-milestones.md`](docs/requirements-milestones.md) for the full requirement record, completed scope, unfinished scope, and milestone plan.
 
@@ -63,7 +63,7 @@ Graph accounts need a Microsoft client ID and OAuth callback URL. Generate the a
 
 IMAP accounts need host, port, and password fields. The IMAP implementation supports TLS password login, caches recent messages in SQLite, stores raw RFC822 MIME for synced messages, and downloads attachments by extracting them from the local cached MIME.
 
-The Mailbox view supports cached-message search, field tokens such as `from:`, `to:`, `subject:`, `body:`, `folder:`, `is:`, and `has:`, read/unread filtering, attachment filtering, multi-field sorting, pagination, sandboxed HTML body rendering, single-message actions, and batch read/unread/delete actions. Graph and IMAP message actions update the local SQLite cache and attempt remote synchronization. Failed remote mark/delete attempts are queued for manual or scheduled retry.
+The Mailbox view supports cached-message search, field tokens such as `from:`, `to:`, `subject:`, `body:`, `folder:`, `is:`, and `has:`, read/unread filtering, attachment filtering, multi-field sorting, pagination, sandboxed HTML body rendering, single-message actions, and batch read/unread/delete actions. Graph and IMAP message actions update the local SQLite cache and attempt remote synchronization. Failed remote mark/delete attempts are surfaced on affected messages and queued for manual or scheduled retry.
 
 ## Local exports
 

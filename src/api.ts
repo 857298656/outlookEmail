@@ -215,7 +215,8 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         body_preview: "Provider sync is wired as a job boundary.",
         body: "This local message confirms the desktop workspace is working.",
         body_type: "text",
-        attachments: []
+        attachments: [],
+        remote_sync_failure: null
       };
       mockMessages = [message, ...mockMessages];
       return message as T;

@@ -68,9 +68,24 @@ pub struct MailMessage {
     pub body: Option<String>,
     pub body_type: String,
     pub attachments: Vec<AttachmentInfo>,
+    pub remote_sync_failure: Option<RemoteSyncFailure>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
+pub struct RemoteSyncFailure {
+    pub retry_id: i64,
+    pub task_type: String,
+    pub status: String,
+    pub action: String,
+    pub error_message: String,
+    pub attempts: i64,
+    pub max_attempts: i64,
+    pub next_attempt_at: Option<String>,
+    pub last_attempt_at: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct MailMessageQuery {
     pub account_id: Option<i64>,
     pub folder: Option<String>,

@@ -61,6 +61,20 @@ export type MailMessage = {
   body: string | null;
   body_type: string;
   attachments: AttachmentInfo[];
+  remote_sync_failure: RemoteSyncFailure | null;
+};
+
+export type RemoteSyncFailure = {
+  retry_id: number;
+  task_type: string;
+  status: string;
+  action: string;
+  error_message: string;
+  attempts: number;
+  max_attempts: number;
+  next_attempt_at: string | null;
+  last_attempt_at: string | null;
+  updated_at: string;
 };
 
 export type MailMessageQuery = {

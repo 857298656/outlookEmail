@@ -23,6 +23,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { api } from "./api";
+import { buildSandboxedEmailHtml } from "./lib/emailHtml";
 import { parseAccountRows } from "./lib/importParser";
 import type {
   Account,
@@ -938,7 +939,7 @@ function MailWorkspace({
               <span>Received</span>
               <strong>{formatDate(selectedMessage.received_at)}</strong>
             </div>
-            <div className="messageBody">{selectedMessage.body || selectedMessage.body_preview}</div>
+            <MessageBody body={selectedMessage.body || selectedMessage.body_preview} bodyType={selectedMessage.body_type} />
             {selectedMessage.attachments.length > 0 && (
               <div className="attachmentList">
                 <h3>Attachments</h3>
@@ -1349,7 +1350,10 @@ function TempEmailsView({
               <span>Received</span>
               <strong>{selectedMessage.timestamp ? formatUnixDate(selectedMessage.timestamp) : formatDate(selectedMessage.created_at)}</strong>
             </div>
-            <div className="messageBody">{selectedMessage.has_html ? selectedMessage.html_content : selectedMessage.content}</div>
+            <MessageBody
+              body={selectedMessage.has_html ? selectedMessage.html_content : selectedMessage.content}
+              bodyType={selectedMessage.has_html ? "html" : "text"}
+            />
           </>
         ) : (
           <EmptyState icon={<Mail size={24} />} text="Select a temp message." />
@@ -2324,6 +2328,21 @@ function RunStatus({ label, value }: { label: string; value?: string | null }) {
       <strong>{value ? formatDate(value) : "Never"}</strong>
     </div>
   );
+}
+
+function MessageBody({ body, bodyType }: { body: string; bodyType?: string | null }) {
+  if (bodyType?.toLowerCase() === "html" && body.trim()) {
+    return (
+      <iframe
+        className="messageHtmlFrame"
+        title="Message body"
+        sandbox=""
+        referrerPolicy="no-referrer"
+        srcDoc={buildSandboxedEmailHtml(body)}
+      />
+    );
+  }
+  return <div className="messageBody">{body}</div>;
 }
 
 function IconButton({

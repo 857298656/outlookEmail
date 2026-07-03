@@ -411,6 +411,16 @@ button:disabled {
   color: #273444;
 }
 
+.messageHtmlFrame {
+  display: block;
+  width: 100%;
+  max-width: 760px;
+  min-height: 360px;
+  border: 1px solid #dfe5ec;
+  border-radius: 8px;
+  background: #fff;
+}
+
 .attachmentList {
   display: grid;
   gap: 8px;

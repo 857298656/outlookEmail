@@ -192,6 +192,31 @@ export type AutomationRunQuery = {
   limit?: number;
 };
 
+export type RetryQueueItem = {
+  id: number;
+  task_type: string;
+  status: string;
+  account_id: number | null;
+  account_email: string;
+  message_id: string;
+  channel: string;
+  action: string;
+  payload_json: string;
+  error_message: string;
+  attempts: number;
+  max_attempts: number;
+  next_attempt_at: string | null;
+  last_attempt_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RetryQueueQuery = {
+  status?: string;
+  task_type?: string;
+  limit?: number;
+};
+
 export type TempEmail = {
   id: number;
   email: string;

@@ -17,6 +17,8 @@ import type {
   Project,
   ProjectAccount,
   ProjectAccountEvent,
+  RetryQueueItem,
+  RetryQueueQuery,
   RestoreBackupResult,
   SchedulerStatus,
   Settings,
@@ -89,6 +91,7 @@ let mockSchedulerStatus: SchedulerStatus = {
   last_backup_at: null
 };
 let mockAutomationRuns: AutomationRun[] = [];
+let mockRetryQueue: RetryQueueItem[] = [];
 
 function isTauriRuntime() {
   return "__TAURI_INTERNALS__" in window;
@@ -324,6 +327,29 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       mockAutomationRuns = mockAutomationRuns.filter((run) => !matchesAutomationRun(run, input));
       const deleted = before - mockAutomationRuns.length;
       return { success: true, message: `Cleared ${deleted} automation run(s)`, refreshed: deleted, failed: 0 } as T;
+    }
+    case "list_retry_queue": {
+      const query = ((args?.query ?? {}) as RetryQueueQuery) || {};
+      const limit = query.limit ?? (args?.limit as number | undefined) ?? 100;
+      return mockRetryQueue
+        .filter((item) => (!query.status || query.status === "all" ? true : item.status === query.status))
+        .filter((item) => (!query.task_type || query.task_type === "all" ? true : item.task_type === query.task_type))
+        .slice(0, limit) as T;
+    }
+    case "run_retry_queue": {
+      const input = (args?.input ?? {}) as { retry_id?: number; limit?: number };
+      const selected = input.retry_id
+        ? mockRetryQueue.filter((item) => item.id === input.retry_id)
+        : mockRetryQueue.filter((item) => item.status === "pending").slice(0, input.limit ?? 20);
+      mockRetryQueue = mockRetryQueue.filter((item) => !selected.some((selectedItem) => selectedItem.id === item.id));
+      return { success: true, message: `Retried ${selected.length} item(s)`, refreshed: selected.length, failed: 0 } as T;
+    }
+    case "dismiss_retry_item": {
+      const input = args?.input as { retry_id: number };
+      const before = mockRetryQueue.length;
+      mockRetryQueue = mockRetryQueue.filter((item) => item.id !== input.retry_id);
+      const deleted = before - mockRetryQueue.length;
+      return { success: true, message: `Dismissed ${deleted} retry item(s)`, refreshed: deleted, failed: 0 } as T;
     }
     case "list_temp_emails":
       return mockTempEmails as T;
@@ -718,6 +744,11 @@ export const api = {
     call<AutomationRun[]>("list_automation_runs", { limit, query: { ...query, limit: query.limit ?? limit } }),
   clearAutomationRuns: (input: AutomationRunQuery & { older_than_days?: number; clear_all?: boolean }) =>
     call<JobResult>("clear_automation_runs", { input }),
+  listRetryQueue: (query: RetryQueueQuery = {}, limit = 100) =>
+    call<RetryQueueItem[]>("list_retry_queue", { limit, query: { ...query, limit: query.limit ?? limit } }),
+  runRetryQueue: (limit = 20) => call<JobResult>("run_retry_queue", { input: { limit } }),
+  retryQueueItem: (retryId: number) => call<JobResult>("run_retry_queue", { input: { retry_id: retryId } }),
+  dismissRetryItem: (retryId: number) => call<JobResult>("dismiss_retry_item", { input: { retry_id: retryId } }),
   listTempEmails: () => call<TempEmail[]>("list_temp_emails"),
   importTempEmails: (input: { raw: string; provider: string; channel_id?: number | null }) =>
     call<ImportAccountsResult>("import_temp_emails", { input }),

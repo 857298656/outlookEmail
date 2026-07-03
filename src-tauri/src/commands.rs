@@ -306,6 +306,32 @@ pub fn clear_automation_runs(state: State<'_, AppState>, input: ClearAutomationR
 }
 
 #[tauri::command]
+pub fn list_retry_queue(
+    state: State<'_, AppState>,
+    query: Option<RetryQueueQuery>,
+    limit: Option<i64>,
+) -> AppResult<Vec<RetryQueueItem>> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    let mut query = query.unwrap_or_default();
+    if query.limit.is_none() {
+        query.limit = limit;
+    }
+    db.list_retry_queue(query)
+}
+
+#[tauri::command]
+pub fn run_retry_queue(state: State<'_, AppState>, input: Option<RetryQueueRunInput>) -> AppResult<JobResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.run_retry_queue(input)
+}
+
+#[tauri::command]
+pub fn dismiss_retry_item(state: State<'_, AppState>, input: RetryQueueItemInput) -> AppResult<JobResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.dismiss_retry_item(input)
+}
+
+#[tauri::command]
 pub fn list_temp_emails(state: State<'_, AppState>) -> AppResult<Vec<TempEmail>> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.list_temp_emails()

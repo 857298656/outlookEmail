@@ -232,6 +232,44 @@ pub struct AutomationRun {
     pub finished_at: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct RetryQueueItem {
+    pub id: i64,
+    pub task_type: String,
+    pub status: String,
+    pub account_id: Option<i64>,
+    pub account_email: String,
+    pub message_id: String,
+    pub channel: String,
+    pub action: String,
+    pub payload_json: String,
+    pub error_message: String,
+    pub attempts: i64,
+    pub max_attempts: i64,
+    pub next_attempt_at: Option<String>,
+    pub last_attempt_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RetryQueueQuery {
+    pub status: Option<String>,
+    pub task_type: Option<String>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RetryQueueRunInput {
+    pub retry_id: Option<i64>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RetryQueueItemInput {
+    pub retry_id: i64,
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct AutomationRunQuery {
     pub job_type: Option<String>,

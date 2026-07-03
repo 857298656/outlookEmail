@@ -4,7 +4,7 @@ use crate::error::{AppError, AppResult};
 use crate::import::ImportedAccount;
 use crate::models::*;
 use crate::providers;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, Utc};
 use directories::ProjectDirs;
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 use std::collections::HashSet;
@@ -20,6 +20,7 @@ pub struct Database {
 struct MailMessageRef {
     id: i64,
     account_id: i64,
+    account_email: String,
     folder: String,
     provider_message_id: String,
 }
@@ -53,7 +54,7 @@ struct AutomationRunFilter {
 impl AutomationRunFilter {
     fn from_query(query: AutomationRunQuery) -> AppResult<Self> {
         Ok(Self {
-            job_type: normalize_automation_value(query.job_type.as_deref(), &["refresh", "forwarding", "backup"], "job_type")?,
+            job_type: normalize_automation_value(query.job_type.as_deref(), &["refresh", "forwarding", "backup", "retry"], "job_type")?,
             trigger_type: normalize_automation_value(query.trigger_type.as_deref(), &["manual", "schedule"], "trigger_type")?,
             status: normalize_automation_value(query.status.as_deref(), &["success", "failed"], "status")?,
             search: query.search.unwrap_or_default().trim().to_string(),
@@ -63,13 +64,29 @@ impl AutomationRunFilter {
 
     fn from_clear_input(input: &ClearAutomationRunsInput) -> AppResult<Self> {
         Ok(Self {
-            job_type: normalize_automation_value(input.job_type.as_deref(), &["refresh", "forwarding", "backup"], "job_type")?,
+            job_type: normalize_automation_value(input.job_type.as_deref(), &["refresh", "forwarding", "backup", "retry"], "job_type")?,
             trigger_type: normalize_automation_value(input.trigger_type.as_deref(), &["manual", "schedule"], "trigger_type")?,
             status: normalize_automation_value(input.status.as_deref(), &["success", "failed"], "status")?,
             search: input.search.clone().unwrap_or_default().trim().to_string(),
             limit: 500,
         })
     }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct MailRetryPayload {
+    account_id: i64,
+    account_email: String,
+    folder: String,
+    provider_message_id: String,
+    is_read: Option<bool>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ForwardRetryPayload {
+    account_id: i64,
+    message_id: String,
+    channel: String,
 }
 
 impl Database {
@@ -826,7 +843,9 @@ impl Database {
             for target in &targets {
                 if let Err(err) = self.sync_remote_mark_message(target, input.is_read) {
                     failed += 1;
-                    errors.push(format!("#{} {}: {}", target.id, target.provider_message_id, err));
+                    let error = err.to_string();
+                    errors.push(format!("#{} {}: {}", target.id, target.provider_message_id, error));
+                    self.enqueue_mail_retry(target, input.is_read, &error)?;
                 }
             }
         }
@@ -873,7 +892,9 @@ impl Database {
             for target in &targets {
                 if let Err(err) = self.sync_remote_delete_message(target) {
                     failed += 1;
-                    errors.push(format!("#{} {}: {}", target.id, target.provider_message_id, err));
+                    let error = err.to_string();
+                    errors.push(format!("#{} {}: {}", target.id, target.provider_message_id, error));
+                    self.enqueue_mail_delete_retry(target, &error)?;
                 }
             }
         }
@@ -1297,6 +1318,7 @@ impl Database {
                                 "failed",
                                 Some(&error),
                             )?;
+                            self.enqueue_forwarding_retry(account_id, &account_email, &message, channel, &error)?;
                         }
                     }
                 }
@@ -1611,6 +1633,99 @@ impl Database {
         })
     }
 
+    pub fn list_retry_queue(&self, query: RetryQueueQuery) -> AppResult<Vec<RetryQueueItem>> {
+        self.require_unlocked()?;
+        let status = normalize_retry_value(query.status.as_deref(), &["pending", "failed"], "status")?;
+        let task_type = normalize_retry_value(
+            query.task_type.as_deref(),
+            &["mail_mark", "mail_delete", "forward_message"],
+            "task_type",
+        )?;
+        let limit = query.limit.unwrap_or(100).clamp(1, 500);
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT id, task_type, status, account_id, account_email, message_id, channel,
+                   action, payload_json, error_message, attempts, max_attempts,
+                   next_attempt_at, last_attempt_at, created_at, updated_at
+            FROM retry_queue
+            WHERE (?1 = '' OR status = ?1)
+              AND (?2 = '' OR task_type = ?2)
+            ORDER BY id DESC
+            LIMIT ?3
+            ",
+        )?;
+        let rows = stmt.query_map(params![status, task_type, limit], retry_queue_item_from_row)?;
+        collect_rows(rows)
+    }
+
+    pub fn run_retry_queue(&self, input: Option<RetryQueueRunInput>) -> AppResult<JobResult> {
+        self.run_retry_queue_with_trigger(input.unwrap_or_default(), "manual", true)
+    }
+
+    fn run_retry_queue_with_trigger(
+        &self,
+        input: RetryQueueRunInput,
+        trigger_type: &str,
+        record_history: bool,
+    ) -> AppResult<JobResult> {
+        let started_at = Utc::now();
+        let result = self.run_retry_queue_inner(input);
+        if record_history {
+            let _ = self.record_job_result("retry", trigger_type, started_at, &result);
+        }
+        result
+    }
+
+    fn run_retry_queue_inner(&self, input: RetryQueueRunInput) -> AppResult<JobResult> {
+        self.require_unlocked()?;
+        let items = self.retry_queue_candidates(input)?;
+        let mut completed = 0_usize;
+        let mut failed = 0_usize;
+        let mut errors = Vec::new();
+
+        for item in items {
+            match self.execute_retry_item(&item) {
+                Ok(()) => {
+                    completed += 1;
+                    self.conn.execute("DELETE FROM retry_queue WHERE id = ?", [item.id])?;
+                    self.audit(
+                        "retry.completed",
+                        "retry",
+                        Some(item.id),
+                        &format!("{} {}", item.task_type, item.message_id),
+                    )?;
+                }
+                Err(err) => {
+                    failed += 1;
+                    let message = err.to_string();
+                    errors.push(format!("#{} {}: {}", item.id, item.task_type, message));
+                    self.mark_retry_failed(&item, &message)?;
+                }
+            }
+        }
+
+        Ok(JobResult {
+            success: failed == 0,
+            message: retry_job_message(completed, failed, &errors),
+            refreshed: completed,
+            failed,
+        })
+    }
+
+    pub fn dismiss_retry_item(&self, input: RetryQueueItemInput) -> AppResult<JobResult> {
+        self.require_unlocked()?;
+        let deleted = self
+            .conn
+            .execute("DELETE FROM retry_queue WHERE id = ?", [input.retry_id])?;
+        self.audit("retry.dismissed", "retry", Some(input.retry_id), "")?;
+        Ok(JobResult {
+            success: true,
+            message: format!("Dismissed {} retry item(s)", deleted),
+            refreshed: deleted,
+            failed: 0,
+        })
+    }
+
     pub fn scheduler_status(&self) -> AppResult<SchedulerStatus> {
         self.require_unlocked()?;
         Ok(SchedulerStatus {
@@ -1626,6 +1741,20 @@ impl Database {
         }
         let settings = self.get_settings()?;
         let now = Utc::now();
+
+        let retry_started_at = Utc::now();
+        let retry_result = self.run_retry_queue_inner(RetryQueueRunInput {
+            retry_id: None,
+            limit: Some(20),
+        });
+        match &retry_result {
+            Ok(result) if result.refreshed + result.failed > 0 => {
+                let _ = self.record_job_result("retry", "schedule", retry_started_at, &retry_result);
+                self.audit("scheduler.retry", "scheduler", None, &result.message)?;
+            }
+            Ok(_) => {}
+            Err(err) => self.audit("scheduler.retry_failed", "scheduler", None, &err.to_string())?,
+        }
 
         if settings.scheduler_refresh_enabled
             && self.scheduler_due("scheduler_last_refresh_at", settings.scheduler_refresh_interval_minutes, now)?
@@ -2176,6 +2305,25 @@ impl Database {
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS retry_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                account_id INTEGER,
+                account_email TEXT NOT NULL DEFAULT '',
+                message_id TEXT NOT NULL DEFAULT '',
+                channel TEXT NOT NULL DEFAULT '',
+                action TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                error_message TEXT NOT NULL DEFAULT '',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 5,
+                next_attempt_at TEXT,
+                last_attempt_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS projects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -2261,6 +2409,8 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_forwarding_logs_message ON forwarding_logs(account_id, message_id, channel, status);
             CREATE INDEX IF NOT EXISTS idx_backup_logs_created ON backup_logs(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_automation_runs_created ON automation_runs(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_retry_queue_status_due ON retry_queue(status, next_attempt_at, created_at);
+            CREATE INDEX IF NOT EXISTS idx_retry_queue_key ON retry_queue(task_type, account_id, message_id, channel, action, status);
             CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);
             ",
         )?;
@@ -2902,6 +3052,219 @@ impl Database {
         Ok(())
     }
 
+    fn retry_queue_candidates(&self, input: RetryQueueRunInput) -> AppResult<Vec<RetryQueueItem>> {
+        if let Some(retry_id) = input.retry_id {
+            let mut stmt = self.conn.prepare(
+                "
+                SELECT id, task_type, status, account_id, account_email, message_id, channel,
+                       action, payload_json, error_message, attempts, max_attempts,
+                       next_attempt_at, last_attempt_at, created_at, updated_at
+                FROM retry_queue
+                WHERE id = ?
+                ",
+            )?;
+            let rows = stmt.query_map([retry_id], retry_queue_item_from_row)?;
+            return collect_rows(rows);
+        }
+
+        let limit = input.limit.unwrap_or(20).clamp(1, 100);
+        let now = Utc::now().to_rfc3339();
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT id, task_type, status, account_id, account_email, message_id, channel,
+                   action, payload_json, error_message, attempts, max_attempts,
+                   next_attempt_at, last_attempt_at, created_at, updated_at
+            FROM retry_queue
+            WHERE status = 'pending'
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?1)
+            ORDER BY COALESCE(next_attempt_at, created_at) ASC, id ASC
+            LIMIT ?2
+            ",
+        )?;
+        let rows = stmt.query_map(params![now, limit], retry_queue_item_from_row)?;
+        collect_rows(rows)
+    }
+
+    fn execute_retry_item(&self, item: &RetryQueueItem) -> AppResult<()> {
+        match item.task_type.as_str() {
+            "mail_mark" => {
+                let payload = parse_retry_payload::<MailRetryPayload>(&item.payload_json)?;
+                let is_read = payload
+                    .is_read
+                    .ok_or_else(|| AppError::InvalidInput("mail mark retry is missing read state".to_string()))?;
+                self.retry_remote_mark_message(&payload, is_read)
+            }
+            "mail_delete" => {
+                let payload = parse_retry_payload::<MailRetryPayload>(&item.payload_json)?;
+                self.retry_remote_delete_message(&payload)
+            }
+            "forward_message" => {
+                let payload = parse_retry_payload::<ForwardRetryPayload>(&item.payload_json)?;
+                self.retry_forward_message(&payload)
+            }
+            _ => Err(AppError::InvalidInput(format!(
+                "unsupported retry task type: {}",
+                item.task_type
+            ))),
+        }
+    }
+
+    fn mark_retry_failed(&self, item: &RetryQueueItem, error: &str) -> AppResult<()> {
+        let attempts = item.attempts + 1;
+        let exhausted = attempts >= item.max_attempts;
+        let status = if exhausted { "failed" } else { "pending" };
+        let next_attempt_at = if exhausted {
+            None
+        } else {
+            Some((Utc::now() + ChronoDuration::minutes(retry_delay_minutes(attempts))).to_rfc3339())
+        };
+        self.conn.execute(
+            "
+            UPDATE retry_queue
+            SET status = ?,
+                error_message = ?,
+                attempts = ?,
+                next_attempt_at = ?,
+                last_attempt_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            ",
+            params![status, error, attempts, next_attempt_at, item.id],
+        )?;
+        Ok(())
+    }
+
+    fn enqueue_mail_retry(&self, target: &MailMessageRef, is_read: bool, error: &str) -> AppResult<()> {
+        let action = if is_read { "mark_read" } else { "mark_unread" };
+        self.enqueue_retry_item(
+            "mail_mark",
+            Some(target.account_id),
+            &target.account_email,
+            &target.provider_message_id,
+            "",
+            action,
+            serde_json::json!({
+                "account_id": target.account_id,
+                "account_email": target.account_email.as_str(),
+                "folder": target.folder.as_str(),
+                "provider_message_id": target.provider_message_id.as_str(),
+                "is_read": is_read
+            }),
+            error,
+        )
+    }
+
+    fn enqueue_mail_delete_retry(&self, target: &MailMessageRef, error: &str) -> AppResult<()> {
+        self.enqueue_retry_item(
+            "mail_delete",
+            Some(target.account_id),
+            &target.account_email,
+            &target.provider_message_id,
+            "",
+            "delete",
+            serde_json::json!({
+                "account_id": target.account_id,
+                "account_email": target.account_email.as_str(),
+                "folder": target.folder.as_str(),
+                "provider_message_id": target.provider_message_id.as_str()
+            }),
+            error,
+        )
+    }
+
+    fn enqueue_forwarding_retry(
+        &self,
+        account_id: i64,
+        account_email: &str,
+        message: &ForwardContent,
+        channel: &str,
+        error: &str,
+    ) -> AppResult<()> {
+        self.enqueue_retry_item(
+            "forward_message",
+            Some(account_id),
+            account_email,
+            &message.message_id,
+            channel,
+            "forward",
+            serde_json::json!({
+                "account_id": account_id,
+                "message_id": message.message_id.as_str(),
+                "channel": channel
+            }),
+            error,
+        )
+    }
+
+    fn enqueue_retry_item(
+        &self,
+        task_type: &str,
+        account_id: Option<i64>,
+        account_email: &str,
+        message_id: &str,
+        channel: &str,
+        action: &str,
+        payload: serde_json::Value,
+        error: &str,
+    ) -> AppResult<()> {
+        let payload_json = serde_json::to_string(&payload)
+            .map_err(|err| AppError::Internal(format!("serialize retry payload failed: {err}")))?;
+        let account_key = account_id.unwrap_or(-1);
+        let existing = self
+            .conn
+            .query_row(
+                "
+                SELECT id
+                FROM retry_queue
+                WHERE task_type = ?
+                  AND COALESCE(account_id, -1) = ?
+                  AND message_id = ?
+                  AND channel = ?
+                  AND action = ?
+                  AND status IN ('pending', 'failed')
+                LIMIT 1
+                ",
+                params![task_type, account_key, message_id, channel, action],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+
+        if let Some(id) = existing {
+            self.conn.execute(
+                "
+                UPDATE retry_queue
+                SET status = 'pending',
+                    account_email = ?,
+                    payload_json = ?,
+                    error_message = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                ",
+                params![account_email, payload_json, error, id],
+            )?;
+        } else {
+            self.conn.execute(
+                "
+                INSERT INTO retry_queue
+                (task_type, status, account_id, account_email, message_id, channel,
+                 action, payload_json, error_message, max_attempts)
+                VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, 5)
+                ",
+                params![
+                    task_type,
+                    account_id,
+                    account_email,
+                    message_id,
+                    channel,
+                    action,
+                    payload_json,
+                    error
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
     fn record_job_result(
         &self,
         job_type: &str,
@@ -3196,9 +3559,10 @@ impl Database {
             .join(", ");
         let sql = format!(
             "
-            SELECT id, account_id, folder, provider_message_id
-            FROM retained_mail_messages
-            WHERE id IN ({placeholders})
+            SELECT m.id, m.account_id, a.email, m.folder, m.provider_message_id
+            FROM retained_mail_messages m
+            JOIN accounts a ON a.id = m.account_id
+            WHERE m.id IN ({placeholders})
             "
         );
         let mut stmt = self.conn.prepare(&sql)?;
@@ -3206,8 +3570,9 @@ impl Database {
             Ok(MailMessageRef {
                 id: row.get(0)?,
                 account_id: row.get(1)?,
-                folder: row.get(2)?,
-                provider_message_id: row.get(3)?,
+                account_email: row.get(2)?,
+                folder: row.get(3)?,
+                provider_message_id: row.get(4)?,
             })
         })?;
         collect_rows(rows)
@@ -3278,6 +3643,17 @@ impl Database {
         }
     }
 
+    fn retry_remote_mark_message(&self, payload: &MailRetryPayload, is_read: bool) -> AppResult<()> {
+        let target = MailMessageRef {
+            id: 0,
+            account_id: payload.account_id,
+            account_email: payload.account_email.clone(),
+            folder: payload.folder.clone(),
+            provider_message_id: payload.provider_message_id.clone(),
+        };
+        self.sync_remote_mark_message(&target, is_read)
+    }
+
     fn sync_remote_delete_message(&self, target: &MailMessageRef) -> AppResult<()> {
         let account = self
             .account_credentials(Some(target.account_id))?
@@ -3292,6 +3668,63 @@ impl Database {
         } else {
             providers::delete_imap_message(&account, &target.folder, &target.provider_message_id)
         }
+    }
+
+    fn retry_remote_delete_message(&self, payload: &MailRetryPayload) -> AppResult<()> {
+        let target = MailMessageRef {
+            id: 0,
+            account_id: payload.account_id,
+            account_email: payload.account_email.clone(),
+            folder: payload.folder.clone(),
+            provider_message_id: payload.provider_message_id.clone(),
+        };
+        self.sync_remote_delete_message(&target)
+    }
+
+    fn retry_forward_message(&self, payload: &ForwardRetryPayload) -> AppResult<()> {
+        let settings = self.get_settings()?;
+        if self.forward_success_exists(payload.account_id, &payload.message_id, &payload.channel)? {
+            return Ok(());
+        }
+        let message = self.forwarding_retry_content(payload.account_id, &payload.message_id)?;
+        automation::forward_message(&settings, &payload.channel, &message)?;
+        self.insert_forwarding_log(
+            Some(payload.account_id),
+            &message.account_email,
+            &payload.message_id,
+            &payload.channel,
+            "success",
+            None,
+        )?;
+        Ok(())
+    }
+
+    fn forwarding_retry_content(&self, account_id: i64, message_id: &str) -> AppResult<ForwardContent> {
+        self.conn
+            .query_row(
+                "
+                SELECT a.email, m.provider_message_id, m.subject, m.sender, m.received_at,
+                       m.body_preview, m.body
+                FROM retained_mail_messages m
+                JOIN accounts a ON a.id = m.account_id
+                WHERE m.account_id = ? AND m.provider_message_id = ?
+                LIMIT 1
+                ",
+                params![account_id, message_id],
+                |row| {
+                    Ok(ForwardContent {
+                        account_email: row.get(0)?,
+                        message_id: row.get(1)?,
+                        subject: row.get(2)?,
+                        sender: row.get(3)?,
+                        received_at: row.get(4)?,
+                        body_preview: row.get(5)?,
+                        body: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| AppError::InvalidInput("forwarding retry message not found".to_string()))
     }
 
     fn audit(&self, action: &str, resource_type: &str, resource_id: Option<i64>, detail: &str) -> AppResult<()> {
@@ -3377,6 +3810,49 @@ fn normalize_automation_value(value: Option<&str>, allowed: &[&str], field: &str
         "{field} must be one of: all, {}",
         allowed.join(", ")
     )))
+}
+
+fn normalize_retry_value(value: Option<&str>, allowed: &[&str], field: &str) -> AppResult<String> {
+    let normalized = value.unwrap_or("all").trim().to_ascii_lowercase();
+    if normalized.is_empty() || normalized == "all" {
+        return Ok(String::new());
+    }
+    if allowed.iter().any(|item| *item == normalized) {
+        return Ok(normalized);
+    }
+    Err(AppError::InvalidInput(format!(
+        "{field} must be one of: all, {}",
+        allowed.join(", ")
+    )))
+}
+
+fn retry_delay_minutes(attempts: i64) -> i64 {
+    match attempts {
+        0 | 1 => 5,
+        2 => 15,
+        3 => 60,
+        _ => 360,
+    }
+}
+
+fn parse_retry_payload<T: serde::de::DeserializeOwned>(value: &str) -> AppResult<T> {
+    serde_json::from_str(value)
+        .map_err(|err| AppError::InvalidInput(format!("invalid retry payload: {err}")))
+}
+
+fn retry_job_message(completed: usize, failed: usize, errors: &[String]) -> String {
+    if completed == 0 && failed == 0 {
+        return "No retry item(s) due".to_string();
+    }
+    if failed == 0 {
+        return format!("Retried {} item(s)", completed);
+    }
+    let preview = errors.iter().take(3).cloned().collect::<Vec<_>>().join("; ");
+    if errors.len() > 3 {
+        format!("Retried {completed} item(s), {failed} failed: {preview}; ...")
+    } else {
+        format!("Retried {completed} item(s), {failed} failed: {preview}")
+    }
 }
 
 fn mail_action_message(action: &str, changed: usize, failed: usize, errors: &[String]) -> String {
@@ -3792,6 +4268,27 @@ fn automation_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Automati
     })
 }
 
+fn retry_queue_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RetryQueueItem> {
+    Ok(RetryQueueItem {
+        id: row.get(0)?,
+        task_type: row.get(1)?,
+        status: row.get(2)?,
+        account_id: row.get(3)?,
+        account_email: row.get(4)?,
+        message_id: row.get(5)?,
+        channel: row.get(6)?,
+        action: row.get(7)?,
+        payload_json: row.get(8)?,
+        error_message: row.get(9)?,
+        attempts: row.get(10)?,
+        max_attempts: row.get(11)?,
+        next_attempt_at: row.get(12)?,
+        last_attempt_at: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+    })
+}
+
 #[cfg(test)]
 mod project_tests {
     use super::{backup_dir, normalize_project_key, Database};
@@ -3799,7 +4296,8 @@ mod project_tests {
         AutomationRunQuery, ClaimProjectAccountInput, ClearAutomationRunsInput,
         CreateProjectInput, DeleteMailMessagesInput, ExportAccountsInput,
         ExportMailMessagesInput, MarkMailMessagesInput, ProjectAccountActionInput,
-        RefreshInput, RestoreBackupInput,
+        RefreshInput, RestoreBackupInput, RetryQueueItemInput, RetryQueueQuery,
+        RetryQueueRunInput,
     };
     use rusqlite::Connection;
     use std::path::PathBuf;
@@ -4024,6 +4522,79 @@ mod project_tests {
             .expect("clear failed");
         assert_eq!(cleared.refreshed, 1);
         assert_eq!(db.list_automation_runs(Some(10)).expect("remaining").len(), 1);
+    }
+
+    #[test]
+    fn queues_and_retries_failed_remote_mail_action() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "
+                INSERT INTO accounts (id, email, status, group_id, provider, account_type)
+                VALUES (1, 'one@example.com', 'active', 1, 'imap', 'imap')
+                ",
+                [],
+            )
+            .expect("insert account");
+        db.conn
+            .execute(
+                "
+                INSERT INTO retained_mail_messages
+                (id, account_id, folder, provider_message_id, subject, received_at, received_at_sort, is_read)
+                VALUES (10, 1, 'inbox', '42', 'Hello', '2026-01-01T00:00:00Z', 1, 0)
+                ",
+                [],
+            )
+            .expect("insert message");
+
+        let marked = db
+            .mark_mail_messages(MarkMailMessagesInput {
+                message_ids: vec![10],
+                is_read: true,
+                sync_remote: Some(true),
+            })
+            .expect("mark with remote failure");
+        assert!(!marked.success);
+        assert_eq!(marked.failed, 1);
+
+        let queued = db
+            .list_retry_queue(RetryQueueQuery::default())
+            .expect("retry queue");
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].task_type, "mail_mark");
+        assert_eq!(queued[0].action, "mark_read");
+
+        let retried = db
+            .run_retry_queue(Some(RetryQueueRunInput {
+                retry_id: Some(queued[0].id),
+                limit: None,
+            }))
+            .expect("retry item");
+        assert_eq!(retried.failed, 1);
+
+        let queued = db
+            .list_retry_queue(RetryQueueQuery::default())
+            .expect("retry queue after retry");
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].attempts, 1);
+        assert!(queued[0].next_attempt_at.is_some());
+
+        let dismissed = db
+            .dismiss_retry_item(RetryQueueItemInput {
+                retry_id: queued[0].id,
+            })
+            .expect("dismiss");
+        assert_eq!(dismissed.refreshed, 1);
+        assert!(db
+            .list_retry_queue(RetryQueueQuery::default())
+            .expect("empty queue")
+            .is_empty());
     }
 
     #[test]

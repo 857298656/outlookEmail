@@ -990,6 +990,13 @@ button:disabled {
   min-width: 130px;
 }
 
+.tableActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .logTable {
   display: grid;
   border: 1px solid #e5e7eb;
@@ -1016,6 +1023,11 @@ button:disabled {
   grid-template-columns: 150px minmax(190px, 1fr) 100px 100px minmax(240px, 1.4fr) 90px;
 }
 
+.retryQueueTable .logHeader,
+.retryQueueTable .logRow {
+  grid-template-columns: 140px 120px 100px minmax(160px, 1fr) minmax(190px, 1.1fr) 90px 140px minmax(220px, 1.4fr) 80px;
+}
+
 .automationLogTable .logHeader,
 .automationLogTable .logRow {
   grid-template-columns: 150px 100px 90px 100px 130px 90px minmax(260px, 1fr);
@@ -1032,6 +1044,13 @@ button:disabled {
   border-top: 1px solid #eef2f7;
   color: #273444;
   font-size: 13px;
+}
+
+.logRow > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .logRow > span {

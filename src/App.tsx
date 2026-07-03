@@ -37,6 +37,7 @@ import type {
   MailMessageQuery,
   Project,
   ProjectAccount,
+  RetryQueueItem,
   SchedulerStatus,
   Settings,
   Tag,
@@ -70,6 +71,7 @@ function App() {
   const [forwardingLogs, setForwardingLogs] = useState<ForwardingLog[]>([]);
   const [backupLogs, setBackupLogs] = useState<BackupLog[]>([]);
   const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
+  const [retryQueue, setRetryQueue] = useState<RetryQueueItem[]>([]);
   const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<number | "all">("all");
   const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>();
@@ -151,17 +153,19 @@ function App() {
   }
 
   async function loadAutomation() {
-    const [nextSettings, nextForwardingLogs, nextBackupLogs, nextAutomationRuns, nextSchedulerStatus] = await Promise.all([
+    const [nextSettings, nextForwardingLogs, nextBackupLogs, nextAutomationRuns, nextRetryQueue, nextSchedulerStatus] = await Promise.all([
       api.getSettings(),
       api.listForwardingLogs(80),
       api.listBackupLogs(40),
       api.listAutomationRuns({}, 80),
+      api.listRetryQueue({}, 80),
       api.schedulerStatus()
     ]);
     setSettings(nextSettings);
     setForwardingLogs(nextForwardingLogs);
     setBackupLogs(nextBackupLogs);
     setAutomationRuns(nextAutomationRuns);
+    setRetryQueue(nextRetryQueue);
     setSchedulerStatus(nextSchedulerStatus);
   }
 
@@ -559,6 +563,7 @@ function App() {
             forwardingLogs={forwardingLogs}
             backupLogs={backupLogs}
             automationRuns={automationRuns}
+            retryQueue={retryQueue}
             schedulerStatus={schedulerStatus}
             busy={busy}
             onSave={(nextSettings) =>
@@ -606,6 +611,27 @@ function App() {
                 const result = await api.clearAutomationRuns(query);
                 setNotice(result.message);
                 setAutomationRuns(await api.listAutomationRuns(query, 80));
+              })
+            }
+            onRunRetryQueue={() =>
+              runAction(async () => {
+                const result = await api.runRetryQueue(20);
+                setNotice(result.message);
+                await loadAutomation();
+              })
+            }
+            onRetryQueueItem={(retryId) =>
+              runAction(async () => {
+                const result = await api.retryQueueItem(retryId);
+                setNotice(result.message);
+                await loadAutomation();
+              })
+            }
+            onDismissRetryItem={(retryId) =>
+              runAction(async () => {
+                const result = await api.dismissRetryItem(retryId);
+                setNotice(result.message);
+                setRetryQueue(await api.listRetryQueue({}, 80));
               })
             }
           />
@@ -1838,6 +1864,7 @@ function SettingsView({
   forwardingLogs,
   backupLogs,
   automationRuns,
+  retryQueue,
   schedulerStatus,
   busy,
   onSave,
@@ -1845,13 +1872,17 @@ function SettingsView({
   onRunBackup,
   onRestoreBackup,
   onFilterAutomationRuns,
-  onClearAutomationRuns
+  onClearAutomationRuns,
+  onRunRetryQueue,
+  onRetryQueueItem,
+  onDismissRetryItem
 }: {
   status: AppStatus;
   settings: Settings;
   forwardingLogs: ForwardingLog[];
   backupLogs: BackupLog[];
   automationRuns: AutomationRun[];
+  retryQueue: RetryQueueItem[];
   schedulerStatus: SchedulerStatus | null;
   busy: boolean;
   onSave: (settings: Settings) => void;
@@ -1860,6 +1891,9 @@ function SettingsView({
   onRestoreBackup: (backupLogId: number) => void;
   onFilterAutomationRuns: (query: AutomationRunQuery) => void;
   onClearAutomationRuns: (query: AutomationRunQuery & { clear_all?: boolean }) => void;
+  onRunRetryQueue: () => void;
+  onRetryQueueItem: (retryId: number) => void;
+  onDismissRetryItem: (retryId: number) => void;
 }) {
   const [draft, setDraft] = useState(settings);
   const [runFilters, setRunFilters] = useState({ job_type: "all", trigger_type: "all", status: "all", search: "" });
@@ -2033,6 +2067,53 @@ function SettingsView({
 
       <div className="panel widePanel">
         <div className="panelHeader">
+          <h2>Retry queue</h2>
+          <RotateCcw size={18} />
+        </div>
+        <div className="tableActions">
+          <button className="button secondary" disabled={busy || retryQueue.length === 0} onClick={onRunRetryQueue}>
+            {busy ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />}
+            Run due retries
+          </button>
+        </div>
+        <div className="logTable retryQueueTable">
+          <div className="logHeader">
+            <span>Time</span>
+            <span>Task</span>
+            <span>Status</span>
+            <span>Account</span>
+            <span>Target</span>
+            <span>Attempts</span>
+            <span>Next</span>
+            <span>Error</span>
+            <span>Actions</span>
+          </div>
+          {retryQueue.map((item) => (
+            <div className="logRow" key={item.id}>
+              <span>{formatDate(item.updated_at)}</span>
+              <span>{formatRetryTask(item)}</span>
+              <StatusPill status={item.status} />
+              <span>{item.account_email || "-"}</span>
+              <span>{item.channel ? `${item.message_id} / ${item.channel}` : item.message_id}</span>
+              <span>{item.attempts} / {item.max_attempts}</span>
+              <span>{item.next_attempt_at ? formatDate(item.next_attempt_at) : "-"}</span>
+              <span>{item.error_message}</span>
+              <span className="rowActions">
+                <button className="iconMini" title="Retry now" disabled={busy} onClick={() => onRetryQueueItem(item.id)}>
+                  <RotateCcw size={14} />
+                </button>
+                <button className="iconMini danger" title="Dismiss" disabled={busy} onClick={() => onDismissRetryItem(item.id)}>
+                  <Trash2 size={14} />
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+        {retryQueue.length === 0 && <EmptyState icon={<RotateCcw size={24} />} text="No retry items pending." />}
+      </div>
+
+      <div className="panel widePanel">
+        <div className="panelHeader">
           <h2>Automation history</h2>
           <RefreshCw size={18} />
         </div>
@@ -2046,6 +2127,7 @@ function SettingsView({
             <option value="refresh">Refresh</option>
             <option value="forwarding">Forwarding</option>
             <option value="backup">Backup</option>
+            <option value="retry">Retry</option>
           </select>
           <select
             className="select"
@@ -2298,6 +2380,13 @@ function formatDuration(value: number) {
   if (!value) return "0 ms";
   if (value < 1000) return `${value} ms`;
   return `${(value / 1000).toFixed(1)} s`;
+}
+
+function formatRetryTask(item: RetryQueueItem) {
+  if (item.task_type === "mail_mark") return item.action === "mark_read" ? "Mark read" : "Mark unread";
+  if (item.task_type === "mail_delete") return "Delete mail";
+  if (item.task_type === "forward_message") return "Forward mail";
+  return item.task_type;
 }
 
 function exportNotice(result: ExportResult) {

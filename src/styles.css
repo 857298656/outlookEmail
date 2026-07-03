@@ -46,7 +46,7 @@ button:disabled {
 }
 
 .appShell.railExpanded {
-  grid-template-columns: 188px minmax(0, 1fr);
+  grid-template-columns: 208px minmax(0, 1fr);
 }
 
 .rail {
@@ -64,7 +64,7 @@ button:disabled {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 36px;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
   min-height: 44px;
   margin-bottom: 8px;
@@ -80,7 +80,7 @@ button:disabled {
   min-width: 0;
   overflow: hidden;
   color: #f8fafc;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
   line-height: 1.2;
   opacity: 0;

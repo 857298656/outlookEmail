@@ -291,6 +291,7 @@ export type Project = {
   scope_mode: string;
   status: string;
   group_ids: number[];
+  tag_ids: number[];
   stats: ProjectStats;
   created_at: string;
   updated_at: string;

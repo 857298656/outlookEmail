@@ -148,8 +148,17 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       mockTags = mockTags.filter((tag) => tag.id !== args?.tagId);
       return undefined as T;
     case "update_account": {
-      const input = args?.input as Partial<Account> & { id: number };
-      mockAccounts = mockAccounts.map((account) => (account.id === input.id ? { ...account, ...input } : account));
+      const input = args?.input as Partial<Account> & { id: number; tag_ids?: number[] };
+      const { tag_ids, ...accountInput } = input;
+      mockAccounts = mockAccounts.map((account) =>
+        account.id === input.id
+          ? {
+              ...account,
+              ...accountInput,
+              tags: tag_ids ? mockTags.filter((tag) => tag_ids.includes(tag.id)) : account.tags
+            }
+          : account
+      );
       return mockAccounts.find((account) => account.id === input.id) as T;
     }
     case "list_accounts":
@@ -452,7 +461,14 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     case "list_projects":
       return mockProjects as T;
     case "create_project": {
-      const input = args?.input as { name: string; project_key?: string; description?: string; scope_mode?: string; group_ids?: number[] };
+      const input = args?.input as {
+        name: string;
+        project_key?: string;
+        description?: string;
+        scope_mode?: string;
+        group_ids?: number[];
+        tag_ids?: number[];
+      };
       const project: Project = {
         id: Date.now(),
         name: input.name,
@@ -461,6 +477,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         scope_mode: input.scope_mode ?? "all",
         status: "active",
         group_ids: input.group_ids ?? [],
+        tag_ids: input.tag_ids ?? [],
         stats: { total: 0, to_claim: 0, claimed: 0, success: 0, failed: 0, removed: 0 },
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -512,8 +529,10 @@ function syncMockProject(projectId: number) {
   const project = mockProjects.find((item) => item.id === projectId);
   if (!project) return;
   const scopedAccounts = mockAccounts.filter((account) => {
-    if (project.scope_mode !== "groups") return account.status === "active";
-    return account.status === "active" && project.group_ids.includes(account.group_id ?? -1);
+    if (account.status !== "active") return false;
+    if (project.scope_mode === "groups") return project.group_ids.includes(account.group_id ?? -1);
+    if (project.scope_mode === "tags") return account.tags.some((tag) => project.tag_ids.includes(tag.id));
+    return true;
   });
   for (const account of scopedAccounts) {
     if (!mockProjectAccounts.some((item) => item.project_id === project.id && item.normalized_email === account.email)) {
@@ -799,6 +818,7 @@ export const api = {
     client_id?: string;
     refresh_token?: string;
     imap_password?: string;
+    tag_ids?: number[];
   }) => call<Account>("update_account", { input }),
   importAccounts: (input: { raw: string; group_id?: number | null }) =>
     call<ImportAccountsResult>("import_accounts", { input }),
@@ -870,7 +890,14 @@ export const api = {
   downloadAttachment: (input: { account_id: number; message_id: string; attachment_id: string; folder?: string }) =>
     call<{ path: string; file_name: string; size: number }>("download_attachment", { input }),
   listProjects: () => call<Project[]>("list_projects"),
-  createProject: (input: { name: string; project_key?: string; description?: string; scope_mode?: string; group_ids?: number[] }) =>
+  createProject: (input: {
+    name: string;
+    project_key?: string;
+    description?: string;
+    scope_mode?: string;
+    group_ids?: number[];
+    tag_ids?: number[];
+  }) =>
     call<Project>("create_project", { input }),
   getProject: (projectId: number) => call<Project>("get_project", { projectId }),
   syncProjectScope: (projectId: number) => call<Project>("sync_project_scope", { projectId }),

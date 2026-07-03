@@ -544,6 +544,7 @@ function App() {
             projects={projects}
             accounts={projectAccounts}
             groups={groups}
+            tags={tags}
             busy={busy}
             onCreate={(input) =>
               runAction(async () => {
@@ -1165,6 +1166,7 @@ function AccountsView({
       <AccountEditor
         account={selectedAccount}
         groups={groups}
+        tags={tags}
         settings={settings}
         busy={busy}
         oauthUrl={oauthUrl}
@@ -1522,6 +1524,7 @@ function ProjectsView({
   projects,
   accounts,
   groups,
+  tags,
   busy,
   onCreate,
   onSelect,
@@ -1533,8 +1536,16 @@ function ProjectsView({
   projects: Project[];
   accounts: ProjectAccount[];
   groups: Group[];
+  tags: Tag[];
   busy: boolean;
-  onCreate: (input: { name: string; project_key?: string; description?: string; scope_mode?: string; group_ids?: number[] }) => void;
+  onCreate: (input: {
+    name: string;
+    project_key?: string;
+    description?: string;
+    scope_mode?: string;
+    group_ids?: number[];
+    tag_ids?: number[];
+  }) => void;
   onSelect: (projectId: number) => void;
   onSync: (projectId: number) => void;
   onClaim: (projectId: number) => void;
@@ -1547,6 +1558,7 @@ function ProjectsView({
   const [description, setDescription] = useState("");
   const [scopeMode, setScopeMode] = useState("all");
   const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
+  const [selectedTagIds, setSelectedTagIds] = useState<number[]>([]);
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
 
@@ -1576,6 +1588,7 @@ function ProjectsView({
           <select className="select" value={scopeMode} onChange={(event) => setScopeMode(event.target.value)}>
             <option value="all">All active accounts</option>
             <option value="groups">Selected groups</option>
+            <option value="tags">Selected tags</option>
           </select>
           {scopeMode === "groups" && (
             <div className="groupPicker">
@@ -1595,16 +1608,41 @@ function ProjectsView({
               ))}
             </div>
           )}
+          {scopeMode === "tags" && (
+            <div className="groupPicker">
+              {tags.map((tag) => (
+                <label className="checkLine" key={tag.id}>
+                  <input
+                    type="checkbox"
+                    checked={selectedTagIds.includes(tag.id)}
+                    onChange={(event) => {
+                      setSelectedTagIds((current) =>
+                        event.target.checked ? [...current, tag.id] : current.filter((id) => id !== tag.id)
+                      );
+                    }}
+                  />
+                  <span className="dot" style={{ backgroundColor: tag.color }} />
+                  <span>{tag.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
           <button
             className="button primary fullWidth"
-            disabled={busy || !name.trim() || (scopeMode === "groups" && selectedGroupIds.length === 0)}
+            disabled={
+              busy ||
+              !name.trim() ||
+              (scopeMode === "groups" && selectedGroupIds.length === 0) ||
+              (scopeMode === "tags" && selectedTagIds.length === 0)
+            }
             onClick={() => {
               onCreate({
                 name,
                 project_key: projectKey || undefined,
                 description,
                 scope_mode: scopeMode,
-                group_ids: scopeMode === "groups" ? selectedGroupIds : []
+                group_ids: scopeMode === "groups" ? selectedGroupIds : [],
+                tag_ids: scopeMode === "tags" ? selectedTagIds : []
               });
               setName("");
               setProjectKey("");
@@ -1737,6 +1775,7 @@ function StatusPill({ status }: { status: string }) {
 function AccountEditor({
   account,
   groups,
+  tags,
   settings,
   busy,
   oauthUrl,
@@ -1748,6 +1787,7 @@ function AccountEditor({
 }: {
   account?: Account;
   groups: Group[];
+  tags: Tag[];
   settings: Settings | null;
   busy: boolean;
   oauthUrl: string;
@@ -1769,7 +1809,8 @@ function AccountEditor({
     password: "",
     client_id: "",
     refresh_token: "",
-    imap_password: ""
+    imap_password: "",
+    tag_ids: [] as number[]
   });
 
   useEffect(() => {
@@ -1786,10 +1827,11 @@ function AccountEditor({
       password: "",
       client_id: settings?.graph_client_id ?? "",
       refresh_token: "",
-      imap_password: ""
+      imap_password: "",
+      tag_ids: account.tags.map((tag) => tag.id)
     });
     onOauthCallbackChange("");
-  }, [account?.id, settings?.graph_client_id]);
+  }, [account?.id, account?.updated_at, settings?.graph_client_id]);
 
   if (!account) {
     return (
@@ -1842,6 +1884,28 @@ function AccountEditor({
         />
         <span>Forward cached messages for this account</span>
       </label>
+      {tags.length > 0 && (
+        <div className="groupPicker tagPicker">
+          {tags.map((tag) => (
+            <label className="checkLine" key={tag.id}>
+              <input
+                type="checkbox"
+                checked={draft.tag_ids.includes(tag.id)}
+                onChange={(event) => {
+                  setDraft((current) => ({
+                    ...current,
+                    tag_ids: event.target.checked
+                      ? [...current.tag_ids, tag.id]
+                      : current.tag_ids.filter((id) => id !== tag.id)
+                  }));
+                }}
+              />
+              <span className="dot" style={{ backgroundColor: tag.color }} />
+              <span>{tag.name}</span>
+            </label>
+          ))}
+        </div>
+      )}
       <div className="formLine">
         <input
           className="input grow"
@@ -1928,7 +1992,8 @@ function AccountEditor({
             client_id: draft.client_id || undefined,
             password: draft.password || undefined,
             imap_password: draft.imap_password || undefined,
-            refresh_token: draft.refresh_token || undefined
+            refresh_token: draft.refresh_token || undefined,
+            tag_ids: draft.tag_ids
           })
         }
       >

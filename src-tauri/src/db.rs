@@ -448,6 +448,9 @@ impl Database {
                 params![encrypted, existing_id],
             )?;
         }
+        if let Some(tag_ids) = input.tag_ids {
+            self.replace_account_tags(existing_id, tag_ids)?;
+        }
 
         self.audit("account.updated", "account", Some(existing_id), "")?;
         self.list_accounts()?
@@ -495,6 +498,7 @@ impl Database {
                 scope_mode,
                 status,
                 group_ids: self.project_group_ids(id)?,
+                tag_ids: self.project_tag_ids(id)?,
                 stats: self.project_stats(id)?,
                 created_at,
                 updated_at,
@@ -520,8 +524,8 @@ impl Database {
             return Err(AppError::InvalidInput("project name is required".to_string()));
         }
         let scope_mode = input.scope_mode.unwrap_or_else(|| "all".to_string());
-        if scope_mode != "all" && scope_mode != "groups" {
-            return Err(AppError::InvalidInput("project scope_mode must be all or groups".to_string()));
+        if !matches!(scope_mode.as_str(), "all" | "groups" | "tags") {
+            return Err(AppError::InvalidInput("project scope_mode must be all, groups, or tags".to_string()));
         }
         let project_key = input
             .project_key
@@ -541,6 +545,7 @@ impl Database {
         )?;
         let project_id = self.conn.last_insert_rowid();
         self.replace_project_group_scope(project_id, input.group_ids.unwrap_or_default())?;
+        self.replace_project_tag_scope(project_id, input.tag_ids.unwrap_or_default())?;
         self.sync_project_scope(project_id)?;
         self.audit("project.created", "project", Some(project_id), name)?;
         self.get_project(project_id)
@@ -554,7 +559,8 @@ impl Database {
             .optional()?
             .ok_or_else(|| AppError::InvalidInput("project not found".to_string()))?;
         let group_ids = self.project_group_ids(project_id)?;
-        let accounts = self.accounts_for_project_scope(&scope_mode, &group_ids)?;
+        let tag_ids = self.project_tag_ids(project_id)?;
+        let accounts = self.accounts_for_project_scope(&scope_mode, &group_ids, &tag_ids)?;
         for (account_id, email) in &accounts {
             let normalized = email.trim().to_ascii_lowercase();
             self.conn.execute(
@@ -2383,6 +2389,15 @@ impl Database {
                 FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS project_tag_scopes (
+                project_id INTEGER NOT NULL,
+                tag_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(project_id, tag_id),
+                FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS project_accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id INTEGER NOT NULL,
@@ -2674,10 +2689,30 @@ impl Database {
         collect_rows(rows)
     }
 
+    fn replace_account_tags(&self, account_id: i64, tag_ids: Vec<i64>) -> AppResult<()> {
+        self.conn
+            .execute("DELETE FROM account_tags WHERE account_id = ?", [account_id])?;
+        for tag_id in tag_ids {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO account_tags (account_id, tag_id) VALUES (?, ?)",
+                params![account_id, tag_id],
+            )?;
+        }
+        Ok(())
+    }
+
     fn project_group_ids(&self, project_id: i64) -> AppResult<Vec<i64>> {
         let mut stmt = self
             .conn
             .prepare("SELECT group_id FROM project_group_scopes WHERE project_id = ? ORDER BY group_id")?;
+        let rows = stmt.query_map([project_id], |row| row.get::<_, i64>(0))?;
+        collect_rows(rows)
+    }
+
+    fn project_tag_ids(&self, project_id: i64) -> AppResult<Vec<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT tag_id FROM project_tag_scopes WHERE project_id = ? ORDER BY tag_id")?;
         let rows = stmt.query_map([project_id], |row| row.get::<_, i64>(0))?;
         collect_rows(rows)
     }
@@ -2689,6 +2724,18 @@ impl Database {
             self.conn.execute(
                 "INSERT OR IGNORE INTO project_group_scopes (project_id, group_id) VALUES (?, ?)",
                 params![project_id, group_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn replace_project_tag_scope(&self, project_id: i64, tag_ids: Vec<i64>) -> AppResult<()> {
+        self.conn
+            .execute("DELETE FROM project_tag_scopes WHERE project_id = ?", [project_id])?;
+        for tag_id in tag_ids {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO project_tag_scopes (project_id, tag_id) VALUES (?, ?)",
+                params![project_id, tag_id],
             )?;
         }
         Ok(())
@@ -2720,24 +2767,44 @@ impl Database {
         Ok(stats)
     }
 
-    fn accounts_for_project_scope(&self, scope_mode: &str, group_ids: &[i64]) -> AppResult<Vec<(i64, String)>> {
+    fn accounts_for_project_scope(&self, scope_mode: &str, group_ids: &[i64], tag_ids: &[i64]) -> AppResult<Vec<(i64, String)>> {
         if scope_mode == "groups" && group_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let sql = if scope_mode == "groups" {
-            format!(
+        if scope_mode == "tags" && tag_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sql = match scope_mode {
+            "groups" => format!(
                 "SELECT id, email FROM accounts WHERE status = 'active' AND group_id IN ({}) ORDER BY email",
                 std::iter::repeat("?")
                     .take(group_ids.len())
                     .collect::<Vec<_>>()
                     .join(",")
-            )
-        } else {
-            "SELECT id, email FROM accounts WHERE status = 'active' ORDER BY email".to_string()
+            ),
+            "tags" => format!(
+                "
+                SELECT DISTINCT a.id, a.email
+                FROM accounts a
+                JOIN account_tags at ON at.account_id = a.id
+                WHERE a.status = 'active'
+                  AND at.tag_id IN ({})
+                ORDER BY a.email
+                ",
+                std::iter::repeat("?")
+                    .take(tag_ids.len())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+            _ => "SELECT id, email FROM accounts WHERE status = 'active' ORDER BY email".to_string(),
         };
         let mut stmt = self.conn.prepare(&sql)?;
         if scope_mode == "groups" {
             let params = rusqlite::params_from_iter(group_ids.iter());
+            let rows = stmt.query_map(params, |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
+            collect_rows(rows)
+        } else if scope_mode == "tags" {
+            let params = rusqlite::params_from_iter(tag_ids.iter());
             let rows = stmt.query_map(params, |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
             collect_rows(rows)
         } else {
@@ -4794,6 +4861,7 @@ mod project_tests {
         ExportMailMessagesInput, MarkMailMessagesInput, ProjectAccountActionInput,
         RefreshInput, RestoreBackupInput, RetryQueueItemInput, RetryQueueQuery,
         RetryQueueRunInput,
+        UpdateAccountInput,
     };
     use rusqlite::{params, Connection};
     use std::path::PathBuf;
@@ -4827,6 +4895,7 @@ mod project_tests {
                 description: None,
                 scope_mode: Some("all".to_string()),
                 group_ids: None,
+                tag_ids: None,
             })
             .expect("create project");
         assert_eq!(project.stats.to_claim, 1);
@@ -4849,6 +4918,107 @@ mod project_tests {
             .expect("success");
         assert_eq!(completed.status, "success");
         assert_eq!(db.get_project(project.id).expect("project").stats.success, 1);
+    }
+
+    #[test]
+    fn project_scope_can_sync_accounts_by_tags() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "
+                INSERT INTO accounts (id, email, status, group_id)
+                VALUES
+                    (1, 'core@example.com', 'active', 1),
+                    (2, 'warmup@example.com', 'active', 1),
+                    (3, 'disabled@example.com', 'disabled', 1)
+                ",
+                [],
+            )
+            .expect("insert accounts");
+        db.conn
+            .execute("INSERT INTO tags (id, name, color) VALUES (10, 'ProjectCore', '#2563eb'), (11, 'ProjectWarmup', '#16a34a')", [])
+            .expect("insert tags");
+
+        db.update_account(UpdateAccountInput {
+            id: 1,
+            email: "core@example.com".to_string(),
+            group_id: Some(1),
+            remark: None,
+            status: Some("active".to_string()),
+            provider: None,
+            account_type: None,
+            imap_host: None,
+            imap_port: None,
+            forward_enabled: None,
+            password: None,
+            client_id: None,
+            refresh_token: None,
+            imap_password: None,
+            tag_ids: Some(vec![10]),
+        })
+        .expect("tag core account");
+        db.update_account(UpdateAccountInput {
+            id: 2,
+            email: "warmup@example.com".to_string(),
+            group_id: Some(1),
+            remark: None,
+            status: Some("active".to_string()),
+            provider: None,
+            account_type: None,
+            imap_host: None,
+            imap_port: None,
+            forward_enabled: None,
+            password: None,
+            client_id: None,
+            refresh_token: None,
+            imap_password: None,
+            tag_ids: Some(vec![11]),
+        })
+        .expect("tag warmup account");
+        db.update_account(UpdateAccountInput {
+            id: 3,
+            email: "disabled@example.com".to_string(),
+            group_id: Some(1),
+            remark: None,
+            status: Some("disabled".to_string()),
+            provider: None,
+            account_type: None,
+            imap_host: None,
+            imap_port: None,
+            forward_enabled: None,
+            password: None,
+            client_id: None,
+            refresh_token: None,
+            imap_password: None,
+            tag_ids: Some(vec![10]),
+        })
+        .expect("tag disabled account");
+
+        let project = db
+            .create_project(CreateProjectInput {
+                name: "Tagged Project".to_string(),
+                project_key: None,
+                description: None,
+                scope_mode: Some("tags".to_string()),
+                group_ids: None,
+                tag_ids: Some(vec![10]),
+            })
+            .expect("create tagged project");
+        assert_eq!(project.scope_mode, "tags");
+        assert_eq!(project.tag_ids, vec![10]);
+        assert_eq!(project.stats.total, 1);
+        assert_eq!(project.stats.to_claim, 1);
+
+        let accounts = db.list_project_accounts(project.id).expect("project accounts");
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].email, "core@example.com");
+        assert_eq!(db.list_accounts().expect("accounts")[0].tags[0].name, "ProjectCore");
     }
 
     #[test]

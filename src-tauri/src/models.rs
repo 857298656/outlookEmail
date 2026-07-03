@@ -463,6 +463,7 @@ pub struct Project {
     pub scope_mode: String,
     pub status: String,
     pub group_ids: Vec<i64>,
+    pub tag_ids: Vec<i64>,
     pub stats: ProjectStats,
     pub created_at: String,
     pub updated_at: String,
@@ -517,6 +518,7 @@ pub struct CreateProjectInput {
     pub description: Option<String>,
     pub scope_mode: Option<String>,
     pub group_ids: Option<Vec<i64>>,
+    pub tag_ids: Option<Vec<i64>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -547,6 +549,7 @@ pub struct UpdateAccountInput {
     pub client_id: Option<String>,
     pub refresh_token: Option<String>,
     pub imap_password: Option<String>,
+    pub tag_ids: Option<Vec<i64>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -12,7 +12,7 @@ This version is intentionally local-first:
 
 ## Current implementation
 
-The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag management, local retained-mail workspace, advanced message search/sort/filter/pagination, sandboxed HTML body rendering, batch read/unread/delete actions with remote failure surfacing, local mail/account/project exports, settings storage, Microsoft Graph OAuth, Graph mailbox sync, Graph attachment metadata/download, basic TLS IMAP sync with cached-MIME attachment download, GPTMail/DuckMail/Cloudflare temp-mail management, SMTP/Telegram/WeCom forwarding, failed-operation retry queue, WebDAV backup and local restore, in-app scheduling with unified task history, desktop project account pools, and Windows desktop bundling.
+The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag management, account tag assignment, local retained-mail workspace, advanced message search/sort/filter/pagination, sandboxed HTML body rendering, batch read/unread/delete actions with remote failure surfacing, local mail/account/project exports, settings storage, Microsoft Graph OAuth, Graph mailbox sync, Graph attachment metadata/download, basic TLS IMAP sync with cached-MIME attachment download, GPTMail/DuckMail/Cloudflare temp-mail management, SMTP/Telegram/WeCom forwarding, failed-operation retry queue, WebDAV backup and local restore, in-app scheduling with unified task history, desktop project account pools, and Windows desktop bundling.
 
 See [`docs/requirements-milestones.md`](docs/requirements-milestones.md) for the full requirement record, completed scope, unfinished scope, and milestone plan.
 
@@ -81,4 +81,4 @@ The Temp Mail view manages GPTMail, DuckMail, and Cloudflare temporary addresses
 
 ## Project account pools
 
-Projects can sync all active accounts or accounts from selected groups into a local pool. Use the Projects view to claim an account, release it, mark it successful or failed, remove it from the pool, or restore it.
+Projects can sync all active accounts, accounts from selected groups, or accounts with selected tags into a local pool. Use the Projects view to claim an account, release it, mark it successful or failed, remove it from the pool, or restore it.

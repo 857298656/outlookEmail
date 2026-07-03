@@ -18,7 +18,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Local setup/unlock/lock flow
 - SQLite schema and default data
 - Account import with legacy delimiter support
-- Group and tag management
+- Group and tag management with account tag assignment
 - Cached message workspace
 - Settings persistence
 - Microsoft Graph OAuth and mailbox refresh
@@ -55,7 +55,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Restores are limited to successful backup log entries that resolve to local `.sqlite` snapshots under the app backup directory. The restore command validates the snapshot with SQLite `integrity_check`, creates a pre-restore safety snapshot, replaces the current database file set, reopens SQLite, and audits the restore.
 - Scheduled jobs only run while the local workspace is unlocked. Each scheduler tick also retries due pending retry queue items with backoff, including account refresh, temp-mail refresh, and backup retries.
 - Manual and scheduled automation jobs append status, counts, duration, and detail into `automation_runs`; the Settings UI can filter by job, trigger, status, and detail text before clearing matching rows. Retry jobs are recorded as `retry`.
-- Projects synchronize account scope into `project_accounts` and record claim/result events in `project_account_events`.
+- Projects synchronize all-account, group, or tag account scope into `project_accounts` and record claim/result events in `project_account_events`.
 - Exports are generated from local SQLite data under the app data `exports` directory. Mail HTML export escapes message content rather than executing raw message HTML.
 
 ## Next provider work

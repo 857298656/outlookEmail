@@ -37,6 +37,7 @@
 
 - 支持原项目账号导入格式。
 - 账号、分组、标签管理。
+- 账号编辑页支持分配和保存标签。
 - 账号授权编辑面板。
 - Microsoft Graph OAuth 授权 URL 生成。
 - OAuth code/callback token exchange。
@@ -68,7 +69,7 @@
 ### 项目账号池
 
 - 桌面项目管理视图。
-- 支持从全部账号或指定分组同步项目账号池。
+- 支持从全部账号、指定分组或指定标签同步项目账号池。
 - 支持账号状态流转：`toClaim`、`claimed`、`success`、`failed`、`removed`。
 - 支持领取、释放、成功、失败、移除、恢复。
 - 项目统计和账号事件日志。
@@ -137,6 +138,7 @@
   - `feat: add advanced mail search and sorting`
   - `feat: surface remote mail sync failures`
   - `feat: preserve failed remote deletes`
+  - `feat: sync project pools by tags`
 
 ## 未完成
 
@@ -162,7 +164,6 @@
 
 ### 项目池增强
 
-- 按标签同步项目账号池。
 - alias email 优先级。
 - 面向外部脚本的本地 HTTP API。
 - 领取 token 的外部校验和更严格租约策略。
@@ -200,7 +201,7 @@
 ### M3：项目账号池，已完成
 
 - 完成项目创建。
-- 完成账号池同步。
+- 完成全部账号、分组和标签范围的账号池同步。
 - 完成账号领取和状态流转。
 - 完成项目统计和事件记录。
 

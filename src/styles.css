@@ -39,9 +39,14 @@ button:disabled {
 
 .appShell {
   display: grid;
-  grid-template-columns: 72px 1fr;
+  grid-template-columns: 72px minmax(0, 1fr);
   height: 100vh;
   background: #fafafa;
+  transition: grid-template-columns 160ms ease;
+}
+
+.appShell.railExpanded {
+  grid-template-columns: 188px minmax(0, 1fr);
 }
 
 .rail {
@@ -54,6 +59,23 @@ button:disabled {
   color: #f8fafc;
 }
 
+.rail.expanded {
+  align-items: stretch;
+}
+
+.railHeader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+}
+
+.rail.expanded .railHeader {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
 .brandMark {
   display: grid;
   place-items: center;
@@ -63,6 +85,22 @@ button:disabled {
   background: #f8fafc;
   color: #111827;
   font-weight: 800;
+  flex: 0 0 44px;
+}
+
+.brandName {
+  display: none;
+  min-width: 0;
+  overflow: hidden;
+  color: #f8fafc;
+  font-size: 14px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail.expanded .brandName {
+  display: block;
 }
 
 .railButton,
@@ -78,6 +116,36 @@ button:disabled {
 .railButton {
   width: 44px;
   height: 44px;
+}
+
+.rail.expanded .railButton {
+  width: 100%;
+  grid-template-columns: 44px minmax(0, 1fr);
+  justify-items: start;
+  column-gap: 8px;
+  padding: 0;
+}
+
+.rail.expanded .railButton > svg {
+  justify-self: center;
+}
+
+.railLabel {
+  display: none;
+}
+
+.rail.expanded .railLabel {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.railToggle {
+  color: #cbd5e1;
 }
 
 .railButton:hover,

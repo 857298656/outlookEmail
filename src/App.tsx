@@ -1,6 +1,8 @@
 import {
   Archive,
   CheckCircle2,
+  ChevronsLeft,
+  ChevronsRight,
   Cloud,
   Download,
   FolderKanban,
@@ -93,6 +95,7 @@ function App() {
   const [mailPage, setMailPage] = useState(0);
   const [selectedMessageIds, setSelectedMessageIds] = useState<number[]>([]);
   const [view, setView] = useState<View>("mail");
+  const [railExpanded, setRailExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -242,9 +245,21 @@ function App() {
   }
 
   return (
-    <div className="appShell">
-      <aside className="rail">
-        <div className="brandMark">OE</div>
+    <div className={railExpanded ? "appShell railExpanded" : "appShell"}>
+      <aside className={railExpanded ? "rail expanded" : "rail"}>
+        <div className="railHeader">
+          <div className="brandMark">OE</div>
+          <span className="brandName">OutlookEmail</span>
+        </div>
+        <button
+          className="railButton railToggle"
+          title={railExpanded ? "收起侧边栏" : "展开侧边栏"}
+          aria-label={railExpanded ? "收起侧边栏" : "展开侧边栏"}
+          onClick={() => setRailExpanded((current) => !current)}
+        >
+          {railExpanded ? <ChevronsLeft size={20} /> : <ChevronsRight size={20} />}
+          <span className="railLabel">{railExpanded ? "收起侧边栏" : "展开侧边栏"}</span>
+        </button>
         <IconButton active={view === "mail"} title="邮箱" onClick={() => setView("mail")}>
           <Inbox size={20} />
         </IconButton>
@@ -2535,6 +2550,7 @@ function IconButton({
   return (
     <button className={active ? "railButton active" : "railButton"} title={title} aria-label={title} onClick={onClick}>
       {children}
+      <span className="railLabel">{title}</span>
     </button>
   );
 }

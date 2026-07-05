@@ -957,14 +957,6 @@ button:disabled {
 
 .accountGroupTree {
   max-height: calc(100vh - 190px);
-  border: 0;
-  border-radius: 0;
-  padding: 0;
-}
-
-.accountGroupTree .groupTreeButton:hover,
-.accountGroupTree .groupTreeButton.active {
-  border-color: transparent;
 }
 
 .accountInventorySearch {
@@ -1798,6 +1790,12 @@ button:disabled {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   padding: 6px;
+}
+
+.groupTree.accountGroupTree {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
 }
 
 .groupTreeButton {

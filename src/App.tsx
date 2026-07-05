@@ -1841,13 +1841,12 @@ function AccountsView({
         <div className="panelHeader">
           <h2>邮箱库存</h2>
           <div className="rowActions">
-            <span>{visibleAccounts.length}/{accounts.length} 个账号</span>
             <button className="iconMini" title="导出全部账号" disabled={accounts.length === 0 || busy} onClick={() => onExportAccounts()}>
               <Download size={15} />
             </button>
           </div>
         </div>
-        <label className="searchBox">
+        <label className="searchBox accountInventorySearch">
           <Search size={15} />
           <input
             value={accountSearch}

@@ -962,6 +962,15 @@ button:disabled {
   padding: 0;
 }
 
+.accountGroupTree .groupTreeButton:hover,
+.accountGroupTree .groupTreeButton.active {
+  border-color: transparent;
+}
+
+.accountInventorySearch {
+  margin: 12px 0 14px;
+}
+
 .panel {
   min-width: 0;
   border: 1px solid #dfe5ec;

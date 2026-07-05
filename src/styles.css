@@ -794,6 +794,7 @@ button:disabled {
   flex: 0 0 auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 22px;
   padding: 4px 30px 20px;
 }
@@ -821,10 +822,7 @@ button:disabled {
 }
 
 .mailPreviewIdentity {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
+  display: grid;
   min-width: 0;
 }
 
@@ -848,7 +846,15 @@ button:disabled {
   font-size: 13px;
 }
 
-.mailPreviewIdentity time {
+.mailPreviewHeaderActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 18px;
+  min-width: 0;
+}
+
+.mailPreviewHeaderActions time {
   flex: 0 0 auto;
   color: #64748b;
   font-size: 13px;

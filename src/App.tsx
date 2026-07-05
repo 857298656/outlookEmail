@@ -1594,32 +1594,32 @@ function MailWorkspace({
               </button>
             </div>
             <div className="detailHeader">
-              <div className="mailPreviewTitleBlock">
-                <div className="mailPreviewIdentity">
-                  <div>
-                    <strong>{selectedMessage.sender || "未知发件人"}</strong>
-                    <span>发送给 {selectedMessage.recipients || "我"}</span>
-                  </div>
-                  <time dateTime={selectedMessage.received_at}>{formatDate(selectedMessage.received_at)}</time>
+              <div className="mailPreviewIdentity">
+                <div>
+                  <strong>{selectedMessage.sender || "未知发件人"}</strong>
+                  <span>发送给 {selectedMessage.recipients || "我"}</span>
                 </div>
               </div>
-              <div className="detailActions">
-                <button className="button compact secondary" onClick={() => onMarkMessages([selectedMessage.id], !selectedMessage.is_read)}>
-                  {selectedMessage.is_read ? <Mail size={14} /> : <CheckCircle2 size={14} />}
-                  {selectedMessage.is_read ? "标为未读" : "标为已读"}
-                </button>
-                <button className="button compact secondary" disabled={rawBusy} onClick={() => handleViewRawMessage(selectedMessage)}>
-                  {rawBusy ? <Loader2 className="spin" size={14} /> : <FileText size={14} />}
-                  Raw
-                </button>
-                <button className="button compact secondary" onClick={() => onCreateMailShare([selectedMessage.id], accountMailRetentionDays)}>
-                  <Share2 size={14} />
-                  分享
-                </button>
-                <button className="button compact secondary" onClick={() => onExportMessages([selectedMessage.id])}>
-                  <Download size={14} />
-                  导出
-                </button>
+              <div className="mailPreviewHeaderActions">
+                <time dateTime={selectedMessage.received_at}>{formatDate(selectedMessage.received_at)}</time>
+                <div className="detailActions">
+                  <button className="button compact secondary" onClick={() => onMarkMessages([selectedMessage.id], !selectedMessage.is_read)}>
+                    {selectedMessage.is_read ? <Mail size={14} /> : <CheckCircle2 size={14} />}
+                    {selectedMessage.is_read ? "标为未读" : "标为已读"}
+                  </button>
+                  <button className="button compact secondary" disabled={rawBusy} onClick={() => handleViewRawMessage(selectedMessage)}>
+                    {rawBusy ? <Loader2 className="spin" size={14} /> : <FileText size={14} />}
+                    Raw
+                  </button>
+                  <button className="button compact secondary" onClick={() => onCreateMailShare([selectedMessage.id], accountMailRetentionDays)}>
+                    <Share2 size={14} />
+                    分享
+                  </button>
+                  <button className="button compact secondary" onClick={() => onExportMessages([selectedMessage.id])}>
+                    <Download size={14} />
+                    导出
+                  </button>
+                </div>
               </div>
             </div>
             <div className="mailPreviewContent">

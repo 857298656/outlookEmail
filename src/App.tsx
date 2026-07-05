@@ -1593,9 +1593,6 @@ function MailWorkspace({
                 <p>{selectedMessage.sender}</p>
               </div>
               <div className="detailActions">
-                <button className="iconMini" title="关闭预览" onClick={onMessageClose}>
-                  <X size={18} />
-                </button>
                 <button className="button compact secondary" onClick={() => onMarkMessages([selectedMessage.id], !selectedMessage.is_read)}>
                   {selectedMessage.is_read ? <Mail size={14} /> : <CheckCircle2 size={14} />}
                   {selectedMessage.is_read ? "标为未读" : "标为已读"}
@@ -1626,6 +1623,9 @@ function MailWorkspace({
                 <button className="button compact secondary" onClick={() => onExportMessages([selectedMessage.id])}>
                   <Download size={14} />
                   导出
+                </button>
+                <button className="iconMini previewCloseButton" title="关闭预览" onClick={onMessageClose}>
+                  <X size={18} />
                 </button>
               </div>
             </div>

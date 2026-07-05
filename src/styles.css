@@ -741,14 +741,18 @@ button:disabled {
 }
 
 .mailPreviewDialog {
-  width: min(980px, calc(100vw - 56px));
-  max-height: calc(100vh - 56px);
+  width: min(1200px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
   overflow: auto;
   border: 1px solid #dfe5ec;
   border-radius: 8px;
   background: #fff;
-  padding: 24px;
+  padding: 26px;
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
+}
+
+.previewCloseButton {
+  flex: 0 0 auto;
 }
 
 .detailHeader {
@@ -1658,7 +1662,7 @@ button:disabled {
   border-radius: 8px;
   background: #fff;
   color: #17202a;
-  padding: 0 11px;
+  padding: 0 32px 0 11px;
 }
 
 .field {

@@ -683,28 +683,107 @@ button:disabled {
 }
 
 .messageRow {
+  position: relative;
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  align-items: start;
-  gap: 10px;
-  padding: 12px 14px;
+  grid-template-columns: 20px minmax(0, 1fr) 154px;
+  align-items: center;
+  gap: 12px;
+  min-height: 46px;
+  padding: 0 14px;
   border-bottom: 1px solid #edf0f3;
   color: #17202a;
 }
 
-.messageRow input {
-  margin-top: 3px;
+.messageRow:hover,
+.messageRow:focus-within {
+  z-index: 1;
+  background: #f3f7fd;
+  box-shadow:
+    inset 0 1px 0 #d7dee8,
+    inset 0 -1px 0 #d7dee8,
+    0 1px 3px rgba(15, 23, 42, 0.14);
+}
+
+.messageRow.active {
+  background: var(--skin-accent-soft);
+}
+
+.messageSelect {
+  width: 15px;
+  height: 15px;
+  margin: 0;
 }
 
 .messageOpen {
   display: grid;
-  gap: 5px;
+  grid-template-columns: minmax(120px, 220px) minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  min-height: 46px;
   min-width: 0;
   border: 0;
   background: transparent;
   color: inherit;
   padding: 0;
   text-align: left;
+}
+
+.messageLine {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+
+.messageSubject {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: #17202a;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messageLine .preview {
+  min-width: 0;
+}
+
+.messageRowEnd {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.messageDate {
+  color: #64748b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.messageQuickActions {
+  display: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.messageQuickActions .iconMini {
+  width: 28px;
+  height: 28px;
+}
+
+.messageRow:hover .messageDate,
+.messageRow:focus-within .messageDate {
+  display: none;
+}
+
+.messageRow:hover .messageQuickActions,
+.messageRow:focus-within .messageQuickActions {
+  display: flex;
 }
 
 .remoteFailureInline {
@@ -718,12 +797,13 @@ button:disabled {
   font-weight: 650;
 }
 
-.messageOpen.unread .messageTop strong {
+.messageOpen.unread .sender,
+.messageOpen.unread .messageSubject {
   color: #0f172a;
   font-weight: 800;
 }
 
-.messageOpen.unread .messageTop strong::before {
+.messageOpen.unread .messageSubject::before {
   content: "";
   display: inline-block;
   width: 7px;
@@ -749,6 +829,14 @@ button:disabled {
 .preview {
   color: #64748b;
   font-size: 12px;
+}
+
+.messageOpen .sender,
+.messageLine .preview {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mailPreviewDialog {

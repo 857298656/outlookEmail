@@ -1542,25 +1542,70 @@ function MailWorkspace({
         {messages.map((message) => (
           <div key={message.id} className={selectedMessage?.id === message.id ? "messageRow active" : "messageRow"}>
             <input
+              className="messageSelect"
               type="checkbox"
               aria-label={`选择 ${message.subject || "邮件"}`}
               checked={selectedMessageIds.includes(message.id)}
               onChange={() => onToggleMessageSelect(message.id)}
             />
             <button className={message.is_read ? "messageOpen" : "messageOpen unread"} onClick={() => onMessageSelect(message.id)}>
-              <span className="messageTop">
-                <strong>{message.subject || "（无主题）"}</strong>
-                <small>{formatDate(message.received_at)}</small>
-              </span>
               <span className="sender">{message.sender}</span>
-              {message.remote_sync_failure && (
-                <span className="remoteFailureInline">
-                  <XCircle size={12} />
-                  {formatRemoteFailureAction(message.remote_sync_failure.action)} 远端同步失败
-                </span>
-              )}
-              <span className="preview">{message.body_preview}</span>
+              <span className="messageLine">
+                <strong className="messageSubject">{message.subject || "（无主题）"}</strong>
+                {message.remote_sync_failure && (
+                  <span className="remoteFailureInline">
+                    <XCircle size={12} />
+                    {formatRemoteFailureAction(message.remote_sync_failure.action)} 远端同步失败
+                  </span>
+                )}
+                <span className="preview">{message.body_preview}</span>
+              </span>
             </button>
+            <div className="messageRowEnd">
+              <small className="messageDate">{formatDate(message.received_at)}</small>
+              <div className="messageQuickActions" aria-label="邮件快捷操作">
+                <button
+                  className="iconMini"
+                  title={message.is_read ? "标为未读" : "标为已读"}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onMarkMessages([message.id], !message.is_read);
+                  }}
+                >
+                  {message.is_read ? <Mail size={15} /> : <CheckCircle2 size={15} />}
+                </button>
+                <button
+                  className="iconMini"
+                  title="分享"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onCreateMailShare([message.id], accountMailRetentionDays);
+                  }}
+                >
+                  <Share2 size={15} />
+                </button>
+                <button
+                  className="iconMini"
+                  title="导出"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onExportMessages([message.id]);
+                  }}
+                >
+                  <Download size={15} />
+                </button>
+                <button
+                  className="iconMini danger"
+                  title="删除"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDeleteMessages([message.id]);
+                  }}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            </div>
           </div>
         ))}
         {messages.length === 0 && <EmptyState icon={<Inbox size={24} />} text="暂无缓存邮件。" />}

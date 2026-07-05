@@ -1587,10 +1587,21 @@ function MailWorkspace({
           }}
         >
           <article className="mailPreviewDialog" role="dialog" aria-modal="true" aria-labelledby="mailPreviewTitle">
+            <div className="mailPreviewTopbar">
+              <button className="iconMini previewCloseButton" title="关闭预览" onClick={onMessageClose}>
+                <X size={18} />
+              </button>
+            </div>
             <div className="detailHeader">
-              <div>
+              <div className="mailPreviewTitleBlock">
                 <h2 id="mailPreviewTitle">{selectedMessage.subject || "（无主题）"}</h2>
-                <p>{selectedMessage.sender}</p>
+                <div className="mailPreviewIdentity">
+                  <div>
+                    <strong>{selectedMessage.sender || "未知发件人"}</strong>
+                    <span>发送给 {selectedMessage.recipients || "我"}</span>
+                  </div>
+                  <time dateTime={selectedMessage.received_at}>{formatDate(selectedMessage.received_at)}</time>
+                </div>
               </div>
               <div className="detailActions">
                 <button className="button compact secondary" onClick={() => onMarkMessages([selectedMessage.id], !selectedMessage.is_read)}>
@@ -1624,20 +1635,9 @@ function MailWorkspace({
                   <Download size={14} />
                   导出
                 </button>
-                <button className="iconMini previewCloseButton" title="关闭预览" onClick={onMessageClose}>
-                  <X size={18} />
-                </button>
               </div>
             </div>
             <div className="mailPreviewContent">
-              <div className="metaGrid">
-                <span>文件夹</span>
-                <strong>{selectedMessage.folder}</strong>
-                <span>状态</span>
-                <strong>{selectedMessage.is_read ? "已读" : "未读"}</strong>
-                <span>接收时间</span>
-                <strong>{formatDate(selectedMessage.received_at)}</strong>
-              </div>
               {selectedMessage.remote_sync_failure && (
                 <RemoteFailurePanel
                   failure={selectedMessage.remote_sync_failure}

@@ -753,8 +753,8 @@ button:disabled {
 
 .mailPreviewDialog {
   width: min(1200px, calc(100vw - 40px));
-  height: min(880px, calc(100vh - 24px));
-  max-height: calc(100vh - 24px);
+  height: min(920px, calc(100vh - 96px));
+  max-height: calc(100vh - 96px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -764,18 +764,44 @@ button:disabled {
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
 }
 
+.mailPreviewBackdrop {
+  padding: 48px 28px;
+}
+
+.mailPreviewTopbar {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  min-height: 42px;
+  padding: 10px 18px 0;
+}
+
 .previewCloseButton {
   flex: 0 0 auto;
 }
 
 .detailHeader {
-  flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 24px 26px 18px;
+  padding-bottom: 18px;
   border-bottom: 1px solid #e5e7eb;
+}
+
+.mailPreviewDialog .detailHeader {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 22px;
+  padding: 4px 30px 20px;
+}
+
+.mailPreviewTitleBlock {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
 }
 
 .detailHeader h2 {
@@ -784,26 +810,56 @@ button:disabled {
   line-height: 1.25;
 }
 
+.mailPreviewDialog .detailHeader h2 {
+  overflow-wrap: anywhere;
+  font-size: 26px;
+}
+
 .detailHeader p {
   margin: 8px 0 0;
   color: #64748b;
+}
+
+.mailPreviewIdentity {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  min-width: 0;
+}
+
+.mailPreviewIdentity > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.mailPreviewIdentity strong {
+  overflow: hidden;
+  color: #17202a;
+  font-size: 14px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mailPreviewIdentity span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.mailPreviewIdentity time {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .mailPreviewContent {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 20px 26px 26px;
-}
-
-.mailPreviewContent .metaGrid {
-  grid-template-columns: 72px minmax(0, 1fr) 54px minmax(0, 1fr) 80px minmax(0, 1.2fr);
-  align-items: center;
-  margin: 0 0 18px;
-  padding: 12px 14px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: #f8fafc;
+  padding: 24px 30px 34px;
 }
 
 .mailPreviewContent .messageBody,
@@ -815,6 +871,21 @@ button:disabled {
 
 .mailPreviewContent .attachmentList {
   max-width: 680px;
+}
+
+.mailPreviewContent .messageBody {
+  width: 100%;
+  min-height: 460px;
+  padding: 18px;
+  border: 1px solid #dfe5ec;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.mailPreviewContent .messageHtmlFrame {
+  max-width: none;
+  height: clamp(540px, calc(100vh - 360px), 720px);
+  min-height: 540px;
 }
 
 .metaGrid {

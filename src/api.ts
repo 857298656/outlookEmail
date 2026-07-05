@@ -289,7 +289,8 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
           imap_port: 993,
           proxy_url: "",
           fallback_proxy_url_1: "",
-          fallback_proxy_url_2: ""
+          fallback_proxy_url_2: "",
+          mail_retention_days: 30
         } satisfies Account;
       });
       mockAccounts = [...mockAccounts, ...nextAccounts];
@@ -698,7 +699,8 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         imap_port: 993,
         proxy_url: "",
         fallback_proxy_url_1: "",
-        fallback_proxy_url_2: ""
+        fallback_proxy_url_2: "",
+        mail_retention_days: 30
       };
       mockAccounts = [account, ...mockAccounts.filter((item) => item.email !== account.email)];
       return { success: true, account, scope: defaultGraphOAuthScope, expires_in: 3600, refresh_token_preview: "mock...oken" } as T;
@@ -1325,6 +1327,7 @@ export const api = {
     proxy_url?: string;
     fallback_proxy_url_1?: string;
     fallback_proxy_url_2?: string;
+    mail_retention_days?: number;
     forward_enabled?: boolean;
     password?: string;
     client_id?: string;

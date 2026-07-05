@@ -61,6 +61,7 @@ pub struct Account {
     pub proxy_url: String,
     pub fallback_proxy_url_1: String,
     pub fallback_proxy_url_2: String,
+    pub mail_retention_days: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -722,6 +723,7 @@ pub struct UpdateAccountInput {
     pub proxy_url: Option<String>,
     pub fallback_proxy_url_1: Option<String>,
     pub fallback_proxy_url_2: Option<String>,
+    pub mail_retention_days: Option<i64>,
     pub forward_enabled: Option<bool>,
     pub password: Option<String>,
     pub client_id: Option<String>,

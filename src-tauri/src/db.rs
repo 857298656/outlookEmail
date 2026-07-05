@@ -432,7 +432,7 @@ impl Database {
                    a.last_refresh_error, a.last_refresh_at, COUNT(m.id) AS message_count, a.created_at, a.updated_at,
                    a.password_enc, a.refresh_token_enc, a.imap_password_enc, COALESCE(a.imap_host, ''),
                    a.imap_port, COALESCE(a.proxy_url, ''), COALESCE(a.fallback_proxy_url_1, ''),
-                   COALESCE(a.fallback_proxy_url_2, '')
+                   COALESCE(a.fallback_proxy_url_2, ''), COALESCE(a.mail_retention_days, 30)
             FROM accounts a
             LEFT JOIN groups g ON g.id = a.group_id
             LEFT JOIN retained_mail_messages m ON m.account_id = a.id
@@ -468,6 +468,7 @@ impl Database {
                 proxy_url: row.get(20)?,
                 fallback_proxy_url_1: row.get(21)?,
                 fallback_proxy_url_2: row.get(22)?,
+                mail_retention_days: row.get(23)?,
             })
         })?;
 
@@ -534,6 +535,7 @@ impl Database {
             .ok_or_else(|| AppError::InvalidInput("account not found".to_string()))?;
         self.ensure_primary_email_is_not_alias(existing_id, &email)?;
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
+        let mail_retention_days = input.mail_retention_days.map(|days| days.clamp(1, 3650));
 
         self.conn.execute(
             "
@@ -549,6 +551,7 @@ impl Database {
                 proxy_url = COALESCE(?, proxy_url),
                 fallback_proxy_url_1 = COALESCE(?, fallback_proxy_url_1),
                 fallback_proxy_url_2 = COALESCE(?, fallback_proxy_url_2),
+                mail_retention_days = COALESCE(?, mail_retention_days),
                 forward_enabled = COALESCE(?, forward_enabled),
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
@@ -565,6 +568,7 @@ impl Database {
                 normalize_proxy_option(input.proxy_url.as_deref())?,
                 normalize_proxy_option(input.fallback_proxy_url_1.as_deref())?,
                 normalize_proxy_option(input.fallback_proxy_url_2.as_deref())?,
+                mail_retention_days,
                 input.forward_enabled.map(|enabled| if enabled { 1 } else { 0 }),
                 existing_id
             ],
@@ -3303,6 +3307,7 @@ impl Database {
                 proxy_url TEXT DEFAULT '',
                 fallback_proxy_url_1 TEXT DEFAULT '',
                 fallback_proxy_url_2 TEXT DEFAULT '',
+                mail_retention_days INTEGER NOT NULL DEFAULT 30,
                 last_refresh_at TEXT,
                 last_refresh_status TEXT NOT NULL DEFAULT 'never',
                 last_refresh_error TEXT,
@@ -3621,6 +3626,10 @@ impl Database {
             (
                 "refresh_token_updated_at",
                 "ALTER TABLE accounts ADD COLUMN refresh_token_updated_at TEXT",
+            ),
+            (
+                "mail_retention_days",
+                "ALTER TABLE accounts ADD COLUMN mail_retention_days INTEGER NOT NULL DEFAULT 30",
             ),
         ] {
             if !columns.iter().any(|column| column == name) {
@@ -7299,6 +7308,7 @@ mod project_tests {
             proxy_url: None,
             fallback_proxy_url_1: None,
             fallback_proxy_url_2: None,
+            mail_retention_days: None,
             forward_enabled: None,
             password: None,
             client_id: None,
@@ -7321,6 +7331,7 @@ mod project_tests {
             proxy_url: None,
             fallback_proxy_url_1: None,
             fallback_proxy_url_2: None,
+            mail_retention_days: None,
             forward_enabled: None,
             password: None,
             client_id: None,
@@ -7343,6 +7354,7 @@ mod project_tests {
             proxy_url: None,
             fallback_proxy_url_1: None,
             fallback_proxy_url_2: None,
+            mail_retention_days: None,
             forward_enabled: None,
             password: None,
             client_id: None,
@@ -7606,6 +7618,7 @@ mod project_tests {
             proxy_url: None,
             fallback_proxy_url_1: None,
             fallback_proxy_url_2: None,
+            mail_retention_days: None,
             forward_enabled: None,
             password: None,
             client_id: None,
@@ -7681,6 +7694,7 @@ mod project_tests {
             proxy_url: Some("http://account-proxy:8080".to_string()),
             fallback_proxy_url_1: Some("http://account-proxy:8080".to_string()),
             fallback_proxy_url_2: Some("https://account-backup:8443".to_string()),
+            mail_retention_days: Some(90),
             forward_enabled: None,
             password: None,
             client_id: None,
@@ -7690,6 +7704,7 @@ mod project_tests {
             aliases: None,
         })
         .expect("set account proxy");
+        assert_eq!(db.list_accounts().expect("accounts")[0].mail_retention_days, 90);
 
         let overridden = db.account_credentials(Some(1)).expect("credentials");
         assert_eq!(
@@ -7812,6 +7827,7 @@ mod project_tests {
             proxy_url: None,
             fallback_proxy_url_1: None,
             fallback_proxy_url_2: None,
+            mail_retention_days: None,
             forward_enabled: None,
             password: None,
             client_id: None,

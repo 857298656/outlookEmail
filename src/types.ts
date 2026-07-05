@@ -52,6 +52,7 @@ export type Account = {
   proxy_url: string;
   fallback_proxy_url_1: string;
   fallback_proxy_url_2: string;
+  mail_retention_days: number;
 };
 
 export type AccountSecretsPreview = {

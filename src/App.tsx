@@ -1264,10 +1264,11 @@ function MailWorkspace({
   const [rawContent, setRawContent] = useState<MailRawContent | null>(null);
   const [rawBusy, setRawBusy] = useState(false);
   const [rawError, setRawError] = useState<string | null>(null);
-  const [shareExpiresInDays, setShareExpiresInDays] = useState(30);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [oauthSaveOpen, setOauthSaveOpen] = useState(false);
   const selectedCount = selectedMessageIds.length;
+  const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
+  const accountMailRetentionDays = Math.max(1, Math.min(3650, selectedAccount?.mail_retention_days ?? 30));
   const visibleShareRecords = useMemo(
     () =>
       selectedAccountId
@@ -1529,7 +1530,7 @@ function MailWorkspace({
               <Download size={14} />
               导出
             </button>
-            <button className="button compact secondary" onClick={() => onCreateMailShare(selectedMessageIds, shareExpiresInDays)}>
+            <button className="button compact secondary" onClick={() => onCreateMailShare(selectedMessageIds, accountMailRetentionDays)}>
               <Share2 size={14} />
               分享
             </button>
@@ -1586,7 +1587,7 @@ function MailWorkspace({
             if (event.target === event.currentTarget) onMessageClose();
           }}
         >
-          <article className="mailPreviewDialog" role="dialog" aria-modal="true" aria-labelledby="mailPreviewTitle">
+          <article className="mailPreviewDialog" role="dialog" aria-modal="true" aria-label="邮件预览">
             <div className="mailPreviewTopbar">
               <button className="iconMini previewCloseButton" title="关闭预览" onClick={onMessageClose}>
                 <X size={18} />
@@ -1594,7 +1595,6 @@ function MailWorkspace({
             </div>
             <div className="detailHeader">
               <div className="mailPreviewTitleBlock">
-                <h2 id="mailPreviewTitle">{selectedMessage.subject || "（无主题）"}</h2>
                 <div className="mailPreviewIdentity">
                   <div>
                     <strong>{selectedMessage.sender || "未知发件人"}</strong>
@@ -1608,26 +1608,11 @@ function MailWorkspace({
                   {selectedMessage.is_read ? <Mail size={14} /> : <CheckCircle2 size={14} />}
                   {selectedMessage.is_read ? "标为未读" : "标为已读"}
                 </button>
-                <button className="button compact danger" onClick={() => onDeleteMessages([selectedMessage.id])}>
-                  <Trash2 size={14} />
-                  删除
-                </button>
                 <button className="button compact secondary" disabled={rawBusy} onClick={() => handleViewRawMessage(selectedMessage)}>
                   {rawBusy ? <Loader2 className="spin" size={14} /> : <FileText size={14} />}
                   Raw
                 </button>
-                <label className="compactNumberField">
-                  <span>过期</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={365}
-                    value={shareExpiresInDays}
-                    onChange={(event) => setShareExpiresInDays(Math.max(1, Math.min(365, Number(event.target.value) || 1)))}
-                  />
-                  <span>天</span>
-                </label>
-                <button className="button compact secondary" onClick={() => onCreateMailShare([selectedMessage.id], shareExpiresInDays)}>
+                <button className="button compact secondary" onClick={() => onCreateMailShare([selectedMessage.id], accountMailRetentionDays)}>
                   <Share2 size={14} />
                   分享
                 </button>
@@ -2081,7 +2066,7 @@ function AccountsView({
               <span className="rowActions accountRowActions">
                 <button
                   className="iconMini"
-                  title="授权设置"
+                  title="账号设置"
                   onClick={(event) => {
                     event.stopPropagation();
                     setSelectedAccountId(account.id);
@@ -3975,7 +3960,7 @@ function AccountAuthDialog({
             <span className="oauthDialogIcon">
               <KeyRound size={18} />
             </span>
-            <h2 id="accountAuthTitle">授权设置 · {account.email}</h2>
+            <h2 id="accountAuthTitle">账号设置 · {account.email}</h2>
           </div>
           <button className="iconMini" title="关闭" disabled={busy} onClick={onClose}>
             <X size={18} />
@@ -4046,6 +4031,7 @@ function AccountEditor({
     proxy_url: "",
     fallback_proxy_url_1: "",
     fallback_proxy_url_2: "",
+    mail_retention_days: 30,
     password: "",
     client_id: "",
     refresh_token: "",
@@ -4072,6 +4058,7 @@ function AccountEditor({
       proxy_url: account.proxy_url,
       fallback_proxy_url_1: account.fallback_proxy_url_1,
       fallback_proxy_url_2: account.fallback_proxy_url_2,
+      mail_retention_days: account.mail_retention_days ?? 30,
       password: "",
       client_id: settings?.graph_client_id || defaultGraphClientId,
       refresh_token: "",
@@ -4136,6 +4123,22 @@ function AccountEditor({
           onChange={(event) => setDraft({ ...draft, forward_enabled: event.target.checked })}
         />
         <span>转发此账号的缓存邮件</span>
+      </label>
+      <label className="field">
+        邮箱保留天数
+        <input
+          className="input"
+          type="number"
+          min={1}
+          max={3650}
+          value={draft.mail_retention_days}
+          onChange={(event) =>
+            setDraft({
+              ...draft,
+              mail_retention_days: Math.max(1, Math.min(3650, Number(event.target.value) || 30))
+            })
+          }
+        />
       </label>
       <textarea
         className="textarea compact"
@@ -4334,6 +4337,7 @@ function AccountEditor({
             proxy_url: draft.proxy_url,
             fallback_proxy_url_1: draft.fallback_proxy_url_1,
             fallback_proxy_url_2: draft.fallback_proxy_url_2,
+            mail_retention_days: draft.mail_retention_days,
             client_id: draft.client_id || undefined,
             password: draft.password || undefined,
             imap_password: draft.imap_password || undefined,

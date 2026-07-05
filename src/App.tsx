@@ -2326,11 +2326,14 @@ function OAuthAccountSaveDialog({
   }, []);
 
   function updateDraft(next: Partial<OAuthAccountSaveDraft>) {
+    const shouldResetPreview = "client_id" in next || "callback_url" in next;
     setDraft((current) => ({ ...current, ...next }));
     if ("client_id" in next || "email" in next) {
       setAuthUrl("");
     }
-    setPreview(null);
+    if (shouldResetPreview) {
+      setPreview(null);
+    }
     setLocalError(null);
   }
 
@@ -2572,11 +2575,11 @@ function OAuthAccountSaveDialog({
               <div className="oauthFieldGrid">
                 <label className="field grow">
                   邮箱
-                  <input className="input" readOnly value={preview.email || "未填写"} />
+                  <input className="input" readOnly value={draft.email.trim() || "未填写"} />
                 </label>
                 <label className="field grow">
                   目标分组
-                  <input className="input" readOnly value={preview.group_name || "未选择"} />
+                  <input className="input" readOnly value={groups.find((group) => group.id === draft.group_id)?.name || "未选择"} />
                 </label>
                 <label className="field grow">
                   Client ID
@@ -2598,13 +2601,13 @@ function OAuthAccountSaveDialog({
           <button className="button secondary" disabled={loading} onClick={onClose}>
             关闭
           </button>
-          <button className="button primary" disabled={loading} onClick={handlePreview}>
+          <button className="button primary" disabled={loading || !!preview} onClick={handlePreview}>
             {localBusy === "preview" ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />}
-            换取并预览
+            {preview ? "已换取" : "换取并预览"}
           </button>
           <button className="button primary" disabled={loading} onClick={handleSave}>
             {localBusy === "save" ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />}
-            直接保存（自动换取）
+            {preview ? "保存预览结果" : "直接保存（自动换取）"}
           </button>
         </div>
       </div>

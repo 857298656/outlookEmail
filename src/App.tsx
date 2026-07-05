@@ -2357,6 +2357,8 @@ function OAuthAccountSaveDialog({
         provider: "graph"
       });
       setAuthUrl(url);
+      setDraft((current) => ({ ...current, callback_url: "" }));
+      setPreview(null);
     } catch (err) {
       setLocalError(readError(err));
     } finally {
@@ -2374,7 +2376,11 @@ function OAuthAccountSaveDialog({
   }
 
   function handleOpenUrl() {
-    if (authUrl) window.open(authUrl, "_blank", "noopener,noreferrer");
+    if (!authUrl) return;
+    setDraft((current) => ({ ...current, callback_url: "" }));
+    setPreview(null);
+    setLocalError(null);
+    window.open(authUrl, "_blank", "noopener,noreferrer");
   }
 
   async function handlePreview() {
@@ -5272,9 +5278,16 @@ function exportNotice(result: ExportResult) {
 }
 
 function readError(err: unknown) {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "object" && err && "message" in err) return String((err as { message: unknown }).message);
-  return String(err);
+  const message =
+    err instanceof Error
+      ? err.message
+      : typeof err === "object" && err && "message" in err
+        ? String((err as { message: unknown }).message)
+        : String(err);
+  if (message.includes("AADSTS70000") || message.includes("code has expired")) {
+    return "OAuth 授权码已过期或已被使用，请重新点击“打开”完成授权，然后粘贴新的回调 URL。";
+  }
+  return message.replace(/^invalid input:\s*/i, "").replace(/^internal error:\s*/i, "");
 }
 
 export default App;

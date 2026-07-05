@@ -790,11 +790,9 @@ fn random_temp_username() -> String {
 
 fn parse_token_response(response: reqwest::blocking::Response) -> AppResult<OAuthTokenResponse> {
     if !response.status().is_success() {
-        return Err(AppError::Internal(format!(
-            "OAuth token request failed: HTTP {} {}",
-            response.status(),
-            response.text().unwrap_or_default()
-        )));
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(oauth_token_error(status, &body));
     }
     let token: GraphTokenWire = response.json().map_err(network_error)?;
     Ok(OAuthTokenResponse {
@@ -803,6 +801,38 @@ fn parse_token_response(response: reqwest::blocking::Response) -> AppResult<OAut
         expires_in: token.expires_in.unwrap_or_default(),
         scope: token.scope.unwrap_or_default(),
     })
+}
+
+fn oauth_token_error(status: reqwest::StatusCode, body: &str) -> AppError {
+    let parsed = serde_json::from_str::<Value>(body).ok();
+    let error = parsed
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let description = parsed
+        .as_ref()
+        .and_then(|value| value.get("error_description"))
+        .and_then(Value::as_str)
+        .unwrap_or(body);
+    let lower = format!("{error} {description}").to_ascii_lowercase();
+
+    if lower.contains("aadsts70000")
+        || lower.contains("code has expired")
+        || lower.contains("provided value for the 'code' parameter is not valid")
+    {
+        return AppError::InvalidInput(
+            "OAuth 授权码已过期或已被使用，请重新点击“打开”完成授权，然后粘贴新的回调 URL。".to_string(),
+        );
+    }
+
+    if lower.contains("invalid_grant") {
+        return AppError::InvalidInput(
+            "OAuth 授权码无效，请重新打开授权页面并复制新的完整回调 URL。".to_string(),
+        );
+    }
+
+    AppError::Internal(format!("OAuth token request failed: HTTP {status} {description}"))
 }
 
 fn fetch_graph_attachments_metadata(client: &Client, access_token: &str, message_id: &str) -> AppResult<Vec<AttachmentInfo>> {
@@ -832,7 +862,8 @@ fn fetch_graph_attachments_metadata(client: &Client, access_token: &str, message
 }
 
 fn extract_code(code_or_url: &str) -> AppResult<String> {
-    let value = code_or_url.trim();
+    let compact = code_or_url.split_whitespace().collect::<String>();
+    let value = compact.trim();
     if value.is_empty() {
         return Err(AppError::InvalidInput("OAuth code or callback URL is required".to_string()));
     }

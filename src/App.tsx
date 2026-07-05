@@ -578,6 +578,7 @@ function App() {
               })
             }
             onMessageSelect={setSelectedMessageId}
+            onMessageClose={() => setSelectedMessageId(undefined)}
             onToggleMessageSelect={(messageId) =>
               setSelectedMessageIds((current) =>
                 current.includes(messageId) ? current.filter((id) => id !== messageId) : [...current, messageId]
@@ -1196,6 +1197,7 @@ function MailWorkspace({
   onAccountSelect,
   onFolderChange,
   onMessageSelect,
+  onMessageClose,
   onToggleMessageSelect,
   onSelectVisibleMessages,
   onClearSelection,
@@ -1234,6 +1236,7 @@ function MailWorkspace({
   onAccountSelect: (accountId: number) => void;
   onFolderChange: (folder: string) => void;
   onMessageSelect: (messageId: number) => void;
+  onMessageClose: () => void;
   onToggleMessageSelect: (messageId: number) => void;
   onSelectVisibleMessages: () => void;
   onClearSelection: () => void;
@@ -1576,15 +1579,23 @@ function MailWorkspace({
         )}
       </section>
 
-      <article className="pane detailPane">
-        {selectedMessage ? (
-          <>
+      {selectedMessage && (
+        <div
+          className="oauthDialogBackdrop mailPreviewBackdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) onMessageClose();
+          }}
+        >
+          <article className="mailPreviewDialog" role="dialog" aria-modal="true" aria-labelledby="mailPreviewTitle">
             <div className="detailHeader">
               <div>
-                <h2>{selectedMessage.subject || "（无主题）"}</h2>
+                <h2 id="mailPreviewTitle">{selectedMessage.subject || "（无主题）"}</h2>
                 <p>{selectedMessage.sender}</p>
               </div>
               <div className="detailActions">
+                <button className="iconMini" title="关闭预览" onClick={onMessageClose}>
+                  <X size={18} />
+                </button>
                 <button className="button compact secondary" onClick={() => onMarkMessages([selectedMessage.id], !selectedMessage.is_read)}>
                   {selectedMessage.is_read ? <Mail size={14} /> : <CheckCircle2 size={14} />}
                   {selectedMessage.is_read ? "标为未读" : "标为已读"}
@@ -1677,11 +1688,9 @@ function MailWorkspace({
                 ))}
               </div>
             )}
-          </>
-        ) : (
-          <EmptyState icon={<Mail size={24} />} text="请选择一封邮件。" />
-        )}
-      </article>
+          </article>
+        </div>
+      )}
     </section>
   );
 }
@@ -2542,7 +2551,7 @@ function OAuthAccountSaveDialog({
   const [draft, setDraft] = useState<OAuthAccountSaveDraft>({
     email: "",
     password: "",
-    client_id: settings?.graph_client_id || defaultGraphClientId,
+    client_id: "",
     group_id: initialGroupId,
     forward_enabled: false,
     callback_url: ""
@@ -2564,6 +2573,7 @@ function OAuthAccountSaveDialog({
   const [localError, setLocalError] = useState<string | null>(null);
   const [localNotice, setLocalNotice] = useState<string | null>(null);
   const redirectUri = settings?.oauth_redirect_uri || defaultOAuthRedirectUri;
+  const defaultClientId = settings?.graph_client_id || defaultGraphClientId;
   const loading = busy || localBusy !== null;
 
   useEffect(() => {
@@ -2575,8 +2585,7 @@ function OAuthAccountSaveDialog({
 
   useEffect(() => {
     let cancelled = false;
-    const clientId = draft.client_id.trim();
-    if (!clientId) return;
+    const clientId = draft.client_id.trim() || defaultClientId;
 
     setLocalBusy("url");
     onGenerateOAuthUrl({
@@ -2598,14 +2607,11 @@ function OAuthAccountSaveDialog({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [defaultClientId, draft.client_id, draft.email, redirectUri, onGenerateOAuthUrl]);
 
   function updateDraft(next: Partial<OAuthAccountSaveDraft>) {
     const shouldResetPreview = "client_id" in next || "callback_url" in next;
     setDraft((current) => ({ ...current, ...next }));
-    if ("client_id" in next || "email" in next) {
-      setAuthUrl("");
-    }
     if (shouldResetPreview) {
       setPreview(null);
     }
@@ -2614,36 +2620,8 @@ function OAuthAccountSaveDialog({
   }
 
   function validateBase(requireCallback: boolean) {
-    const clientId = draft.client_id.trim();
-    if (!clientId) return "请先填写 Microsoft Client ID";
     if (requireCallback && !draft.callback_url.trim()) return "请粘贴授权后的完整回调 URL";
     return null;
-  }
-
-  async function handleGenerateUrl() {
-    const validation = validateBase(false);
-    if (validation) {
-      setLocalError(validation);
-      return;
-    }
-    setLocalBusy("url");
-    setLocalError(null);
-    setLocalNotice(null);
-    try {
-      const url = await onGenerateOAuthUrl({
-        client_id: draft.client_id.trim(),
-        redirect_uri: redirectUri,
-        login_hint: draft.email.trim() || undefined,
-        provider: "graph"
-      });
-      setAuthUrl(url);
-      setDraft((current) => ({ ...current, callback_url: "" }));
-      setPreview(null);
-    } catch (err) {
-      setLocalError(readError(err));
-    } finally {
-      setLocalBusy(null);
-    }
   }
 
   async function handleCopyUrl() {
@@ -2686,7 +2664,7 @@ function OAuthAccountSaveDialog({
     setLocalNotice(null);
     try {
       const result = await onPreviewOAuthToken({
-        client_id: draft.client_id.trim(),
+        client_id: draft.client_id.trim() || defaultClientId,
         redirect_uri: redirectUri,
         code_or_url: draft.callback_url.trim(),
         provider: "graph"
@@ -2695,10 +2673,11 @@ function OAuthAccountSaveDialog({
         throw new Error("OAuth 响应没有返回 refresh token");
       }
       const group = groups.find((item) => item.id === draft.group_id);
+      const clientId = draft.client_id.trim() || defaultClientId;
       setPreview({
         email: draft.email.trim(),
         password: draft.password,
-        client_id: draft.client_id.trim(),
+        client_id: clientId,
         group_id: draft.group_id ?? null,
         group_name: group?.name ?? "",
         forward_enabled: draft.forward_enabled,
@@ -2735,7 +2714,7 @@ function OAuthAccountSaveDialog({
         password: draft.password || undefined,
         group_id: draft.group_id ?? undefined,
         forward_enabled: draft.forward_enabled,
-        client_id: preview?.client_id ?? draft.client_id.trim(),
+        client_id: preview?.client_id ?? (draft.client_id.trim() || defaultClientId),
         redirect_uri: redirectUri,
         code_or_url: preview ? undefined : draft.callback_url.trim(),
         refresh_token: preview?.refresh_token,
@@ -2798,7 +2777,7 @@ function OAuthAccountSaveDialog({
                 <input
                   className="input"
                   value={draft.client_id}
-                  placeholder="Azure 应用 Client ID"
+                  placeholder="留空使用默认 Client ID"
                   onChange={(event) => updateDraft({ client_id: event.target.value })}
                 />
               </label>
@@ -2830,7 +2809,7 @@ function OAuthAccountSaveDialog({
           <section className="oauthStep">
             <h3>步骤 1: 打开授权页面</h3>
             <div className="oauthUrlLine">
-              <input className="input grow monoInput" readOnly value={authUrl} placeholder="点击生成后显示 Microsoft 授权链接" />
+              <input className="input grow monoInput" readOnly value={authUrl} placeholder="正在准备 Microsoft 授权链接" />
               <button className="button secondary" disabled={loading || !authUrl} onClick={handleCopyUrl}>
                 <Copy size={16} />
                 复制
@@ -2841,10 +2820,6 @@ function OAuthAccountSaveDialog({
               </button>
             </div>
             {localNotice && <div className="formSuccess">{localNotice}</div>}
-            <button className="button secondary" disabled={loading} onClick={handleGenerateUrl}>
-              {localBusy === "url" ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />}
-              生成授权链接
-            </button>
           </section>
 
           <section className="oauthStep">

@@ -343,7 +343,7 @@ button:disabled {
 
 .workspaceGrid {
   display: grid;
-  grid-template-columns: 340px minmax(320px, 0.95fr) minmax(360px, 1.2fr);
+  grid-template-columns: 340px minmax(0, 1fr);
   gap: 1px;
   min-height: 0;
   background: #d7dde4;
@@ -740,8 +740,15 @@ button:disabled {
   font-size: 12px;
 }
 
-.detailPane {
+.mailPreviewDialog {
+  width: min(980px, calc(100vw - 56px));
+  max-height: calc(100vh - 56px);
+  overflow: auto;
+  border: 1px solid #dfe5ec;
+  border-radius: 8px;
+  background: #fff;
   padding: 24px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
 }
 
 .detailHeader {

@@ -765,12 +765,7 @@ button:disabled {
 }
 
 .mailPreviewBackdrop {
-  left: 72px;
   padding: 48px 28px;
-}
-
-.appShell.railExpanded .mailPreviewBackdrop {
-  left: 208px;
 }
 
 .mailPreviewTopbar {
@@ -780,6 +775,18 @@ button:disabled {
   align-items: center;
   min-height: 42px;
   padding: 10px 18px 0;
+}
+
+@media (max-width: 1440px) {
+  .mailPreviewBackdrop {
+    left: 72px;
+  }
+}
+
+@media (max-width: 1680px) {
+  .appShell.railExpanded .mailPreviewBackdrop {
+    left: 208px;
+  }
 }
 
 .previewCloseButton {

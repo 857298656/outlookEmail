@@ -765,7 +765,12 @@ button:disabled {
 }
 
 .mailPreviewBackdrop {
+  left: 72px;
   padding: 48px 28px;
+}
+
+.appShell.railExpanded .mailPreviewBackdrop {
+  left: 208px;
 }
 
 .mailPreviewTopbar {

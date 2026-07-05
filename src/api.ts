@@ -415,13 +415,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       mockSettings = args?.settings as Settings;
       return mockSettings as T;
     case "run_refresh_job": {
-      const input = args?.input as {
-        account_id?: number | null;
-        trigger_type?: "manual" | "schedule" | "retry" | "live";
-        record_history?: boolean;
-      } | undefined;
-      const triggerType = input?.trigger_type ?? "manual";
-      const recordHistory = input?.record_history ?? true;
+      const input = args?.input as { account_id?: number | null } | undefined;
       const refreshedAt = new Date().toISOString();
       const targetAccounts = input?.account_id ? mockAccounts.filter((account) => account.id === input.account_id) : mockAccounts;
       mockSchedulerStatus.last_refresh_at = refreshedAt;
@@ -430,27 +424,24 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
           ? { ...account, last_refresh_status: "success", last_refresh_error: null, last_refresh_at: refreshedAt, updated_at: refreshedAt }
           : account
       );
-      if (recordHistory) {
-        mockRefreshLogs = [
-          ...targetAccounts.map((account, index) => ({
-            id: Date.now() + index,
-            account_id: account.id,
-            account_email: account.email,
-            refresh_type: triggerType,
-            status: "success",
-            error_message: "Mock refresh completed",
-            created_at: refreshedAt
-          })),
-          ...mockRefreshLogs
-        ];
-      }
-      const result = {
+      mockRefreshLogs = [
+        ...targetAccounts.map((account, index) => ({
+          id: Date.now() + index,
+          account_id: account.id,
+          account_email: account.email,
+          refresh_type: "manual",
+          status: "success",
+          error_message: "Mock refresh completed",
+          created_at: refreshedAt
+        })),
+        ...mockRefreshLogs
+      ];
+      return recordMockAutomationRun("refresh", "manual", {
         success: true,
         message: "Refresh job accepted. Provider adapters are available in the Tauri runtime.",
         refreshed: targetAccounts.length,
         failed: 0
-      };
-      return (recordHistory ? recordMockAutomationRun("refresh", triggerType, result) : result) as T;
+      }) as T;
     }
     case "run_forwarding_job": {
       const now = new Date().toISOString();
@@ -1470,20 +1461,6 @@ export const api = {
   restoreProjectAccount: (projectAccountId: number, detail = "") =>
     call<ProjectAccount>("restore_project_account", { input: { project_account_id: projectAccountId, detail } }),
   listProjectEvents: (projectId: number) => call<ProjectAccountEvent[]>("list_project_events", { projectId }),
-  runRefreshJob: (
-    accountId?: number,
-    folder = "all",
-    top = 25,
-    options?: { triggerType?: "manual" | "schedule" | "retry" | "live"; recordHistory?: boolean }
-  ) =>
-    call<JobResult>("run_refresh_job", {
-      input: {
-        account_id: accountId,
-        folder,
-        top,
-        trigger_type: options?.triggerType,
-        record_history: options?.recordHistory
-      },
-      accountId
-    })
+  runRefreshJob: (accountId?: number, folder = "all", top = 25) =>
+    call<JobResult>("run_refresh_job", { input: { account_id: accountId, folder, top }, accountId })
 };

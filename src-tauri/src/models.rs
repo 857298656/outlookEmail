@@ -903,8 +903,6 @@ pub struct RefreshInput {
     pub account_id: Option<i64>,
     pub folder: Option<String>,
     pub top: Option<usize>,
-    pub trigger_type: Option<String>,
-    pub record_history: Option<bool>,
 }
 
 #[derive(Debug, Clone)]

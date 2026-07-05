@@ -80,7 +80,6 @@ type MailFilters = {
 
 const colors = ["#111827", "#374151", "#4b5563", "#64748b", "#0f172a", "#52525b"];
 const mailPageSize = 100;
-const liveMailRefreshIntervalMs = 15_000;
 const mailSearchDebounceMs = 450;
 const defaultGraphClientId = "6daa9f56-5e67-4cb6-ae52-ef89ef912d36";
 const defaultOAuthRedirectUri = "http://localhost:8080";
@@ -155,13 +154,11 @@ function App() {
   const [railExpanded, setRailExpanded] = useState(false);
   const [railMenuOpen, setRailMenuOpen] = useState(false);
   const railMenuRef = useRef<HTMLDivElement | null>(null);
-  const liveRefreshRunningRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
-  const liveRefreshReady = Boolean(selectedAccount && isRefreshReady(selectedAccount));
   const selectedMessage = messages.find((message) => message.id === selectedMessageId);
   const selectedTempMessage = tempMessages.find((message) => message.message_id === selectedTempMessageId);
   const railIdentity = selectedAccount?.email ?? accounts[0]?.email ?? "管理员";
@@ -331,38 +328,6 @@ function App() {
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [busy]);
-
-  useEffect(() => {
-    if (!status?.unlocked || view !== "mail" || !selectedAccountId || !liveRefreshReady || busy) return;
-
-    let cancelled = false;
-    async function refreshLiveMailbox() {
-      if (cancelled || liveRefreshRunningRef.current) return;
-      liveRefreshRunningRef.current = true;
-      try {
-        await api.runRefreshJob(selectedAccountId, folder, mailPageSize, {
-          triggerType: "live",
-          recordHistory: false
-        });
-        if (cancelled) return;
-        await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
-        if (!cancelled) await loadStatus();
-      } catch (err) {
-        if (!cancelled) setError(readError(err));
-      } finally {
-        liveRefreshRunningRef.current = false;
-      }
-    }
-
-    const intervalId = window.setInterval(() => {
-      void refreshLiveMailbox();
-    }, liveMailRefreshIntervalMs);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [status?.unlocked, view, selectedAccountId, liveRefreshReady, folder, mailFilters, mailPage, busy]);
 
   async function runAction(action: () => Promise<void>, success?: string) {
     setBusy(true);

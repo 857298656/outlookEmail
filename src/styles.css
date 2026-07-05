@@ -1662,7 +1662,7 @@ button:disabled {
   border-radius: 8px;
   background: #fff;
   color: #17202a;
-  padding: 0 32px 0 11px;
+  padding: 0 11px;
 }
 
 .field {

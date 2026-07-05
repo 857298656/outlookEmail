@@ -703,6 +703,11 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       mockAccounts = [account, ...mockAccounts.filter((item) => item.email !== account.email)];
       return { success: true, account, scope: defaultGraphOAuthScope, expires_in: 3600, refresh_token_preview: "mock...oken" } as T;
     }
+    case "open_external_url": {
+      const url = (args?.url as string | undefined)?.trim();
+      if (url) window.open(url, "_blank", "noopener,noreferrer");
+      return undefined as T;
+    }
     case "download_attachment": {
       const input = args?.input as { attachment_id: string };
       return { path: `browser-preview/${input.attachment_id}`, file_name: input.attachment_id, size: 0 } as T;
@@ -1416,6 +1421,7 @@ export const api = {
   testCloudflareChannel: (channelId: number) => call<JobResult>("test_cloudflare_channel", { channelId }),
   generateOAuthAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) =>
     call<string>("generate_oauth_auth_url", { input }),
+  openExternalUrl: (url: string) => call<void>("open_external_url", { url }),
   exchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) =>
     call<OAuthTokenResult>("exchange_oauth_token", { input }),
   saveOAuthAccount: (input: OAuthSaveAccountInput) =>

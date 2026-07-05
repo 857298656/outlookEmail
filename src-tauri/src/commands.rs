@@ -3,6 +3,7 @@ use crate::import::parse_accounts;
 use crate::models::*;
 use crate::providers;
 use crate::AppState;
+use std::process::Command;
 use tauri::State;
 
 #[tauri::command]
@@ -162,6 +163,29 @@ pub fn delete_mail_messages(state: State<'_, AppState>, input: DeleteMailMessage
 #[tauri::command]
 pub fn generate_oauth_auth_url(input: OAuthAuthUrlInput) -> AppResult<String> {
     providers::build_graph_auth_url(&input)
+}
+
+#[tauri::command]
+pub fn open_external_url(url: String) -> AppResult<()> {
+    let trimmed = url.trim();
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err(AppError::InvalidInput("only http or https URLs can be opened".to_string()));
+    }
+
+    #[cfg(target_os = "windows")]
+    let result = Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", trimmed])
+        .spawn();
+
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").arg(trimmed).spawn();
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = Command::new("xdg-open").arg(trimmed).spawn();
+
+    result
+        .map(|_| ())
+        .map_err(|err| AppError::Internal(format!("failed to open default browser: {err}")))
 }
 
 #[tauri::command]

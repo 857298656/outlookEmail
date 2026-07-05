@@ -2362,6 +2362,11 @@ code {
   font-size: 13px;
 }
 
+.formSuccess {
+  color: #047857;
+  font-size: 13px;
+}
+
 .notice {
   color: #047857;
   font-size: 13px;

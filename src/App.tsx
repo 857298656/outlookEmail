@@ -2560,8 +2560,9 @@ function OAuthAccountSaveDialog({
     scope: string;
     expires_in: number;
   } | null>(null);
-  const [localBusy, setLocalBusy] = useState<"url" | "preview" | "save" | null>(null);
+  const [localBusy, setLocalBusy] = useState<"url" | "open" | "preview" | "save" | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [localNotice, setLocalNotice] = useState<string | null>(null);
   const redirectUri = settings?.oauth_redirect_uri || defaultOAuthRedirectUri;
   const loading = busy || localBusy !== null;
 
@@ -2609,6 +2610,7 @@ function OAuthAccountSaveDialog({
       setPreview(null);
     }
     setLocalError(null);
+    setLocalNotice(null);
   }
 
   function validateBase(requireCallback: boolean) {
@@ -2626,6 +2628,7 @@ function OAuthAccountSaveDialog({
     }
     setLocalBusy("url");
     setLocalError(null);
+    setLocalNotice(null);
     try {
       const url = await onGenerateOAuthUrl({
         client_id: draft.client_id.trim(),
@@ -2647,17 +2650,29 @@ function OAuthAccountSaveDialog({
     if (!authUrl) return;
     try {
       await navigator.clipboard.writeText(authUrl);
+      setLocalError(null);
+      setLocalNotice("授权链接已复制");
     } catch {
+      setLocalNotice(null);
       setLocalError("复制失败，请手动选中授权链接复制");
     }
   }
 
-  function handleOpenUrl() {
+  async function handleOpenUrl() {
     if (!authUrl) return;
     setDraft((current) => ({ ...current, callback_url: "" }));
     setPreview(null);
     setLocalError(null);
-    window.open(authUrl, "_blank", "noopener,noreferrer");
+    setLocalNotice(null);
+    setLocalBusy("open");
+    try {
+      await api.openExternalUrl(authUrl);
+      setLocalNotice("已在默认浏览器打开授权页面");
+    } catch (err) {
+      setLocalError(readError(err));
+    } finally {
+      setLocalBusy(null);
+    }
   }
 
   async function handlePreview() {
@@ -2668,6 +2683,7 @@ function OAuthAccountSaveDialog({
     }
     setLocalBusy("preview");
     setLocalError(null);
+    setLocalNotice(null);
     try {
       const result = await onPreviewOAuthToken({
         client_id: draft.client_id.trim(),
@@ -2712,6 +2728,7 @@ function OAuthAccountSaveDialog({
     }
     setLocalBusy("save");
     setLocalError(null);
+    setLocalNotice(null);
     try {
       await onSaveOAuthAccount({
         email: draft.email.trim(),
@@ -2819,10 +2836,11 @@ function OAuthAccountSaveDialog({
                 复制
               </button>
               <button className="button primary" disabled={loading || !authUrl} onClick={handleOpenUrl}>
-                <ExternalLink size={16} />
+                {localBusy === "open" ? <Loader2 className="spin" size={16} /> : <ExternalLink size={16} />}
                 打开
               </button>
             </div>
+            {localNotice && <div className="formSuccess">{localNotice}</div>}
             <button className="button secondary" disabled={loading} onClick={handleGenerateUrl}>
               {localBusy === "url" ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />}
               生成授权链接

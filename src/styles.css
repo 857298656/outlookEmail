@@ -957,6 +957,9 @@ button:disabled {
 
 .accountGroupTree {
   max-height: calc(100vh - 190px);
+  border: 0;
+  border-radius: 0;
+  padding: 0;
 }
 
 .panel {

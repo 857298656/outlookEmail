@@ -203,10 +203,19 @@ function App() {
     };
   }
 
-  async function loadMailboxMessages(accountId = selectedAccountId, nextFolder = folder, filters = mailFilters, page = mailPage) {
+  async function loadMailboxMessages(
+    accountId = selectedAccountId,
+    nextFolder = folder,
+    filters = mailFilters,
+    page = mailPage,
+    options: { preservePreview?: boolean } = {}
+  ) {
     const nextMessages = await api.listMessages(accountId, nextFolder, buildMailQuery(accountId, nextFolder, filters, page));
     setMessages(nextMessages);
-    setSelectedMessageId((current) => (nextMessages.some((message) => message.id === current) ? current : nextMessages[0]?.id));
+    setSelectedMessageId((current) => {
+      if (!options.preservePreview) return undefined;
+      return nextMessages.some((message) => message.id === current) ? current : undefined;
+    });
     setSelectedMessageIds([]);
   }
 
@@ -218,7 +227,8 @@ function App() {
     accountId: number | undefined | null = selectedAccountId,
     nextFolder = folder,
     filters = mailFilters,
-    page = mailPage
+    page = mailPage,
+    options: { preservePreview?: boolean } = {}
   ) {
     const [nextGroups, nextTags, nextAccounts] = await Promise.all([
       api.listGroups(),
@@ -232,7 +242,10 @@ function App() {
     setSelectedAccountId(firstAccountId);
     const nextMessages = await api.listMessages(firstAccountId, nextFolder, buildMailQuery(firstAccountId, nextFolder, filters, page));
     setMessages(nextMessages);
-    setSelectedMessageId(nextMessages[0]?.id);
+    setSelectedMessageId((current) => {
+      if (!options.preservePreview) return undefined;
+      return nextMessages.some((message) => message.id === current) ? current : undefined;
+    });
     setSelectedMessageIds([]);
   }
 
@@ -521,7 +534,7 @@ function App() {
                 runAction(async () => {
                   const result = await api.runRefreshJob(selectedAccountId);
                   setNotice(formatResultMessage(result.message));
-                  await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
+                  await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
                   await loadStatus();
                 })
               }
@@ -604,7 +617,7 @@ function App() {
               runAction(async () => {
                 const result = await api.markMessagesRead(messageIds, isRead);
                 setNotice(formatResultMessage(result.message));
-                await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage);
+                await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
                 await loadAutomation();
               })
             }
@@ -612,7 +625,7 @@ function App() {
               runAction(async () => {
                 const result = await api.deleteMessages(messageIds);
                 setNotice(formatResultMessage(result.message));
-                await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage);
+                await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
                 await loadStatus();
                 await loadAutomation();
               })
@@ -695,7 +708,7 @@ function App() {
               runAction(async () => {
                 const result = await api.retryQueueItem(retryId);
                 setNotice(formatResultMessage(result.message));
-                await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage);
+                await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
                 await loadAutomation();
               })
             }
@@ -703,7 +716,7 @@ function App() {
               runAction(async () => {
                 const result = await api.dismissRetryItem(retryId);
                 setNotice(formatResultMessage(result.message));
-                await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage);
+                await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
                 await loadAutomation();
               })
             }
@@ -1347,6 +1360,11 @@ function MailWorkspace({
     }
   }
 
+  function applyDraftFilters(nextFilters: MailFilters) {
+    setDraftFilters(nextFilters);
+    onFilterApply(nextFilters);
+  }
+
   function treeDepthStyle(depth: number): CSSProperties {
     return { "--tree-indent": `${depth * 16}px` } as CSSProperties;
   }
@@ -1470,7 +1488,9 @@ function MailWorkspace({
             <select
               className="select"
               value={draftFilters.readState}
-              onChange={(event) => setDraftFilters({ ...draftFilters, readState: event.target.value as MailFilters["readState"] })}
+              onChange={(event) =>
+                applyDraftFilters({ ...draftFilters, readState: event.target.value as MailFilters["readState"] })
+              }
             >
               <option value="all">全部邮件</option>
               <option value="unread">未读</option>
@@ -1479,7 +1499,9 @@ function MailWorkspace({
             <select
               className="select"
               value={draftFilters.attachmentFilter}
-              onChange={(event) => setDraftFilters({ ...draftFilters, attachmentFilter: event.target.value as MailFilters["attachmentFilter"] })}
+              onChange={(event) =>
+                applyDraftFilters({ ...draftFilters, attachmentFilter: event.target.value as MailFilters["attachmentFilter"] })
+              }
             >
               <option value="all">全部附件状态</option>
               <option value="attachments">有附件</option>
@@ -1488,7 +1510,9 @@ function MailWorkspace({
             <select
               className="select"
               value={draftFilters.sortBy}
-              onChange={(event) => setDraftFilters({ ...draftFilters, sortBy: event.target.value as MailFilters["sortBy"] })}
+              onChange={(event) =>
+                applyDraftFilters({ ...draftFilters, sortBy: event.target.value as MailFilters["sortBy"] })
+              }
             >
               <option value="date">日期</option>
               <option value="subject">主题</option>
@@ -1500,7 +1524,9 @@ function MailWorkspace({
             <select
               className="select"
               value={draftFilters.sortOrder}
-              onChange={(event) => setDraftFilters({ ...draftFilters, sortOrder: event.target.value as MailFilters["sortOrder"] })}
+              onChange={(event) =>
+                applyDraftFilters({ ...draftFilters, sortOrder: event.target.value as MailFilters["sortOrder"] })
+              }
             >
               <option value="desc">降序</option>
               <option value="asc">升序</option>

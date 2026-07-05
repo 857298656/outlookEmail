@@ -16,7 +16,8 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-const GRAPH_SCOPE: &str = "offline_access Mail.ReadWrite User.Read";
+const GRAPH_SCOPE: &str =
+    "offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read";
 const IMAP_OAUTH_SCOPE: &str = "offline_access https://outlook.office.com/IMAP.AccessAsUser.All";
 
 pub struct OAuthTokenResponse {
@@ -43,11 +44,13 @@ pub fn build_graph_auth_url(input: &OAuthAuthUrlInput) -> AppResult<String> {
         return Err(AppError::InvalidInput("OAuth redirect URI is required".to_string()));
     }
 
+    let scope = urlencoding::encode(microsoft_oauth_scope(input.provider.as_deref()))
+        .replace("%20", "+");
     let mut url = format!(
-        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query&scope={}&prompt=select_account",
+        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query&scope={}&state=12345",
         urlencoding::encode(client_id),
         urlencoding::encode(redirect_uri),
-        urlencoding::encode(microsoft_oauth_scope(input.provider.as_deref()))
+        scope
     );
     if let Some(login_hint) = input.login_hint.as_ref().filter(|value| !value.trim().is_empty()) {
         url.push_str("&login_hint=");

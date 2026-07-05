@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_GRAPH_CLIENT_ID: &str = "6daa9f56-5e67-4cb6-ae52-ef89ef912d36";
+pub const DEFAULT_OAUTH_REDIRECT_URI: &str = "http://localhost:8080";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AppStatus {
     pub initialized: bool,
@@ -161,8 +164,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            graph_client_id: String::new(),
-            oauth_redirect_uri: "http://localhost:8080".to_string(),
+            graph_client_id: DEFAULT_GRAPH_CLIENT_ID.to_string(),
+            oauth_redirect_uri: DEFAULT_OAUTH_REDIRECT_URI.to_string(),
             gptmail_base_url: "https://mail.chatgpt.org.uk".to_string(),
             gptmail_api_key: String::new(),
             duckmail_base_url: "https://api.duckmail.sbs".to_string(),

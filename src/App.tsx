@@ -80,6 +80,8 @@ type MailFilters = {
 
 const colors = ["#111827", "#374151", "#4b5563", "#64748b", "#0f172a", "#52525b"];
 const mailPageSize = 100;
+const defaultGraphClientId = "6daa9f56-5e67-4cb6-ae52-ef89ef912d36";
+const defaultOAuthRedirectUri = "http://localhost:8080";
 const themePresets = [
   { id: "default", label: "默认", rail: "#111827", railText: "#f8fafc", surface: "#ffffff", subtle: "#f8fafc" },
   { id: "graphite", label: "石墨", rail: "#242833", railText: "#f8fafc", surface: "#ffffff", subtle: "#f6f7f9" },
@@ -2265,7 +2267,7 @@ function OAuthAccountSaveDialog({
   const [draft, setDraft] = useState<OAuthAccountSaveDraft>({
     email: "",
     password: "",
-    client_id: settings?.graph_client_id ?? "",
+    client_id: settings?.graph_client_id || defaultGraphClientId,
     group_id: groups[0]?.id ?? null,
     forward_enabled: false,
     callback_url: ""
@@ -2285,7 +2287,7 @@ function OAuthAccountSaveDialog({
   } | null>(null);
   const [localBusy, setLocalBusy] = useState<"url" | "preview" | "save" | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
-  const redirectUri = settings?.oauth_redirect_uri || "http://localhost:8080";
+  const redirectUri = settings?.oauth_redirect_uri || defaultOAuthRedirectUri;
   const loading = busy || localBusy !== null;
 
   useEffect(() => {
@@ -2296,8 +2298,38 @@ function OAuthAccountSaveDialog({
     });
   }, [groups]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const clientId = draft.client_id.trim();
+    if (!clientId) return;
+
+    setLocalBusy("url");
+    onGenerateOAuthUrl({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      login_hint: draft.email.trim() || undefined,
+      provider: "graph"
+    })
+      .then((url) => {
+        if (!cancelled) setAuthUrl(url);
+      })
+      .catch((err) => {
+        if (!cancelled) setLocalError(readError(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLocalBusy(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function updateDraft(next: Partial<OAuthAccountSaveDraft>) {
     setDraft((current) => ({ ...current, ...next }));
+    if ("client_id" in next || "email" in next) {
+      setAuthUrl("");
+    }
     setPreview(null);
     setLocalError(null);
   }
@@ -3687,7 +3719,7 @@ function AccountEditor({
       fallback_proxy_url_1: account.fallback_proxy_url_1,
       fallback_proxy_url_2: account.fallback_proxy_url_2,
       password: "",
-      client_id: settings?.graph_client_id ?? "",
+      client_id: settings?.graph_client_id || defaultGraphClientId,
       refresh_token: "",
       imap_password: "",
       tag_ids: account.tags.map((tag) => tag.id),
@@ -3707,7 +3739,7 @@ function AccountEditor({
     );
   }
 
-  const redirectUri = settings?.oauth_redirect_uri || "http://localhost:8080";
+  const redirectUri = settings?.oauth_redirect_uri || defaultOAuthRedirectUri;
 
   return (
     <div className="panel">

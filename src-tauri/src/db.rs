@@ -1310,9 +1310,13 @@ impl Database {
     pub fn get_settings(&self) -> AppResult<Settings> {
         self.require_unlocked()?;
         let mut settings = Settings::default();
-        settings.graph_client_id = self.get_config("graph_client_id")?.unwrap_or_default();
+        settings.graph_client_id = self
+            .get_config("graph_client_id")?
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(settings.graph_client_id);
         settings.oauth_redirect_uri = self
             .get_config("oauth_redirect_uri")?
+            .filter(|value| !value.trim().is_empty())
             .unwrap_or(settings.oauth_redirect_uri);
         settings.gptmail_base_url = self
             .get_config("gptmail_base_url")?

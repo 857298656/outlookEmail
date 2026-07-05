@@ -38,9 +38,15 @@ import type {
   TempEmailMessage
 } from "./types";
 
+const defaultGraphClientId = "6daa9f56-5e67-4cb6-ae52-ef89ef912d36";
+const defaultOAuthRedirectUri = "http://localhost:8080";
+const defaultGraphOAuthScope =
+  "offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read";
+const encodeOAuthQueryValue = (value: string) => encodeURIComponent(value).replace(/%20/g, "+");
+
 const defaultSettings: Settings = {
-  graph_client_id: "",
-  oauth_redirect_uri: "http://localhost:8080",
+  graph_client_id: defaultGraphClientId,
+  oauth_redirect_uri: defaultOAuthRedirectUri,
   gptmail_base_url: "https://mail.chatgpt.org.uk",
   gptmail_api_key: "",
   duckmail_base_url: "https://api.duckmail.sbs",
@@ -647,16 +653,55 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       const scope =
         input.provider === "imap"
           ? "offline_access https://outlook.office.com/IMAP.AccessAsUser.All"
-          : "offline_access Mail.ReadWrite User.Read";
-      return `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=${encodeURIComponent(input.client_id)}&response_type=code&redirect_uri=${encodeURIComponent(input.redirect_uri)}&scope=${encodeURIComponent(scope)}&response_mode=query&prompt=select_account${input.login_hint ? `&login_hint=${encodeURIComponent(input.login_hint)}` : ""}` as T;
+          : defaultGraphOAuthScope;
+      return `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=${encodeOAuthQueryValue(input.client_id)}&response_type=code&redirect_uri=${encodeOAuthQueryValue(input.redirect_uri)}&response_mode=query&scope=${encodeOAuthQueryValue(scope)}&state=12345${input.login_hint ? `&login_hint=${encodeOAuthQueryValue(input.login_hint)}` : ""}` as T;
     }
     case "exchange_oauth_token": {
       const input = args?.input as { account_id?: number; provider?: string };
       const scope =
         input.provider === "imap"
           ? "offline_access https://outlook.office.com/IMAP.AccessAsUser.All"
-          : "offline_access Mail.ReadWrite User.Read";
-      return { success: true, account_id: input.account_id, scope, expires_in: 3600, refresh_token_preview: "mock...oken" } as T;
+          : defaultGraphOAuthScope;
+      return {
+        success: true,
+        account_id: input.account_id,
+        scope,
+        expires_in: 3600,
+        refresh_token_preview: "mock...oken",
+        refresh_token: input.account_id ? null : "mock-refresh-token"
+      } as T;
+    }
+    case "save_oauth_account": {
+      const input = args?.input as { email: string; group_id?: number | null; client_id: string; refresh_token?: string };
+      const account: Account = {
+        id: Date.now(),
+        email: input.email,
+        group_id: input.group_id ?? null,
+        group_name: mockGroups.find((group) => group.id === input.group_id)?.name ?? null,
+        remark: "",
+        status: "active",
+        provider: "graph",
+        account_type: "graph",
+        forward_enabled: false,
+        last_refresh_status: "authorized",
+        last_refresh_error: null,
+        last_refresh_at: null,
+        message_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        tags: [],
+        aliases: [],
+        has_password: false,
+        has_refresh_token: Boolean(input.refresh_token),
+        has_imap_password: false,
+        imap_host: "",
+        imap_port: 993,
+        proxy_url: "",
+        fallback_proxy_url_1: "",
+        fallback_proxy_url_2: ""
+      };
+      mockAccounts = [account, ...mockAccounts.filter((item) => item.email !== account.email)];
+      return { success: true, account, scope: defaultGraphOAuthScope, expires_in: 3600, refresh_token_preview: "mock...oken" } as T;
     }
     case "download_attachment": {
       const input = args?.input as { attachment_id: string };

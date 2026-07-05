@@ -1549,7 +1549,7 @@ function MailWorkspace({
               onChange={() => onToggleMessageSelect(message.id)}
             />
             <button className={message.is_read ? "messageOpen" : "messageOpen unread"} onClick={() => onMessageSelect(message.id)}>
-              <span className="sender">{message.sender}</span>
+              <span className="sender">{formatSenderDisplayName(message.sender)}</span>
               <span className="messageLine">
                 <strong className="messageSubject">{message.subject || "（无主题）"}</strong>
                 {message.remote_sync_failure && (
@@ -1641,7 +1641,7 @@ function MailWorkspace({
             <div className="detailHeader">
               <div className="mailPreviewIdentity">
                 <div>
-                  <strong>{selectedMessage.sender || "未知发件人"}</strong>
+                  <strong>{formatSenderDisplayName(selectedMessage.sender) || "未知发件人"}</strong>
                   <span>发送给 {selectedMessage.recipients || "我"}</span>
                 </div>
               </div>
@@ -5414,6 +5414,57 @@ function formatDate(value: string) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
+}
+
+function formatSenderDisplayName(sender: string) {
+  const value = sender.trim();
+  if (!value) return "";
+
+  const angleMatch = value.match(/^\s*"?([^"<]*)"?\s*<([^>]+)>/);
+  if (angleMatch) {
+    const name = cleanSenderName(angleMatch[1]);
+    if (name) return name;
+    return senderNameFromEmail(angleMatch[2]);
+  }
+
+  if (!value.includes("@")) return cleanSenderName(value) || value;
+  return senderNameFromEmail(value);
+}
+
+function cleanSenderName(value: string) {
+  return value
+    .replace(/^"+|"+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function senderNameFromEmail(email: string) {
+  const normalized = email.trim().replace(/^<|>$/g, "").toLowerCase();
+  const domain = normalized.split("@")[1] ?? "";
+  const local = normalized.split("@")[0] ?? "";
+  const brand = senderBrandFromDomain(domain);
+  if (brand) return brand;
+  const localName = local
+    .replace(/^(no-?reply|noreply|notification|notifications|account|security|mailer|support)[._-]*/i, "")
+    .replace(/[._-]+/g, " ")
+    .trim();
+  const domainParts = domain.split(".").filter((part) => !["com", "net", "org", "cn", "io", "co"].includes(part));
+  const source = localName || domainParts[domainParts.length - 1] || email;
+  return source.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function senderBrandFromDomain(domain: string) {
+  const value = domain.toLowerCase();
+  if (value.endsWith("openai.com")) return "OpenAI";
+  if (value.endsWith("email.claude.com")) return "Claude Team";
+  if (value.endsWith("claude.com")) return "Claude";
+  if (value.endsWith("anthropic.com")) return "Anthropic";
+  if (value.endsWith("google.com") || value.endsWith("gmail.com")) return "Google";
+  if (value.endsWith("accountprotection.microsoft.com")) return "Microsoft account";
+  if (value.endsWith("microsoft.com")) return "Microsoft";
+  if (value.endsWith("github.com")) return "GitHub";
+  if (value.endsWith("notion.so")) return "Notion";
+  return "";
 }
 
 function formatUnixDate(value: number) {

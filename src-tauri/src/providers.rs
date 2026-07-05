@@ -1407,7 +1407,7 @@ impl GraphMessage {
             sender: self
                 .from
                 .and_then(|item| item.email_address)
-                .map(|email| email.address)
+                .map(format_graph_email_address)
                 .unwrap_or_default(),
             recipients: recipients_to_string(self.to_recipients),
             cc: recipients_to_string(self.cc_recipients),
@@ -1439,7 +1439,21 @@ struct GraphRecipient {
 
 #[derive(Debug, Deserialize)]
 struct GraphEmailAddress {
+    name: Option<String>,
     address: String,
+}
+
+fn format_graph_email_address(email: GraphEmailAddress) -> String {
+    let address = email.address.trim();
+    let name = email.name.unwrap_or_default();
+    let name = name.trim();
+    if !name.is_empty() && !address.is_empty() {
+        format!("{name} <{address}>")
+    } else if !name.is_empty() {
+        name.to_string()
+    } else {
+        address.to_string()
+    }
 }
 
 fn recipients_to_string(value: Option<Vec<GraphRecipient>>) -> String {
@@ -1475,5 +1489,14 @@ mod tests {
             <XOAuth2Authenticator as imap::Authenticator>::process(&auth, b""),
             "user=user@example.com\x01auth=Bearer token-value\x01\x01"
         );
+    }
+
+    #[test]
+    fn formats_graph_sender_with_display_name() {
+        let sender = format_graph_email_address(GraphEmailAddress {
+            name: Some("OpenAI".to_string()),
+            address: "noreply@tm.openai.com".to_string(),
+        });
+        assert_eq!(sender, "OpenAI <noreply@tm.openai.com>");
     }
 }

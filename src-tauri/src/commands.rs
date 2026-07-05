@@ -171,6 +171,12 @@ pub fn exchange_oauth_token(state: State<'_, AppState>, input: OAuthExchangeInpu
 }
 
 #[tauri::command]
+pub fn save_oauth_account(state: State<'_, AppState>, input: OAuthSaveAccountInput) -> AppResult<OAuthSaveAccountResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.save_oauth_account(input)
+}
+
+#[tauri::command]
 pub fn download_attachment(state: State<'_, AppState>, input: DownloadAttachmentInput) -> AppResult<DownloadAttachmentResult> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.download_attachment(input)

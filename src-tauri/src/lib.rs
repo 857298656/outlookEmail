@@ -52,6 +52,7 @@ pub fn run() {
             delete_mail_messages,
             generate_oauth_auth_url,
             exchange_oauth_token,
+            save_oauth_account,
             download_attachment,
             download_all_attachments,
             get_mail_raw_content,

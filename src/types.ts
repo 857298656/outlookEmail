@@ -61,6 +61,36 @@ export type AccountSecretsPreview = {
   imap_password: string;
 };
 
+export type OAuthTokenResult = {
+  success: boolean;
+  account_id?: number | null;
+  scope: string;
+  expires_in: number;
+  refresh_token_preview: string;
+  refresh_token?: string | null;
+};
+
+export type OAuthSaveAccountInput = {
+  email: string;
+  password?: string;
+  group_id?: number | null;
+  remark?: string;
+  forward_enabled?: boolean;
+  client_id: string;
+  redirect_uri: string;
+  code_or_url?: string;
+  refresh_token?: string;
+  provider?: string;
+};
+
+export type OAuthSaveAccountResult = {
+  success: boolean;
+  account: Account;
+  scope: string;
+  expires_in: number;
+  refresh_token_preview: string;
+};
+
 export type MailMessage = {
   id: number;
   account_id: number;

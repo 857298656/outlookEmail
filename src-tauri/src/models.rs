@@ -775,6 +775,30 @@ pub struct OAuthTokenResult {
     pub scope: String,
     pub expires_in: i64,
     pub refresh_token_preview: String,
+    pub refresh_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OAuthSaveAccountInput {
+    pub email: String,
+    pub password: Option<String>,
+    pub group_id: Option<i64>,
+    pub remark: Option<String>,
+    pub forward_enabled: Option<bool>,
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub code_or_url: Option<String>,
+    pub refresh_token: Option<String>,
+    pub provider: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OAuthSaveAccountResult {
+    pub success: bool,
+    pub account: Account,
+    pub scope: String,
+    pub expires_in: i64,
+    pub refresh_token_preview: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

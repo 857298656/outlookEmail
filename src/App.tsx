@@ -5,7 +5,9 @@ import {
   ChevronDown,
   ChevronUp,
   Cloud,
+  Copy,
   Download,
+  ExternalLink,
   FileText,
   FolderKanban,
   Inbox,
@@ -26,6 +28,7 @@ import {
   Upload,
   Users,
   WandSparkles,
+  X,
   XCircle
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -50,6 +53,9 @@ import type {
   MailMessageQuery,
   MailRawContent,
   MailShareRecord,
+  OAuthSaveAccountInput,
+  OAuthSaveAccountResult,
+  OAuthTokenResult,
   Project,
   ProjectAccount,
   RefreshLog,
@@ -745,6 +751,24 @@ function App() {
             }
             onRevealAccountSecrets={(input) => api.revealAccountSecrets(input)}
             onGenerateOAuthUrl={(input) => api.generateOAuthAuthUrl(input)}
+            onPreviewOAuthToken={(input) => api.exchangeOAuthToken(input)}
+            onSaveOAuthAccount={async (input) => {
+              setBusy(true);
+              setError(null);
+              setNotice(null);
+              try {
+                const result = await api.saveOAuthAccount(input);
+                setNotice(`OAuth 账号已保存：${result.account.email}（${result.refresh_token_preview}）`);
+                await loadWorkspace(result.account.id, folder);
+                await loadStatus();
+                return result;
+              } catch (err) {
+                setError(readError(err));
+                throw err;
+              } finally {
+                setBusy(false);
+              }
+            }}
             onExchangeOAuthToken={(input) =>
               runAction(async () => {
                 const result = await api.exchangeOAuthToken(input);
@@ -1627,6 +1651,8 @@ function AccountsView({
   onUpdateAccount,
   onRevealAccountSecrets,
   onGenerateOAuthUrl,
+  onPreviewOAuthToken,
+  onSaveOAuthAccount,
   onExchangeOAuthToken
 }: {
   groups: Group[];
@@ -1646,6 +1672,8 @@ function AccountsView({
   onUpdateAccount: (input: Parameters<typeof api.updateAccount>[0]) => void;
   onRevealAccountSecrets: (input: Parameters<typeof api.revealAccountSecrets>[0]) => Promise<Awaited<ReturnType<typeof api.revealAccountSecrets>>>;
   onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => Promise<string>;
+  onPreviewOAuthToken: (input: { client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => Promise<OAuthTokenResult>;
+  onSaveOAuthAccount: (input: OAuthSaveAccountInput) => Promise<OAuthSaveAccountResult>;
   onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => void;
 }) {
   const [raw, setRaw] = useState("");
@@ -1673,6 +1701,7 @@ function AccountsView({
   const [secretExportConfirm, setSecretExportConfirm] = useState("");
   const [oauthUrl, setOauthUrl] = useState("");
   const [oauthCallback, setOauthCallback] = useState("");
+  const [oauthSaveOpen, setOauthSaveOpen] = useState(false);
   const visibleAccounts = useMemo(() => {
     const keyword = accountSearch.trim().toLowerCase();
     if (!keyword) return accounts;
@@ -1769,6 +1798,17 @@ function AccountsView({
 
   return (
     <section className="managementGrid">
+      {oauthSaveOpen && (
+        <OAuthAccountSaveDialog
+          groups={groups}
+          settings={settings}
+          busy={busy}
+          onClose={() => setOauthSaveOpen(false)}
+          onGenerateOAuthUrl={onGenerateOAuthUrl}
+          onPreviewOAuthToken={onPreviewOAuthToken}
+          onSaveOAuthAccount={onSaveOAuthAccount}
+        />
+      )}
       <div className="panel">
         <div className="panelHeader">
           <h2>导入账号</h2>
@@ -1791,6 +1831,10 @@ function AccountsView({
           <button className="button primary" disabled={busy || parsedRows.length === 0} onClick={() => onImport(raw, groupId)}>
             <Download size={16} />
             导入 {parsedRows.length || ""}
+          </button>
+          <button className="button secondary" disabled={busy} onClick={() => setOauthSaveOpen(true)}>
+            <KeyRound size={16} />
+            授权保存
           </button>
         </div>
       </div>
@@ -2189,6 +2233,344 @@ function AccountsView({
         </div>
       </div>
     </section>
+  );
+}
+
+type OAuthAccountSaveDraft = {
+  email: string;
+  password: string;
+  client_id: string;
+  group_id: number | null;
+  forward_enabled: boolean;
+  callback_url: string;
+};
+
+function OAuthAccountSaveDialog({
+  groups,
+  settings,
+  busy,
+  onClose,
+  onGenerateOAuthUrl,
+  onPreviewOAuthToken,
+  onSaveOAuthAccount
+}: {
+  groups: Group[];
+  settings: Settings | null;
+  busy: boolean;
+  onClose: () => void;
+  onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => Promise<string>;
+  onPreviewOAuthToken: (input: { client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => Promise<OAuthTokenResult>;
+  onSaveOAuthAccount: (input: OAuthSaveAccountInput) => Promise<OAuthSaveAccountResult>;
+}) {
+  const [draft, setDraft] = useState<OAuthAccountSaveDraft>({
+    email: "",
+    password: "",
+    client_id: settings?.graph_client_id ?? "",
+    group_id: groups[0]?.id ?? null,
+    forward_enabled: false,
+    callback_url: ""
+  });
+  const [authUrl, setAuthUrl] = useState("");
+  const [preview, setPreview] = useState<{
+    email: string;
+    password: string;
+    client_id: string;
+    group_id: number | null;
+    group_name: string;
+    forward_enabled: boolean;
+    refresh_token: string;
+    refresh_token_preview: string;
+    scope: string;
+    expires_in: number;
+  } | null>(null);
+  const [localBusy, setLocalBusy] = useState<"url" | "preview" | "save" | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const redirectUri = settings?.oauth_redirect_uri || "http://localhost:8080";
+  const loading = busy || localBusy !== null;
+
+  useEffect(() => {
+    if (!groups.length) return;
+    setDraft((current) => {
+      if (current.group_id && groups.some((group) => group.id === current.group_id)) return current;
+      return { ...current, group_id: groups[0].id };
+    });
+  }, [groups]);
+
+  function updateDraft(next: Partial<OAuthAccountSaveDraft>) {
+    setDraft((current) => ({ ...current, ...next }));
+    setPreview(null);
+    setLocalError(null);
+  }
+
+  function validateBase(requireCallback: boolean) {
+    const clientId = draft.client_id.trim();
+    if (!clientId) return "请先填写 Microsoft Client ID";
+    if (requireCallback && !draft.callback_url.trim()) return "请粘贴授权后的完整回调 URL";
+    return null;
+  }
+
+  async function handleGenerateUrl() {
+    const validation = validateBase(false);
+    if (validation) {
+      setLocalError(validation);
+      return;
+    }
+    setLocalBusy("url");
+    setLocalError(null);
+    try {
+      const url = await onGenerateOAuthUrl({
+        client_id: draft.client_id.trim(),
+        redirect_uri: redirectUri,
+        login_hint: draft.email.trim() || undefined,
+        provider: "graph"
+      });
+      setAuthUrl(url);
+    } catch (err) {
+      setLocalError(readError(err));
+    } finally {
+      setLocalBusy(null);
+    }
+  }
+
+  async function handleCopyUrl() {
+    if (!authUrl) return;
+    try {
+      await navigator.clipboard.writeText(authUrl);
+    } catch {
+      setLocalError("复制失败，请手动选中授权链接复制");
+    }
+  }
+
+  function handleOpenUrl() {
+    if (authUrl) window.open(authUrl, "_blank", "noopener,noreferrer");
+  }
+
+  async function handlePreview() {
+    const validation = validateBase(true);
+    if (validation) {
+      setLocalError(validation);
+      return false;
+    }
+    setLocalBusy("preview");
+    setLocalError(null);
+    try {
+      const result = await onPreviewOAuthToken({
+        client_id: draft.client_id.trim(),
+        redirect_uri: redirectUri,
+        code_or_url: draft.callback_url.trim(),
+        provider: "graph"
+      });
+      if (!result.refresh_token) {
+        throw new Error("OAuth 响应没有返回 refresh token");
+      }
+      const group = groups.find((item) => item.id === draft.group_id);
+      setPreview({
+        email: draft.email.trim(),
+        password: draft.password,
+        client_id: draft.client_id.trim(),
+        group_id: draft.group_id ?? null,
+        group_name: group?.name ?? "",
+        forward_enabled: draft.forward_enabled,
+        refresh_token: result.refresh_token,
+        refresh_token_preview: result.refresh_token_preview,
+        scope: result.scope,
+        expires_in: result.expires_in
+      });
+      return true;
+    } catch (err) {
+      setLocalError(readError(err));
+      return false;
+    } finally {
+      setLocalBusy(null);
+    }
+  }
+
+  async function handleSave() {
+    if (!draft.email.trim()) {
+      setLocalError("保存账号前需要填写邮箱账号");
+      return;
+    }
+    const validation = preview ? validateBase(false) : validateBase(true);
+    if (validation) {
+      setLocalError(validation);
+      return;
+    }
+    setLocalBusy("save");
+    setLocalError(null);
+    try {
+      await onSaveOAuthAccount({
+        email: draft.email.trim(),
+        password: draft.password || undefined,
+        group_id: draft.group_id ?? undefined,
+        forward_enabled: draft.forward_enabled,
+        client_id: preview?.client_id ?? draft.client_id.trim(),
+        redirect_uri: redirectUri,
+        code_or_url: preview ? undefined : draft.callback_url.trim(),
+        refresh_token: preview?.refresh_token,
+        provider: "graph"
+      });
+      onClose();
+    } catch (err) {
+      setLocalError(readError(err));
+    } finally {
+      setLocalBusy(null);
+    }
+  }
+
+  return (
+    <div
+      className="oauthDialogBackdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !loading) onClose();
+      }}
+    >
+      <div className="oauthDialog" role="dialog" aria-modal="true" aria-labelledby="oauthSaveTitle">
+        <div className="oauthDialogHeader">
+          <div>
+            <span className="oauthDialogIcon">
+              <KeyRound size={18} />
+            </span>
+            <h2 id="oauthSaveTitle">授权并保存 Outlook 账号</h2>
+          </div>
+          <button className="iconMini" title="关闭" disabled={loading} onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="oauthDialogBody">
+          <section className="oauthAccountBox">
+            <h3>待入库账号</h3>
+            <p>预览只需要回调 URL；保存账号时需要邮箱，密码和目标分组可稍后补充。</p>
+            <div className="oauthFieldGrid">
+              <label className="field grow">
+                邮箱账号
+                <input
+                  className="input"
+                  value={draft.email}
+                  placeholder="your@outlook.com"
+                  onChange={(event) => updateDraft({ email: event.target.value })}
+                />
+              </label>
+              <label className="field grow">
+                密码
+                <input
+                  className="input"
+                  type="password"
+                  value={draft.password}
+                  placeholder="保存时可选"
+                  onChange={(event) => updateDraft({ password: event.target.value })}
+                />
+              </label>
+              <label className="field grow">
+                Microsoft Client ID
+                <input
+                  className="input"
+                  value={draft.client_id}
+                  placeholder="Azure 应用 Client ID"
+                  onChange={(event) => updateDraft({ client_id: event.target.value })}
+                />
+              </label>
+              <label className="field grow">
+                目标分组
+                <select
+                  className="select"
+                  value={draft.group_id ?? ""}
+                  onChange={(event) => updateDraft({ group_id: event.target.value ? Number(event.target.value) : null })}
+                >
+                  {groups.map((group) => (
+                    <option value={group.id} key={group.id}>
+                      {groupOptionLabel(group)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <label className="checkLine oauthForwardToggle">
+              <input
+                type="checkbox"
+                checked={draft.forward_enabled}
+                onChange={(event) => updateDraft({ forward_enabled: event.target.checked })}
+              />
+              <span>保存后启用邮件转发</span>
+            </label>
+          </section>
+
+          <section className="oauthStep">
+            <h3>步骤 1: 打开授权页面</h3>
+            <div className="oauthUrlLine">
+              <input className="input grow monoInput" readOnly value={authUrl} placeholder="点击生成后显示 Microsoft 授权链接" />
+              <button className="button secondary" disabled={loading || !authUrl} onClick={handleCopyUrl}>
+                <Copy size={16} />
+                复制
+              </button>
+              <button className="button primary" disabled={loading || !authUrl} onClick={handleOpenUrl}>
+                <ExternalLink size={16} />
+                打开
+              </button>
+            </div>
+            <button className="button secondary" disabled={loading} onClick={handleGenerateUrl}>
+              {localBusy === "url" ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />}
+              生成授权链接
+            </button>
+          </section>
+
+          <section className="oauthStep">
+            <h3>步骤 2: 粘贴授权后的回调 URL</h3>
+            <textarea
+              className="textarea compact monoInput"
+              value={draft.callback_url}
+              placeholder="授权成功后，复制浏览器地址栏中的完整 URL 并粘贴到这里"
+              onChange={(event) => updateDraft({ callback_url: event.target.value })}
+            />
+            <p className="oauthHint">URL 格式类似：http://localhost:8080/?code=xxxxx&amp;state=12345</p>
+          </section>
+
+          {preview && (
+            <section className="oauthPreviewBox">
+              <div className="oauthPreviewTitle">
+                <CheckCircle2 size={16} />
+                保存预览
+              </div>
+              <div className="oauthFieldGrid">
+                <label className="field grow">
+                  邮箱
+                  <input className="input" readOnly value={preview.email || "未填写"} />
+                </label>
+                <label className="field grow">
+                  目标分组
+                  <input className="input" readOnly value={preview.group_name || "未选择"} />
+                </label>
+                <label className="field grow">
+                  Client ID
+                  <input className="input monoInput" readOnly value={preview.client_id} />
+                </label>
+                <label className="field grow">
+                  Refresh Token
+                  <input className="input monoInput" readOnly value={preview.refresh_token_preview} />
+                </label>
+              </div>
+              <p className="oauthHint">已换取的 refresh token 会临时保存在当前弹窗状态中，点击保存不会再次消耗授权码。</p>
+            </section>
+          )}
+
+          {localError && <div className="formError">{localError}</div>}
+        </div>
+
+        <div className="oauthDialogFooter">
+          <button className="button secondary" disabled={loading} onClick={onClose}>
+            关闭
+          </button>
+          <button className="button primary" disabled={loading} onClick={handlePreview}>
+            {localBusy === "preview" ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />}
+            换取并预览
+          </button>
+          <button className="button primary" disabled={loading} onClick={handleSave}>
+            {localBusy === "save" ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />}
+            直接保存（自动换取）
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

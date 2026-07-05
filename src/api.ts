@@ -21,6 +21,9 @@ import type {
   MailMessageQuery,
   MailRawContent,
   MailShareRecord,
+  OAuthSaveAccountInput,
+  OAuthSaveAccountResult,
+  OAuthTokenResult,
   Project,
   ProjectAccount,
   ProjectAccountEvent,
@@ -1369,7 +1372,9 @@ export const api = {
   generateOAuthAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) =>
     call<string>("generate_oauth_auth_url", { input }),
   exchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) =>
-    call<{ success: boolean; account_id?: number; scope: string; expires_in: number; refresh_token_preview: string }>("exchange_oauth_token", { input }),
+    call<OAuthTokenResult>("exchange_oauth_token", { input }),
+  saveOAuthAccount: (input: OAuthSaveAccountInput) =>
+    call<OAuthSaveAccountResult>("save_oauth_account", { input }),
   downloadAttachment: (input: { account_id: number; message_id: string; attachment_id: string; folder?: string }) =>
     call<{ path: string; file_name: string; size: number }>("download_attachment", { input }),
   downloadAllAttachments: (input: { account_id: number; message_id: string; folder?: string }) =>

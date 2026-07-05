@@ -1439,6 +1439,107 @@ impl Database {
             scope: token.scope,
             expires_in: token.expires_in,
             refresh_token_preview: preview_secret(&token.refresh_token),
+            refresh_token: if input.account_id.is_none() {
+                Some(token.refresh_token)
+            } else {
+                None
+            },
+        })
+    }
+
+    pub fn save_oauth_account(&self, input: OAuthSaveAccountInput) -> AppResult<OAuthSaveAccountResult> {
+        self.require_unlocked()?;
+        let email = input.email.trim().to_ascii_lowercase();
+        if !email.contains('@') {
+            return Err(AppError::InvalidInput("account email is required".to_string()));
+        }
+        let client_id = input.client_id.trim();
+        if client_id.is_empty() {
+            return Err(AppError::InvalidInput("Microsoft client id is required".to_string()));
+        }
+
+        let provider = normalize_oauth_provider(input.provider.as_deref())?.unwrap_or_else(|| "graph".to_string());
+        let token = if let Some(refresh_token) = input.refresh_token.as_ref().filter(|value| !value.trim().is_empty()) {
+            providers::OAuthTokenResponse {
+                access_token: String::new(),
+                refresh_token: refresh_token.trim().to_string(),
+                expires_in: 0,
+                scope: String::new(),
+            }
+        } else {
+            let code_or_url = input
+                .code_or_url
+                .as_ref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| AppError::InvalidInput("OAuth callback URL is required".to_string()))?;
+            providers::exchange_microsoft_code(client_id, &input.redirect_uri, code_or_url, Some(&provider))?
+        };
+        if token.refresh_token.trim().is_empty() {
+            return Err(AppError::InvalidInput("OAuth response did not include a refresh token".to_string()));
+        }
+
+        let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
+        let password = crypto::encrypt_text(input.password.as_deref().unwrap_or_default(), key)?;
+        let client_id_enc = crypto::encrypt_text(client_id, key)?;
+        let refresh_token_enc = crypto::encrypt_text(&token.refresh_token, key)?;
+        let remark = input.remark.unwrap_or_default();
+        let forward_enabled = if input.forward_enabled.unwrap_or(false) { 1 } else { 0 };
+
+        self.conn.execute(
+            "
+            INSERT INTO accounts
+            (email, password_enc, client_id_enc, refresh_token_enc, group_id, remark, provider,
+             account_type, forward_enabled, last_refresh_status, last_refresh_error, refresh_token_updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'authorized', NULL, CURRENT_TIMESTAMP)
+            ON CONFLICT(email) DO UPDATE SET
+                password_enc = CASE
+                    WHEN excluded.password_enc = '' THEN accounts.password_enc
+                    ELSE excluded.password_enc
+                END,
+                client_id_enc = excluded.client_id_enc,
+                refresh_token_enc = excluded.refresh_token_enc,
+                group_id = COALESCE(excluded.group_id, accounts.group_id),
+                remark = CASE
+                    WHEN excluded.remark = '' THEN accounts.remark
+                    ELSE excluded.remark
+                END,
+                provider = excluded.provider,
+                account_type = excluded.account_type,
+                forward_enabled = excluded.forward_enabled,
+                last_refresh_status = 'authorized',
+                last_refresh_error = NULL,
+                refresh_token_updated_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            ",
+            params![
+                email.as_str(),
+                password,
+                client_id_enc,
+                refresh_token_enc,
+                input.group_id,
+                remark,
+                provider.as_str(),
+                provider.as_str(),
+                forward_enabled
+            ],
+        )?;
+
+        let account_id = self.conn.query_row("SELECT id FROM accounts WHERE email = ?", params![email.as_str()], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        self.audit(&format!("oauth.{provider}.account_saved"), "account", Some(account_id), "")?;
+        let account = self
+            .list_accounts()?
+            .into_iter()
+            .find(|account| account.id == account_id)
+            .ok_or_else(|| AppError::Internal("saved OAuth account was not found".to_string()))?;
+
+        Ok(OAuthSaveAccountResult {
+            success: true,
+            account,
+            scope: token.scope,
+            expires_in: token.expires_in,
+            refresh_token_preview: preview_secret(&token.refresh_token),
         })
     }
 

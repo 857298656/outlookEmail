@@ -1629,65 +1629,67 @@ function MailWorkspace({
                 </button>
               </div>
             </div>
-            <div className="metaGrid">
-              <span>文件夹</span>
-              <strong>{selectedMessage.folder}</strong>
-              <span>状态</span>
-              <strong>{selectedMessage.is_read ? "已读" : "未读"}</strong>
-              <span>接收时间</span>
-              <strong>{formatDate(selectedMessage.received_at)}</strong>
-            </div>
-            {selectedMessage.remote_sync_failure && (
-              <RemoteFailurePanel
-                failure={selectedMessage.remote_sync_failure}
-                busy={busy}
-                onRetry={onRetryRemoteFailure}
-                onDismiss={onDismissRemoteFailure}
-              />
-            )}
-            <MailSharePanel records={visibleShareRecords} busy={busy} onRevoke={onRevokeMailShare} />
-            <MessageBody body={selectedMessage.body || selectedMessage.body_preview} bodyType={selectedMessage.body_type} />
-            {rawError && <div className="inlineError">{rawError}</div>}
-            {rawContent && (
-              <div className="rawSourcePanel">
-                <div className="rawSourceHeader">
-                  <div>
-                    <strong>{rawContent.file_name}</strong>
-                    <small>{formatBytes(rawContent.size)}</small>
+            <div className="mailPreviewContent">
+              <div className="metaGrid">
+                <span>文件夹</span>
+                <strong>{selectedMessage.folder}</strong>
+                <span>状态</span>
+                <strong>{selectedMessage.is_read ? "已读" : "未读"}</strong>
+                <span>接收时间</span>
+                <strong>{formatDate(selectedMessage.received_at)}</strong>
+              </div>
+              {selectedMessage.remote_sync_failure && (
+                <RemoteFailurePanel
+                  failure={selectedMessage.remote_sync_failure}
+                  busy={busy}
+                  onRetry={onRetryRemoteFailure}
+                  onDismiss={onDismissRemoteFailure}
+                />
+              )}
+              <MailSharePanel records={visibleShareRecords} busy={busy} onRevoke={onRevokeMailShare} />
+              <MessageBody body={selectedMessage.body || selectedMessage.body_preview} bodyType={selectedMessage.body_type} />
+              {rawError && <div className="inlineError">{rawError}</div>}
+              {rawContent && (
+                <div className="rawSourcePanel">
+                  <div className="rawSourceHeader">
+                    <div>
+                      <strong>{rawContent.file_name}</strong>
+                      <small>{formatBytes(rawContent.size)}</small>
+                    </div>
+                    <button className="iconMini" title="Close raw source" onClick={() => setRawContent(null)}>
+                      <XCircle size={15} />
+                    </button>
                   </div>
-                  <button className="iconMini" title="Close raw source" onClick={() => setRawContent(null)}>
-                    <XCircle size={15} />
-                  </button>
+                  <pre>{rawContent.content}</pre>
                 </div>
-                <pre>{rawContent.content}</pre>
-              </div>
-            )}
-            {selectedMessage.attachments.length > 0 && (
-              <div className="attachmentList">
-                <h3>附件</h3>
-                <button
-                  className="button compact secondary attachmentDownloadAll"
-                  disabled={downloadingAllAttachments || downloadingAttachmentId !== null}
-                  onClick={() => handleDownloadAllAttachments(selectedMessage)}
-                >
-                  {downloadingAllAttachments ? <Loader2 className="spin" size={14} /> : <Download size={14} />}
-                  All
-                </button>
-                {attachmentError && <div className="inlineError">{attachmentError}</div>}
-                {selectedMessage.attachments.map((attachment) => (
+              )}
+              {selectedMessage.attachments.length > 0 && (
+                <div className="attachmentList">
+                  <h3>附件</h3>
                   <button
-                    className="attachmentButton"
-                    key={attachment.id}
+                    className="button compact secondary attachmentDownloadAll"
                     disabled={downloadingAllAttachments || downloadingAttachmentId !== null}
-                    onClick={() => handleDownloadAttachment(selectedMessage, attachment.id)}
+                    onClick={() => handleDownloadAllAttachments(selectedMessage)}
                   >
-                    {downloadingAttachmentId === attachment.id ? <Loader2 className="spin" size={15} /> : <Download size={15} />}
-                    <span>{attachment.name}</span>
-                    <small>{downloadingAttachmentId === attachment.id ? "Downloading" : formatBytes(attachment.size)}</small>
+                    {downloadingAllAttachments ? <Loader2 className="spin" size={14} /> : <Download size={14} />}
+                    All
                   </button>
-                ))}
-              </div>
-            )}
+                  {attachmentError && <div className="inlineError">{attachmentError}</div>}
+                  {selectedMessage.attachments.map((attachment) => (
+                    <button
+                      className="attachmentButton"
+                      key={attachment.id}
+                      disabled={downloadingAllAttachments || downloadingAttachmentId !== null}
+                      onClick={() => handleDownloadAttachment(selectedMessage, attachment.id)}
+                    >
+                      {downloadingAttachmentId === attachment.id ? <Loader2 className="spin" size={15} /> : <Download size={15} />}
+                      <span>{attachment.name}</span>
+                      <small>{downloadingAttachmentId === attachment.id ? "Downloading" : formatBytes(attachment.size)}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </article>
         </div>
       )}

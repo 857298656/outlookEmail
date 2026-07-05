@@ -753,12 +753,14 @@ button:disabled {
 
 .mailPreviewDialog {
   width: min(1200px, calc(100vw - 40px));
-  max-height: calc(100vh - 40px);
-  overflow: auto;
+  height: min(880px, calc(100vh - 24px));
+  max-height: calc(100vh - 24px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border: 1px solid #dfe5ec;
   border-radius: 8px;
   background: #fff;
-  padding: 26px;
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
 }
 
@@ -767,11 +769,12 @@ button:disabled {
 }
 
 .detailHeader {
+  flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding-bottom: 18px;
+  padding: 24px 26px 18px;
   border-bottom: 1px solid #e5e7eb;
 }
 
@@ -784,6 +787,34 @@ button:disabled {
 .detailHeader p {
   margin: 8px 0 0;
   color: #64748b;
+}
+
+.mailPreviewContent {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 26px 26px;
+}
+
+.mailPreviewContent .metaGrid {
+  grid-template-columns: 72px minmax(0, 1fr) 54px minmax(0, 1fr) 80px minmax(0, 1.2fr);
+  align-items: center;
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.mailPreviewContent .messageBody,
+.mailPreviewContent .remoteFailurePanel,
+.mailPreviewContent .mailSharePanel,
+.mailPreviewContent .rawSourcePanel {
+  max-width: none;
+}
+
+.mailPreviewContent .attachmentList {
+  max-width: 680px;
 }
 
 .metaGrid {

@@ -945,6 +945,20 @@ button:disabled {
   grid-template-columns: 300px 320px minmax(320px, 0.9fr) minmax(360px, 1.1fr);
 }
 
+.accountManagementGrid {
+  grid-template-columns: 280px minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.groupInventoryPanel,
+.accountInventoryPanel {
+  min-height: calc(100vh - 120px);
+}
+
+.accountGroupTree {
+  max-height: calc(100vh - 190px);
+}
+
 .panel {
   min-width: 0;
   border: 1px solid #dfe5ec;
@@ -1027,6 +1041,26 @@ button:disabled {
   width: min(760px, calc(100vw - 56px));
 }
 
+.groupSettingsDialog {
+  width: min(820px, calc(100vw - 56px));
+}
+
+.accountAuthDialog {
+  width: min(920px, calc(100vw - 56px));
+}
+
+.accountAuthDialogBody > .panel {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.modalTabLine {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
 .importTextarea {
   min-height: 210px;
   margin-top: 14px;
@@ -1042,6 +1076,10 @@ button:disabled {
   color: #64748b;
   font-size: 12px;
   white-space: nowrap;
+}
+
+.modalChipCloud {
+  margin-bottom: 0;
 }
 
 .oauthAccountBox,
@@ -1878,6 +1916,24 @@ button:disabled {
   background: #f3f4f6;
 }
 
+.tableEmptyRow {
+  display: grid;
+  place-items: center;
+  min-height: 120px;
+  border-top: 1px solid #eef2f7;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.accountInventoryPanel .tableHeader,
+.accountInventoryPanel .tableRow {
+  grid-template-columns: 32px minmax(220px, 1.2fr) minmax(120px, 0.6fr) 110px 140px 76px;
+}
+
+.accountRowActions {
+  justify-content: flex-end;
+}
+
 .selectCell {
   display: grid;
   place-items: center;
@@ -2234,6 +2290,15 @@ code {
 }
 
 @media (max-width: 820px) {
+  .accountManagementGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .groupInventoryPanel,
+  .accountInventoryPanel {
+    min-height: auto;
+  }
+
   .groupManageGrid {
     grid-template-columns: 1fr;
   }

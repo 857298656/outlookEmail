@@ -713,9 +713,9 @@ function App() {
             accounts={accounts}
             settings={settings}
             busy={busy}
-            onCreateGroup={(name, color) =>
+            onCreateGroup={(input) =>
               runAction(async () => {
-                await api.createGroup({ name, color });
+                await api.createGroup(input);
                 await loadWorkspace(selectedAccountId, folder);
               }, "分组已创建")
             }
@@ -1701,7 +1701,7 @@ function AccountsView({
   accounts: Account[];
   settings: Settings | null;
   busy: boolean;
-  onCreateGroup: (name: string, color: string) => void;
+  onCreateGroup: (input: Parameters<typeof api.createGroup>[0]) => void;
   onUpdateGroup: (input: Parameters<typeof api.updateGroup>[0]) => void;
   onDeleteGroup: (groupId: number) => void;
   onCreateTag: (name: string, color: string) => void;
@@ -1714,33 +1714,21 @@ function AccountsView({
   onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => Promise<string>;
   onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => void;
 }) {
-  const [groupName, setGroupName] = useState("");
-  const [selectedManageGroupId, setSelectedManageGroupId] = useState<number | undefined>(groups[0]?.id);
-  const [groupDraft, setGroupDraft] = useState<GroupDraft>({
-    name: "",
-    description: "",
-    color: colors[0],
-    parent_id: "",
-    sort_order: "0",
-    proxy_url: "",
-    fallback_proxy_url_1: "",
-    fallback_proxy_url_2: ""
-  });
-  const [tagName, setTagName] = useState("");
-  const [colorIndex, setColorIndex] = useState(0);
+  const [selectedManageGroupId, setSelectedManageGroupId] = useState<number | "all">("all");
+  const [groupSettingsOpen, setGroupSettingsOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>(accounts[0]?.id);
+  const [authAccountId, setAuthAccountId] = useState<number | undefined>();
   const [accountSearch, setAccountSearch] = useState("");
   const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
   const [batchGroupId, setBatchGroupId] = useState<number | "">(groups[0]?.id ?? "");
   const [batchTagId, setBatchTagId] = useState<number | "">(tags[0]?.id ?? "");
   const [secretExportPassword, setSecretExportPassword] = useState("");
   const [secretExportConfirm, setSecretExportConfirm] = useState("");
-  const [oauthUrl, setOauthUrl] = useState("");
-  const [oauthCallback, setOauthCallback] = useState("");
   const visibleAccounts = useMemo(() => {
     const keyword = accountSearch.trim().toLowerCase();
-    if (!keyword) return accounts;
     return accounts.filter((account) => {
+      if (selectedManageGroupId !== "all" && account.group_id !== selectedManageGroupId) return false;
+      if (!keyword) return true;
       const haystack = [
         account.email,
         account.remark,
@@ -1752,70 +1740,27 @@ function AccountsView({
         .toLowerCase();
       return haystack.includes(keyword);
     });
-  }, [accounts, accountSearch]);
-  const selectedAccount =
-    visibleAccounts.find((account) => account.id === selectedAccountId) ?? visibleAccounts[0] ?? accounts[0];
+  }, [accounts, accountSearch, selectedManageGroupId]);
+  const authAccount = accounts.find((account) => account.id === authAccountId);
   const selectedAccountIdSet = useMemo(() => new Set(selectedAccountIds), [selectedAccountIds]);
   const visibleAccountIds = useMemo(() => visibleAccounts.map((account) => account.id), [visibleAccounts]);
   const allVisibleAccountsSelected =
     visibleAccountIds.length > 0 && visibleAccountIds.every((accountId) => selectedAccountIdSet.has(accountId));
   const selectedAccountCount = selectedAccountIds.length;
-  const selectedManageGroup = groups.find((group) => group.id === selectedManageGroupId) ?? groups[0];
-  const selectedDescendantGroupIds = useMemo(
-    () => (selectedManageGroup ? collectDescendantGroupIds(groups, selectedManageGroup.id) : new Set<number>()),
-    [groups, selectedManageGroup?.id]
-  );
-  const selectedSubtreeDepth = useMemo(
-    () => (selectedManageGroup ? groupSubtreeDepth(groups, selectedManageGroup.id) : 0),
-    [groups, selectedManageGroup?.id]
-  );
-  const parentGroupOptions = useMemo(() => {
-    if (!selectedManageGroup) return [];
-    return groups.filter(
-      (group) =>
-        group.id !== selectedManageGroup.id &&
-        !selectedDescendantGroupIds.has(group.id) &&
-        group.level + 1 + selectedSubtreeDepth <= 3
-    );
-  }, [groups, selectedDescendantGroupIds, selectedManageGroup?.id, selectedSubtreeDepth]);
+  const selectedManageGroup =
+    selectedManageGroupId === "all" ? undefined : groups.find((group) => group.id === selectedManageGroupId);
 
   useEffect(() => {
-    if (groups.length === 0) {
-      setSelectedManageGroupId(undefined);
-      return;
-    }
-    if (!selectedManageGroupId || !groups.some((group) => group.id === selectedManageGroupId)) {
-      setSelectedManageGroupId(groups[0].id);
+    if (selectedManageGroupId !== "all" && !groups.some((group) => group.id === selectedManageGroupId)) {
+      setSelectedManageGroupId("all");
     }
   }, [groups, selectedManageGroupId]);
 
   useEffect(() => {
-    if (!selectedManageGroup) return;
-    setGroupDraft({
-      name: selectedManageGroup.name,
-      description: selectedManageGroup.description,
-      color: selectedManageGroup.color || colors[0],
-      parent_id: selectedManageGroup.parent_id ?? "",
-      sort_order: String(selectedManageGroup.sort_order),
-      proxy_url: selectedManageGroup.proxy_url,
-      fallback_proxy_url_1: selectedManageGroup.fallback_proxy_url_1,
-      fallback_proxy_url_2: selectedManageGroup.fallback_proxy_url_2
-    });
-  }, [
-    selectedManageGroup?.id,
-    selectedManageGroup?.name,
-    selectedManageGroup?.description,
-    selectedManageGroup?.color,
-    selectedManageGroup?.parent_id,
-    selectedManageGroup?.sort_order,
-    selectedManageGroup?.proxy_url,
-    selectedManageGroup?.fallback_proxy_url_1,
-    selectedManageGroup?.fallback_proxy_url_2
-  ]);
-
-  useEffect(() => {
     const accountIds = new Set(accounts.map((account) => account.id));
     setSelectedAccountIds((current) => current.filter((accountId) => accountIds.has(accountId)));
+    setSelectedAccountId((current) => (current && accountIds.has(current) ? current : accounts[0]?.id));
+    setAuthAccountId((current) => (current && accountIds.has(current) ? current : undefined));
   }, [accounts]);
 
   useEffect(() => {
@@ -1831,200 +1776,68 @@ function AccountsView({
   }, [tags, batchTagId]);
 
   return (
-    <section className="managementGrid">
-      <div className="panel">
+    <section className="managementGrid accountManagementGrid">
+      {groupSettingsOpen && (
+        <GroupSettingsDialog
+          groups={groups}
+          tags={tags}
+          selectedGroup={selectedManageGroup}
+          busy={busy}
+          onClose={() => setGroupSettingsOpen(false)}
+          onSelectGroup={(groupId) => setSelectedManageGroupId(groupId)}
+          onCreateGroup={onCreateGroup}
+          onUpdateGroup={onUpdateGroup}
+          onDeleteGroup={onDeleteGroup}
+          onCreateTag={onCreateTag}
+        />
+      )}
+      {authAccount && (
+        <AccountAuthDialog
+          account={authAccount}
+          groups={groups}
+          tags={tags}
+          settings={settings}
+          busy={busy}
+          onClose={() => setAuthAccountId(undefined)}
+          onSave={(input) => onUpdateAccount(input)}
+          onRevealAccountSecrets={(input) => onRevealAccountSecrets(input)}
+          onGenerateOAuthUrl={onGenerateOAuthUrl}
+          onExchangeOAuthToken={(input) => onExchangeOAuthToken(input)}
+        />
+      )}
+
+      <aside className="panel groupInventoryPanel">
         <div className="panelHeader">
-          <h2>分组和标签</h2>
-          <Tags size={18} />
-        </div>
-        <div className="formLine">
-          <input className="input grow" value={groupName} placeholder="新分组" onChange={(event) => setGroupName(event.target.value)} />
-          <button
-            className="button secondary"
-            disabled={!groupName.trim()}
-            onClick={() => {
-              onCreateGroup(groupName, colors[colorIndex]);
-              setGroupName("");
-              setColorIndex((colorIndex + 1) % colors.length);
-            }}
-          >
-            <Plus size={16} />
-            分组
+          <h2>分组</h2>
+          <button className="iconMini" title="新增或修改分组" disabled={busy} onClick={() => setGroupSettingsOpen(true)}>
+            <SettingsIcon size={15} />
           </button>
         </div>
-        {selectedManageGroup && (
-          <div className="groupManageGrid">
-            <div className="groupTree" aria-label="分组列表">
-              {groups.map((group) => (
-                <button
-                  className={selectedManageGroup.id === group.id ? "groupTreeButton active" : "groupTreeButton"}
-                  key={group.id}
-                  onClick={() => setSelectedManageGroupId(group.id)}
-                  style={{ paddingLeft: 12 + Math.max(0, group.level - 1) * 14 }}
-                >
-                  <span className="dot" style={{ backgroundColor: group.color }} />
-                  <span>{group.name}</span>
-                  <small>{group.account_count}</small>
-                </button>
-              ))}
-            </div>
-            <div className="groupEditor">
-              <div className="formLine">
-                <input
-                  className="input grow"
-                  value={groupDraft.name}
-                  placeholder="分组名称"
-                  onChange={(event) => setGroupDraft({ ...groupDraft, name: event.target.value })}
-                />
-                <input
-                  className="input smallInput"
-                  type="number"
-                  value={groupDraft.sort_order}
-                  title="排序"
-                  onChange={(event) => setGroupDraft({ ...groupDraft, sort_order: event.target.value })}
-                />
-              </div>
-              <div className="formLine">
-                <select
-                  className="select grow"
-                  value={groupDraft.parent_id}
-                  onChange={(event) =>
-                    setGroupDraft({
-                      ...groupDraft,
-                      parent_id: event.target.value ? Number(event.target.value) : ""
-                    })
-                  }
-                >
-                  <option value="">顶级分组</option>
-                  {parentGroupOptions.map((group) => (
-                    <option value={group.id} key={group.id}>
-                      {groupOptionLabel(group)}
-                    </option>
-                  ))}
-                </select>
-                <div className="colorSwatches" aria-label="分组颜色">
-                  {colors.map((color) => (
-                    <button
-                      className={groupDraft.color === color ? "colorSwatch active" : "colorSwatch"}
-                      key={color}
-                      title={color}
-                      style={{ backgroundColor: color }}
-                      onClick={() => setGroupDraft({ ...groupDraft, color })}
-                    />
-                  ))}
-                  <input
-                    className="colorInput"
-                    type="color"
-                    aria-label="自定义分组颜色"
-                    value={groupDraft.color}
-                    onChange={(event) => setGroupDraft({ ...groupDraft, color: event.target.value })}
-                  />
-                </div>
-              </div>
-              <input
-                className="input"
-                value={groupDraft.description}
-                placeholder="分组说明"
-                onChange={(event) => setGroupDraft({ ...groupDraft, description: event.target.value })}
-              />
-              <input
-                className="input"
-                value={groupDraft.proxy_url}
-                placeholder="分组主代理：http://127.0.0.1:7890"
-                onChange={(event) => setGroupDraft({ ...groupDraft, proxy_url: event.target.value })}
-              />
-              <div className="formLine">
-                <input
-                  className="input grow"
-                  value={groupDraft.fallback_proxy_url_1}
-                  placeholder="备用代理 1"
-                  onChange={(event) => setGroupDraft({ ...groupDraft, fallback_proxy_url_1: event.target.value })}
-                />
-                <input
-                  className="input grow"
-                  value={groupDraft.fallback_proxy_url_2}
-                  placeholder="备用代理 2"
-                  onChange={(event) => setGroupDraft({ ...groupDraft, fallback_proxy_url_2: event.target.value })}
-                />
-              </div>
-              <div className="formLine">
-                <button
-                  className="button primary grow"
-                  disabled={busy || !groupDraft.name.trim()}
-                  onClick={() => {
-                    const sortOrder = Number.parseInt(groupDraft.sort_order, 10);
-                    onUpdateGroup({
-                      id: selectedManageGroup.id,
-                      name: groupDraft.name,
-                      description: groupDraft.description,
-                      color: groupDraft.color,
-                      parent_id: groupDraft.parent_id === "" ? null : groupDraft.parent_id,
-                      sort_order: Number.isFinite(sortOrder) ? sortOrder : selectedManageGroup.sort_order,
-                      proxy_url: groupDraft.proxy_url,
-                      fallback_proxy_url_1: groupDraft.fallback_proxy_url_1,
-                      fallback_proxy_url_2: groupDraft.fallback_proxy_url_2
-                    });
-                  }}
-                >
-                  <CheckCircle2 size={16} />
-                  保存分组
-                </button>
-                <button
-                  className="button danger"
-                  disabled={busy || selectedManageGroup.id === 1}
-                  onClick={() => onDeleteGroup(selectedManageGroup.id)}
-                >
-                  <Trash2 size={16} />
-                  删除
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-        <div className="formLine">
-          <input className="input grow" value={tagName} placeholder="新标签" onChange={(event) => setTagName(event.target.value)} />
+        <div className="groupTree accountGroupTree" aria-label="分组列表">
           <button
-            className="button secondary"
-            disabled={!tagName.trim()}
-            onClick={() => {
-              onCreateTag(tagName, colors[colorIndex]);
-              setTagName("");
-              setColorIndex((colorIndex + 1) % colors.length);
-            }}
+            className={selectedManageGroupId === "all" ? "groupTreeButton active" : "groupTreeButton"}
+            onClick={() => setSelectedManageGroupId("all")}
           >
-            <Plus size={16} />
-            标签
+            <Archive size={15} />
+            <span>全部账号</span>
+            <small>{accounts.length}</small>
           </button>
-        </div>
-        <div className="chipCloud">
-          {tags.map((tag) => (
-            <span className="chip" key={tag.id}>
-              <span className="dot" style={{ backgroundColor: tag.color }} />
-              {tag.name}
-            </span>
+          {groups.map((group) => (
+            <button
+              className={selectedManageGroupId === group.id ? "groupTreeButton active" : "groupTreeButton"}
+              key={group.id}
+              onClick={() => setSelectedManageGroupId(group.id)}
+              style={{ paddingLeft: 12 + Math.max(0, group.level - 1) * 14 }}
+            >
+              <span className="dot" style={{ backgroundColor: group.color }} />
+              <span>{group.name}</span>
+              <small>{group.account_count}</small>
+            </button>
           ))}
         </div>
-      </div>
+      </aside>
 
-      <AccountEditor
-        account={selectedAccount}
-        groups={groups}
-        tags={tags}
-        settings={settings}
-        busy={busy}
-        oauthUrl={oauthUrl}
-        oauthCallback={oauthCallback}
-        onOauthCallbackChange={setOauthCallback}
-        onSave={(input) => onUpdateAccount(input)}
-        onRevealAccountSecrets={(input) => onRevealAccountSecrets(input)}
-        onGenerateOAuthUrl={async (input) => {
-          const url = await onGenerateOAuthUrl(input);
-          setOauthUrl(url);
-        }}
-        onExchangeOAuthToken={(input) => onExchangeOAuthToken(input)}
-      />
-
-      <div className="panel widePanel">
+      <section className="panel accountInventoryPanel">
         <div className="panelHeader">
           <h2>邮箱库存</h2>
           <div className="rowActions">
@@ -2181,11 +1994,11 @@ function AccountsView({
             <span>分组</span>
             <span>状态</span>
             <span>凭据</span>
-            <span />
+            <span>操作</span>
           </div>
           {visibleAccounts.map((account) => (
             <div
-              className={selectedAccount?.id === account.id ? "tableRow active" : "tableRow"}
+              className={selectedAccountId === account.id ? "tableRow active" : "tableRow"}
               key={account.id}
               onClick={() => setSelectedAccountId(account.id)}
             >
@@ -2210,22 +2023,329 @@ function AccountsView({
               </span>
               <span>{account.group_name ?? "无"}</span>
               <span>{formatStatus(account.last_refresh_status)}</span>
-              <span>{account.has_refresh_token ? "Graph" : account.has_imap_password || account.has_password ? "IMAP" : "无"}</span>
-              <button
-                className="iconMini danger"
-                title="删除账号"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDeleteAccount(account.id);
-                }}
-              >
-                <Trash2 size={15} />
-              </button>
+              <span>{account.has_refresh_token ? "Outlook / Graph" : account.has_imap_password || account.has_password ? "IMAP" : "无"}</span>
+              <span className="rowActions accountRowActions">
+                <button
+                  className="iconMini"
+                  title="授权设置"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setSelectedAccountId(account.id);
+                    setAuthAccountId(account.id);
+                  }}
+                >
+                  <KeyRound size={15} />
+                </button>
+                <button
+                  className="iconMini danger"
+                  title="删除账号"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDeleteAccount(account.id);
+                  }}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </span>
             </div>
           ))}
+          {visibleAccounts.length === 0 && <div className="tableEmptyRow">当前分组暂无账号</div>}
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function groupDraftFromGroup(group?: Group): GroupDraft {
+  return {
+    name: group?.name ?? "",
+    description: group?.description ?? "",
+    color: group?.color || colors[0],
+    parent_id: group?.parent_id ?? "",
+    sort_order: String(group?.sort_order ?? 0),
+    proxy_url: group?.proxy_url ?? "",
+    fallback_proxy_url_1: group?.fallback_proxy_url_1 ?? "",
+    fallback_proxy_url_2: group?.fallback_proxy_url_2 ?? ""
+  };
+}
+
+function GroupSettingsDialog({
+  groups,
+  tags,
+  selectedGroup,
+  busy,
+  onClose,
+  onSelectGroup,
+  onCreateGroup,
+  onUpdateGroup,
+  onDeleteGroup,
+  onCreateTag
+}: {
+  groups: Group[];
+  tags: Tag[];
+  selectedGroup?: Group;
+  busy: boolean;
+  onClose: () => void;
+  onSelectGroup: (groupId: number | "all") => void;
+  onCreateGroup: (input: Parameters<typeof api.createGroup>[0]) => void;
+  onUpdateGroup: (input: Parameters<typeof api.updateGroup>[0]) => void;
+  onDeleteGroup: (groupId: number) => void;
+  onCreateTag: (name: string, color: string) => void;
+}) {
+  const [mode, setMode] = useState<"create" | "edit">(selectedGroup ? "edit" : "create");
+  const [editingGroupId, setEditingGroupId] = useState<number | undefined>(selectedGroup?.id ?? groups[0]?.id);
+  const editingGroup = groups.find((group) => group.id === editingGroupId);
+  const activeGroup = mode === "edit" ? editingGroup : undefined;
+  const [draft, setDraft] = useState<GroupDraft>(groupDraftFromGroup(selectedGroup));
+  const [tagName, setTagName] = useState("");
+  const [colorIndex, setColorIndex] = useState(0);
+  const selectedDescendantGroupIds = useMemo(
+    () => (activeGroup ? collectDescendantGroupIds(groups, activeGroup.id) : new Set<number>()),
+    [groups, activeGroup?.id]
+  );
+  const selectedSubtreeDepth = useMemo(
+    () => (activeGroup ? groupSubtreeDepth(groups, activeGroup.id) : 0),
+    [groups, activeGroup?.id]
+  );
+  const parentGroupOptions = useMemo(() => {
+    if (mode === "create") return groups.filter((group) => group.level < 3);
+    if (!activeGroup) return [];
+    return groups.filter(
+      (group) =>
+        group.id !== activeGroup.id &&
+        !selectedDescendantGroupIds.has(group.id) &&
+        group.level + 1 + selectedSubtreeDepth <= 3
+    );
+  }, [groups, mode, activeGroup?.id, selectedDescendantGroupIds, selectedSubtreeDepth]);
+
+  useEffect(() => {
+    if (mode !== "edit") return;
+    if (!editingGroupId || !groups.some((group) => group.id === editingGroupId)) {
+      setEditingGroupId(groups[0]?.id);
+    }
+  }, [groups, editingGroupId, mode]);
+
+  useEffect(() => {
+    setDraft(mode === "edit" ? groupDraftFromGroup(activeGroup) : groupDraftFromGroup());
+  }, [
+    mode,
+    activeGroup?.id,
+    activeGroup?.name,
+    activeGroup?.description,
+    activeGroup?.color,
+    activeGroup?.parent_id,
+    activeGroup?.sort_order,
+    activeGroup?.proxy_url,
+    activeGroup?.fallback_proxy_url_1,
+    activeGroup?.fallback_proxy_url_2
+  ]);
+
+  function saveGroup() {
+    const sortOrder = Number.parseInt(draft.sort_order, 10);
+    const input = {
+      name: draft.name,
+      description: draft.description,
+      color: draft.color,
+      parent_id: draft.parent_id === "" ? null : draft.parent_id,
+      proxy_url: draft.proxy_url,
+      fallback_proxy_url_1: draft.fallback_proxy_url_1,
+      fallback_proxy_url_2: draft.fallback_proxy_url_2
+    };
+    if (mode === "create") {
+      onCreateGroup(input);
+      onClose();
+      return;
+    }
+    if (!activeGroup) return;
+    onUpdateGroup({
+      id: activeGroup.id,
+      ...input,
+      sort_order: Number.isFinite(sortOrder) ? sortOrder : activeGroup.sort_order
+    });
+    onSelectGroup(activeGroup.id);
+    onClose();
+  }
+
+  function deleteGroup() {
+    if (!activeGroup) return;
+    onDeleteGroup(activeGroup.id);
+    onSelectGroup("all");
+    onClose();
+  }
+
+  return (
+    <div
+      className="oauthDialogBackdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !busy) onClose();
+      }}
+    >
+      <div className="oauthDialog groupSettingsDialog" role="dialog" aria-modal="true" aria-labelledby="groupSettingsTitle">
+        <div className="oauthDialogHeader">
+          <div>
+            <span className="oauthDialogIcon">
+              <FolderKanban size={18} />
+            </span>
+            <h2 id="groupSettingsTitle">分组设置</h2>
+          </div>
+          <button className="iconMini" title="关闭" disabled={busy} onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="oauthDialogBody">
+          <section className="oauthAccountBox">
+            <div className="modalTabLine">
+              <button className={mode === "create" ? "button compact primary" : "button compact secondary"} onClick={() => setMode("create")}>
+                <Plus size={14} />
+                新建
+              </button>
+              <button
+                className={mode === "edit" ? "button compact primary" : "button compact secondary"}
+                disabled={groups.length === 0}
+                onClick={() => setMode("edit")}
+              >
+                <SettingsIcon size={14} />
+                编辑
+              </button>
+            </div>
+            {mode === "edit" && (
+              <label className="field">
+                选择分组
+                <select className="select" value={editingGroupId ?? ""} onChange={(event) => setEditingGroupId(Number(event.target.value))}>
+                  {groups.map((group) => (
+                    <option value={group.id} key={group.id}>
+                      {groupOptionLabel(group)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <div className="oauthFieldGrid">
+              <label className="field grow">
+                分组名称
+                <input className="input" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+              </label>
+              <label className="field grow">
+                排序
+                <input
+                  className="input"
+                  type="number"
+                  value={draft.sort_order}
+                  disabled={mode === "create"}
+                  onChange={(event) => setDraft({ ...draft, sort_order: event.target.value })}
+                />
+              </label>
+              <label className="field grow">
+                父级分组
+                <select
+                  className="select"
+                  value={draft.parent_id}
+                  onChange={(event) => setDraft({ ...draft, parent_id: event.target.value ? Number(event.target.value) : "" })}
+                >
+                  <option value="">顶级分组</option>
+                  {parentGroupOptions.map((group) => (
+                    <option value={group.id} key={group.id}>
+                      {groupOptionLabel(group)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field grow">
+                颜色
+                <div className="colorSwatches">
+                  {colors.map((color) => (
+                    <button
+                      className={draft.color === color ? "colorSwatch active" : "colorSwatch"}
+                      key={color}
+                      title={color}
+                      style={{ backgroundColor: color }}
+                      onClick={() => setDraft({ ...draft, color })}
+                    />
+                  ))}
+                  <input
+                    className="colorInput"
+                    type="color"
+                    aria-label="自定义分组颜色"
+                    value={draft.color}
+                    onChange={(event) => setDraft({ ...draft, color: event.target.value })}
+                  />
+                </div>
+              </label>
+            </div>
+            <textarea
+              className="textarea compact"
+              value={draft.description}
+              placeholder="分组说明"
+              onChange={(event) => setDraft({ ...draft, description: event.target.value })}
+            />
+            <input
+              className="input"
+              value={draft.proxy_url}
+              placeholder="分组主代理：http://127.0.0.1:7890"
+              onChange={(event) => setDraft({ ...draft, proxy_url: event.target.value })}
+            />
+            <div className="formLine">
+              <input
+                className="input grow"
+                value={draft.fallback_proxy_url_1}
+                placeholder="备用代理 1"
+                onChange={(event) => setDraft({ ...draft, fallback_proxy_url_1: event.target.value })}
+              />
+              <input
+                className="input grow"
+                value={draft.fallback_proxy_url_2}
+                placeholder="备用代理 2"
+                onChange={(event) => setDraft({ ...draft, fallback_proxy_url_2: event.target.value })}
+              />
+            </div>
+          </section>
+
+          <section className="oauthStep">
+            <h3>标签</h3>
+            <div className="formLine">
+              <input className="input grow" value={tagName} placeholder="新标签" onChange={(event) => setTagName(event.target.value)} />
+              <button
+                className="button secondary"
+                disabled={!tagName.trim()}
+                onClick={() => {
+                  onCreateTag(tagName, colors[colorIndex]);
+                  setTagName("");
+                  setColorIndex((colorIndex + 1) % colors.length);
+                }}
+              >
+                <Plus size={16} />
+                标签
+              </button>
+            </div>
+            <div className="chipCloud modalChipCloud">
+              {tags.map((tag) => (
+                <span className="chip" key={tag.id}>
+                  <span className="dot" style={{ backgroundColor: tag.color }} />
+                  {tag.name}
+                </span>
+              ))}
+            </div>
+          </section>
+        </div>
+
+        <div className="oauthDialogFooter">
+          {mode === "edit" && activeGroup && (
+            <button className="button danger" disabled={busy || activeGroup.id === 1} onClick={deleteGroup}>
+              <Trash2 size={16} />
+              删除
+            </button>
+          )}
+          <button className="button secondary" disabled={busy} onClick={onClose}>
+            关闭
+          </button>
+          <button className="button primary" disabled={busy || !draft.name.trim() || (mode === "edit" && !activeGroup)} onClick={saveGroup}>
+            <CheckCircle2 size={16} />
+            {mode === "create" ? "创建分组" : "保存分组"}
+          </button>
         </div>
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -3767,10 +3887,84 @@ function isRefreshReady(account: Account) {
 }
 
 function refreshCredentialLabel(account: Account) {
-  if (account.has_refresh_token) return "Graph";
+  if (account.has_refresh_token) return "Outlook / Graph";
   if (account.has_imap_password) return "IMAP 密码";
   if (account.has_password) return "账号密码";
   return "缺少凭据";
+}
+
+function AccountAuthDialog({
+  account,
+  groups,
+  tags,
+  settings,
+  busy,
+  onClose,
+  onSave,
+  onRevealAccountSecrets,
+  onGenerateOAuthUrl,
+  onExchangeOAuthToken
+}: {
+  account: Account;
+  groups: Group[];
+  tags: Tag[];
+  settings: Settings | null;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (input: Parameters<typeof api.updateAccount>[0]) => void;
+  onRevealAccountSecrets: (input: Parameters<typeof api.revealAccountSecrets>[0]) => Promise<Awaited<ReturnType<typeof api.revealAccountSecrets>>>;
+  onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => Promise<string>;
+  onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => void;
+}) {
+  const [oauthUrl, setOauthUrl] = useState("");
+  const [oauthCallback, setOauthCallback] = useState("");
+
+  useEffect(() => {
+    setOauthUrl("");
+    setOauthCallback("");
+  }, [account.id]);
+
+  return (
+    <div
+      className="oauthDialogBackdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !busy) onClose();
+      }}
+    >
+      <div className="oauthDialog accountAuthDialog" role="dialog" aria-modal="true" aria-labelledby="accountAuthTitle">
+        <div className="oauthDialogHeader">
+          <div>
+            <span className="oauthDialogIcon">
+              <KeyRound size={18} />
+            </span>
+            <h2 id="accountAuthTitle">授权设置 · {account.email}</h2>
+          </div>
+          <button className="iconMini" title="关闭" disabled={busy} onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+        <div className="oauthDialogBody accountAuthDialogBody">
+          <AccountEditor
+            account={account}
+            groups={groups}
+            tags={tags}
+            settings={settings}
+            busy={busy}
+            hideHeader
+            oauthUrl={oauthUrl}
+            oauthCallback={oauthCallback}
+            onOauthCallbackChange={setOauthCallback}
+            onSave={onSave}
+            onRevealAccountSecrets={onRevealAccountSecrets}
+            onGenerateOAuthUrl={async (input) => {
+              setOauthUrl(await onGenerateOAuthUrl(input));
+            }}
+            onExchangeOAuthToken={onExchangeOAuthToken}
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function AccountEditor({
@@ -3785,13 +3979,15 @@ function AccountEditor({
   onSave,
   onRevealAccountSecrets,
   onGenerateOAuthUrl,
-  onExchangeOAuthToken
+  onExchangeOAuthToken,
+  hideHeader = false
 }: {
   account?: Account;
   groups: Group[];
   tags: Tag[];
   settings: Settings | null;
   busy: boolean;
+  hideHeader?: boolean;
   oauthUrl: string;
   oauthCallback: string;
   onOauthCallbackChange: (value: string) => void;
@@ -3829,7 +4025,7 @@ function AccountEditor({
     setDraft({
       email: account.email,
       group_id: account.group_id,
-      provider: account.provider || "graph",
+      provider: account.provider === "imap" ? "imap" : "graph",
       account_type: account.account_type || "outlook",
       remark: account.remark,
       forward_enabled: account.forward_enabled,
@@ -3863,16 +4059,17 @@ function AccountEditor({
 
   return (
     <div className="panel">
-      <div className="panelHeader">
-        <h2>授权设置</h2>
-        <KeyRound size={18} />
-      </div>
+      {!hideHeader && (
+        <div className="panelHeader">
+          <h2>授权设置</h2>
+          <KeyRound size={18} />
+        </div>
+      )}
       <div className="formLine">
         <input className="input grow" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} />
         <select className="select" value={draft.provider} onChange={(event) => setDraft({ ...draft, provider: event.target.value })}>
-          <option value="graph">Graph</option>
+          <option value="graph">Outlook / Graph</option>
           <option value="imap">IMAP</option>
-          <option value="outlook">Outlook</option>
         </select>
       </div>
       <div className="formLine">

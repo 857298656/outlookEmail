@@ -333,6 +333,41 @@ function App() {
     }
   }
 
+  async function importAccounts(raw: string, groupId: number | null) {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await api.importAccounts({ raw, group_id: groupId });
+      await loadWorkspace(selectedAccountId, folder);
+      await loadStatus();
+      setNotice("账号已导入");
+    } catch (err) {
+      setError(readError(err));
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveOAuthAccount(input: OAuthSaveAccountInput) {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api.saveOAuthAccount(input);
+      setNotice(`OAuth 账号已保存：${result.account.email}（${result.refresh_token_preview}）`);
+      await loadWorkspace(result.account.id, folder);
+      await loadStatus();
+      return result;
+    } catch (err) {
+      setError(readError(err));
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!status) {
     return (
       <div className="centerScreen">
@@ -505,6 +540,7 @@ function App() {
         {view === "mail" && (
           <MailWorkspace
             groups={groups}
+            settings={settings}
             accounts={filteredAccounts}
             messages={messages}
             selectedGroupId={selectedGroupId}
@@ -597,15 +633,10 @@ function App() {
                 setNotice("本地分享已撤销");
               })
             }
-            onCreateDemo={() =>
-              selectedAccountId
-                ? runAction(async () => {
-                    await api.createDemoMessage(selectedAccountId);
-                    setMailPage(0);
-                    await loadWorkspace(selectedAccountId, folder, mailFilters, 0);
-                  }, "已创建本地邮件")
-                : undefined
-            }
+            onImportAccounts={importAccounts}
+            onGenerateOAuthUrl={(input) => api.generateOAuthAuthUrl(input)}
+            onPreviewOAuthToken={(input) => api.exchangeOAuthToken(input)}
+            onSaveOAuthAccount={saveOAuthAccount}
             onDownloadAttachment={async (message, attachmentId) => {
               setBusy(true);
               setError(null);
@@ -682,13 +713,6 @@ function App() {
             accounts={accounts}
             settings={settings}
             busy={busy}
-            onImport={(raw, groupId) =>
-              runAction(async () => {
-                await api.importAccounts({ raw, group_id: groupId });
-                await loadWorkspace(selectedAccountId, folder);
-                await loadStatus();
-              }, "账号已导入")
-            }
             onCreateGroup={(name, color) =>
               runAction(async () => {
                 await api.createGroup({ name, color });
@@ -753,24 +777,6 @@ function App() {
             }
             onRevealAccountSecrets={(input) => api.revealAccountSecrets(input)}
             onGenerateOAuthUrl={(input) => api.generateOAuthAuthUrl(input)}
-            onPreviewOAuthToken={(input) => api.exchangeOAuthToken(input)}
-            onSaveOAuthAccount={async (input) => {
-              setBusy(true);
-              setError(null);
-              setNotice(null);
-              try {
-                const result = await api.saveOAuthAccount(input);
-                setNotice(`OAuth 账号已保存：${result.account.email}（${result.refresh_token_preview}）`);
-                await loadWorkspace(result.account.id, folder);
-                await loadStatus();
-                return result;
-              } catch (err) {
-                setError(readError(err));
-                throw err;
-              } finally {
-                setBusy(false);
-              }
-            }}
             onExchangeOAuthToken={(input) =>
               runAction(async () => {
                 const result = await api.exchangeOAuthToken(input);
@@ -1170,6 +1176,7 @@ function LockScreen({
 
 function MailWorkspace({
   groups,
+  settings,
   accounts,
   messages,
   selectedGroupId,
@@ -1196,7 +1203,10 @@ function MailWorkspace({
   onExportMessages,
   onCreateMailShare,
   onRevokeMailShare,
-  onCreateDemo,
+  onImportAccounts,
+  onGenerateOAuthUrl,
+  onPreviewOAuthToken,
+  onSaveOAuthAccount,
   onDownloadAttachment,
   onDownloadAllAttachments,
   onViewRawMessage,
@@ -1204,6 +1214,7 @@ function MailWorkspace({
   onDismissRemoteFailure
 }: {
   groups: Group[];
+  settings: Settings | null;
   accounts: Account[];
   messages: MailMessage[];
   selectedGroupId: number | "all";
@@ -1230,7 +1241,10 @@ function MailWorkspace({
   onExportMessages: (messageIds: number[]) => void;
   onCreateMailShare: (messageIds: number[], expiresInDays: number) => void;
   onRevokeMailShare: (shareId: number) => void;
-  onCreateDemo: () => void;
+  onImportAccounts: (raw: string, groupId: number | null) => Promise<void> | void;
+  onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => Promise<string>;
+  onPreviewOAuthToken: (input: { client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => Promise<OAuthTokenResult>;
+  onSaveOAuthAccount: (input: OAuthSaveAccountInput) => Promise<OAuthSaveAccountResult>;
   onDownloadAttachment: (message: MailMessage, attachmentId: string) => void | Promise<void>;
   onDownloadAllAttachments: (message: MailMessage) => Promise<void>;
   onViewRawMessage: (message: MailMessage) => Promise<MailRawContent>;
@@ -1245,6 +1259,8 @@ function MailWorkspace({
   const [rawBusy, setRawBusy] = useState(false);
   const [rawError, setRawError] = useState<string | null>(null);
   const [shareExpiresInDays, setShareExpiresInDays] = useState(30);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [oauthSaveOpen, setOauthSaveOpen] = useState(false);
   const selectedCount = selectedMessageIds.length;
   const visibleShareRecords = useMemo(
     () =>
@@ -1305,6 +1321,27 @@ function MailWorkspace({
 
   return (
     <section className="workspaceGrid">
+      {importDialogOpen && (
+        <AccountImportDialog
+          groups={groups}
+          selectedGroupId={selectedGroupId}
+          busy={busy}
+          onClose={() => setImportDialogOpen(false)}
+          onImport={onImportAccounts}
+        />
+      )}
+      {oauthSaveOpen && (
+        <OAuthAccountSaveDialog
+          groups={groups}
+          settings={settings}
+          selectedGroupId={selectedGroupId}
+          busy={busy}
+          onClose={() => setOauthSaveOpen(false)}
+          onGenerateOAuthUrl={onGenerateOAuthUrl}
+          onPreviewOAuthToken={onPreviewOAuthToken}
+          onSaveOAuthAccount={onSaveOAuthAccount}
+        />
+      )}
       <aside className="pane groupPane">
         <div className="paneHeader">
           <h2>分组</h2>
@@ -1330,9 +1367,14 @@ function MailWorkspace({
       <aside className="pane accountPane">
         <div className="paneHeader">
           <h2>账号</h2>
-          <button className="iconMini" title="创建本地测试邮件" onClick={onCreateDemo} disabled={!selectedAccountId}>
-            <Plus size={16} />
-          </button>
+          <div className="paneHeaderActions">
+            <button className="iconMini" title="导入账号" onClick={() => setImportDialogOpen(true)} disabled={busy}>
+              <Upload size={16} />
+            </button>
+            <button className="iconMini" title="授权保存 Outlook 账号" onClick={() => setOauthSaveOpen(true)} disabled={busy}>
+              <KeyRound size={16} />
+            </button>
+          </div>
         </div>
         <div className="searchBox">
           <Search size={15} />
@@ -1641,7 +1683,6 @@ function AccountsView({
   accounts,
   settings,
   busy,
-  onImport,
   onCreateGroup,
   onUpdateGroup,
   onDeleteGroup,
@@ -1653,8 +1694,6 @@ function AccountsView({
   onUpdateAccount,
   onRevealAccountSecrets,
   onGenerateOAuthUrl,
-  onPreviewOAuthToken,
-  onSaveOAuthAccount,
   onExchangeOAuthToken
 }: {
   groups: Group[];
@@ -1662,7 +1701,6 @@ function AccountsView({
   accounts: Account[];
   settings: Settings | null;
   busy: boolean;
-  onImport: (raw: string, groupId: number | null) => void;
   onCreateGroup: (name: string, color: string) => void;
   onUpdateGroup: (input: Parameters<typeof api.updateGroup>[0]) => void;
   onDeleteGroup: (groupId: number) => void;
@@ -1674,12 +1712,8 @@ function AccountsView({
   onUpdateAccount: (input: Parameters<typeof api.updateAccount>[0]) => void;
   onRevealAccountSecrets: (input: Parameters<typeof api.revealAccountSecrets>[0]) => Promise<Awaited<ReturnType<typeof api.revealAccountSecrets>>>;
   onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => Promise<string>;
-  onPreviewOAuthToken: (input: { client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => Promise<OAuthTokenResult>;
-  onSaveOAuthAccount: (input: OAuthSaveAccountInput) => Promise<OAuthSaveAccountResult>;
   onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => void;
 }) {
-  const [raw, setRaw] = useState("");
-  const [groupId, setGroupId] = useState<number | null>(groups[0]?.id ?? null);
   const [groupName, setGroupName] = useState("");
   const [selectedManageGroupId, setSelectedManageGroupId] = useState<number | undefined>(groups[0]?.id);
   const [groupDraft, setGroupDraft] = useState<GroupDraft>({
@@ -1703,7 +1737,6 @@ function AccountsView({
   const [secretExportConfirm, setSecretExportConfirm] = useState("");
   const [oauthUrl, setOauthUrl] = useState("");
   const [oauthCallback, setOauthCallback] = useState("");
-  const [oauthSaveOpen, setOauthSaveOpen] = useState(false);
   const visibleAccounts = useMemo(() => {
     const keyword = accountSearch.trim().toLowerCase();
     if (!keyword) return accounts;
@@ -1727,7 +1760,6 @@ function AccountsView({
   const allVisibleAccountsSelected =
     visibleAccountIds.length > 0 && visibleAccountIds.every((accountId) => selectedAccountIdSet.has(accountId));
   const selectedAccountCount = selectedAccountIds.length;
-  const parsedRows = useMemo(() => parseAccountRows(raw), [raw]);
   const selectedManageGroup = groups.find((group) => group.id === selectedManageGroupId) ?? groups[0];
   const selectedDescendantGroupIds = useMemo(
     () => (selectedManageGroup ? collectDescendantGroupIds(groups, selectedManageGroup.id) : new Set<number>()),
@@ -1800,47 +1832,6 @@ function AccountsView({
 
   return (
     <section className="managementGrid">
-      {oauthSaveOpen && (
-        <OAuthAccountSaveDialog
-          groups={groups}
-          settings={settings}
-          busy={busy}
-          onClose={() => setOauthSaveOpen(false)}
-          onGenerateOAuthUrl={onGenerateOAuthUrl}
-          onPreviewOAuthToken={onPreviewOAuthToken}
-          onSaveOAuthAccount={onSaveOAuthAccount}
-        />
-      )}
-      <div className="panel">
-        <div className="panelHeader">
-          <h2>导入账号</h2>
-          <Upload size={18} />
-        </div>
-        <textarea
-          className="textarea"
-          value={raw}
-          onChange={(event) => setRaw(event.target.value)}
-          placeholder="邮箱----密码----client_id----refresh_token----备注"
-        />
-        <div className="formLine">
-          <select className="select grow" value={groupId ?? ""} onChange={(event) => setGroupId(Number(event.target.value))}>
-            {groups.map((group) => (
-              <option value={group.id} key={group.id}>
-                {group.name}
-              </option>
-            ))}
-          </select>
-          <button className="button primary" disabled={busy || parsedRows.length === 0} onClick={() => onImport(raw, groupId)}>
-            <Download size={16} />
-            导入 {parsedRows.length || ""}
-          </button>
-          <button className="button secondary" disabled={busy} onClick={() => setOauthSaveOpen(true)}>
-            <KeyRound size={16} />
-            授权保存
-          </button>
-        </div>
-      </div>
-
       <div className="panel">
         <div className="panelHeader">
           <h2>分组和标签</h2>
@@ -2247,9 +2238,125 @@ type OAuthAccountSaveDraft = {
   callback_url: string;
 };
 
+function AccountImportDialog({
+  groups,
+  selectedGroupId,
+  busy,
+  onClose,
+  onImport
+}: {
+  groups: Group[];
+  selectedGroupId: number | "all";
+  busy: boolean;
+  onClose: () => void;
+  onImport: (raw: string, groupId: number | null) => Promise<void> | void;
+}) {
+  const initialGroupId =
+    selectedGroupId !== "all" && groups.some((group) => group.id === selectedGroupId) ? selectedGroupId : groups[0]?.id ?? null;
+  const [raw, setRaw] = useState("");
+  const [groupId, setGroupId] = useState<number | null>(initialGroupId);
+  const [localBusy, setLocalBusy] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const parsedRows = useMemo(() => parseAccountRows(raw), [raw]);
+  const loading = busy || localBusy;
+
+  useEffect(() => {
+    setGroupId((current) => {
+      if (current !== null && groups.some((group) => group.id === current)) return current;
+      return initialGroupId;
+    });
+  }, [groups, initialGroupId]);
+
+  async function handleImport() {
+    if (parsedRows.length === 0) {
+      setLocalError("请粘贴至少一行账号数据");
+      return;
+    }
+    setLocalBusy(true);
+    setLocalError(null);
+    try {
+      await onImport(raw, groupId);
+      onClose();
+    } catch (err) {
+      setLocalError(readError(err));
+    } finally {
+      setLocalBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="oauthDialogBackdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !loading) onClose();
+      }}
+    >
+      <div className="oauthDialog importDialog" role="dialog" aria-modal="true" aria-labelledby="accountImportTitle">
+        <div className="oauthDialogHeader">
+          <div>
+            <span className="oauthDialogIcon">
+              <Upload size={18} />
+            </span>
+            <h2 id="accountImportTitle">导入账号</h2>
+          </div>
+          <button className="iconMini" title="关闭" disabled={loading} onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="oauthDialogBody">
+          <section className="oauthAccountBox">
+            <h3>账号数据</h3>
+            <p>每行一条账号，支持邮箱、密码、client_id、refresh_token、备注字段。</p>
+            <textarea
+              className="textarea importTextarea"
+              value={raw}
+              autoFocus
+              onChange={(event) => {
+                setRaw(event.target.value);
+                setLocalError(null);
+              }}
+              placeholder="邮箱----密码----client_id----refresh_token----备注"
+            />
+            <div className="formLine importDialogControls">
+              <label className="field grow">
+                目标分组
+                <select
+                  className="select"
+                  value={groupId ?? ""}
+                  onChange={(event) => setGroupId(event.target.value ? Number(event.target.value) : null)}
+                >
+                  {groups.map((group) => (
+                    <option value={group.id} key={group.id}>
+                      {groupOptionLabel(group)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <span className="dialogMeta">已识别 {parsedRows.length} 个账号</span>
+            </div>
+          </section>
+          {localError && <div className="formError">{localError}</div>}
+        </div>
+
+        <div className="oauthDialogFooter">
+          <button className="button secondary" disabled={loading} onClick={onClose}>
+            关闭
+          </button>
+          <button className="button primary" disabled={loading || parsedRows.length === 0} onClick={handleImport}>
+            {localBusy ? <Loader2 className="spin" size={16} /> : <Download size={16} />}
+            导入 {parsedRows.length || ""}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OAuthAccountSaveDialog({
   groups,
   settings,
+  selectedGroupId,
   busy,
   onClose,
   onGenerateOAuthUrl,
@@ -2258,17 +2365,22 @@ function OAuthAccountSaveDialog({
 }: {
   groups: Group[];
   settings: Settings | null;
+  selectedGroupId?: number | "all";
   busy: boolean;
   onClose: () => void;
   onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => Promise<string>;
   onPreviewOAuthToken: (input: { client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => Promise<OAuthTokenResult>;
   onSaveOAuthAccount: (input: OAuthSaveAccountInput) => Promise<OAuthSaveAccountResult>;
 }) {
+  const initialGroupId =
+    selectedGroupId !== "all" && selectedGroupId !== undefined && groups.some((group) => group.id === selectedGroupId)
+      ? selectedGroupId
+      : groups[0]?.id ?? null;
   const [draft, setDraft] = useState<OAuthAccountSaveDraft>({
     email: "",
     password: "",
     client_id: settings?.graph_client_id || defaultGraphClientId,
-    group_id: groups[0]?.id ?? null,
+    group_id: initialGroupId,
     forward_enabled: false,
     callback_url: ""
   });
@@ -2291,12 +2403,11 @@ function OAuthAccountSaveDialog({
   const loading = busy || localBusy !== null;
 
   useEffect(() => {
-    if (!groups.length) return;
     setDraft((current) => {
       if (current.group_id && groups.some((group) => group.id === current.group_id)) return current;
-      return { ...current, group_id: groups[0].id };
+      return { ...current, group_id: initialGroupId };
     });
-  }, [groups]);
+  }, [groups, initialGroupId]);
 
   useEffect(() => {
     let cancelled = false;

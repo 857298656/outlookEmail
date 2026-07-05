@@ -380,6 +380,12 @@ button:disabled {
   font-size: 15px;
 }
 
+.paneHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .listRow,
 .accountRow,
 .messageRow {
@@ -1015,6 +1021,27 @@ button:disabled {
   justify-content: flex-end;
   border-top: 1px solid #eef2f7;
   background: #fff;
+}
+
+.importDialog {
+  width: min(760px, calc(100vw - 56px));
+}
+
+.importTextarea {
+  min-height: 210px;
+  margin-top: 14px;
+  resize: vertical;
+}
+
+.importDialogControls {
+  align-items: flex-end;
+  margin-top: 14px;
+}
+
+.dialogMeta {
+  color: #64748b;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .oauthAccountBox,

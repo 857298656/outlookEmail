@@ -162,10 +162,6 @@ function App() {
   const selectedTempMessage = tempMessages.find((message) => message.message_id === selectedTempMessageId);
   const railIdentity = selectedAccount?.email ?? accounts[0]?.email ?? "管理员";
   const railInitial = railIdentity === "管理员" ? "管" : railIdentity.slice(0, 1).toUpperCase();
-  const filteredAccounts = useMemo(() => {
-    if (selectedGroupId === "all") return accounts;
-    return accounts.filter((account) => account.group_id === selectedGroupId);
-  }, [accounts, selectedGroupId]);
   const skin = buildSkin(settings);
 
   useEffect(() => {
@@ -541,7 +537,7 @@ function App() {
           <MailWorkspace
             groups={groups}
             settings={settings}
-            accounts={filteredAccounts}
+            accounts={accounts}
             messages={messages}
             selectedGroupId={selectedGroupId}
             selectedAccountId={selectedAccountId}
@@ -555,14 +551,21 @@ function App() {
             busy={busy}
             onGroupChange={(groupId) => {
               setSelectedGroupId(groupId);
-              const nextAccount = groupId === "all" ? accounts[0] : accounts.find((account) => account.group_id === groupId);
+              const groupAccountIds =
+                groupId === "all" ? null : new Set<number>([groupId, ...Array.from(collectDescendantGroupIds(groups, groupId))]);
+              const nextAccount =
+                groupId === "all"
+                  ? accounts[0]
+                  : accounts.find((account) => account.group_id !== null && groupAccountIds?.has(account.group_id));
               setSelectedAccountId(nextAccount?.id);
               setMailPage(0);
               void runAction(async () => loadMailboxMessages(nextAccount?.id, folder, mailFilters, 0));
             }}
             onAccountSelect={(accountId) =>
               runAction(async () => {
+                const account = accounts.find((item) => item.id === accountId);
                 setSelectedAccountId(accountId);
+                setSelectedGroupId(account?.group_id ?? "all");
                 setMailPage(0);
                 await loadMailboxMessages(accountId, folder, mailFilters, 0);
               })
@@ -1269,6 +1272,27 @@ function MailWorkspace({
         : mailShareRecords,
     [mailShareRecords, selectedAccountId]
   );
+  const groupIds = useMemo(() => new Set(groups.map((group) => group.id)), [groups]);
+  const childGroupsByParent = useMemo(() => {
+    const map = new Map<number | null, Group[]>();
+    groups.forEach((group) => {
+      const key = group.parent_id ?? null;
+      const list = map.get(key) ?? [];
+      list.push(group);
+      map.set(key, list);
+    });
+    return map;
+  }, [groups]);
+  const accountsByGroup = useMemo(() => {
+    const map = new Map<number | null, Account[]>();
+    accounts.forEach((account) => {
+      const key = account.group_id !== null && groupIds.has(account.group_id) ? account.group_id : null;
+      const list = map.get(key) ?? [];
+      list.push(account);
+      map.set(key, list);
+    });
+    return map;
+  }, [accounts, groupIds]);
 
   useEffect(() => {
     setDraftFilters(filters);
@@ -1319,6 +1343,48 @@ function MailWorkspace({
     }
   }
 
+  function treeDepthStyle(depth: number): CSSProperties {
+    return { "--tree-indent": `${depth * 16}px` } as CSSProperties;
+  }
+
+  function renderTreeAccount(account: Account, depth: number) {
+    return (
+      <button
+        key={`account-${account.id}`}
+        className={selectedAccountId === account.id ? "mailTreeRow mailTreeAccount active" : "mailTreeRow mailTreeAccount"}
+        style={treeDepthStyle(depth)}
+        onClick={() => onAccountSelect(account.id)}
+      >
+        <span className="mailAvatar">{account.email.slice(0, 2).toUpperCase()}</span>
+        <span className="mailTreeText">
+          <strong>{account.email}</strong>
+          <small>{formatStatus(account.last_refresh_status)} · {account.message_count} 封邮件</small>
+        </span>
+      </button>
+    );
+  }
+
+  function renderTreeGroup(group: Group, depth: number): ReactNode {
+    const childGroups = childGroupsByParent.get(group.id) ?? [];
+    const groupAccounts = accountsByGroup.get(group.id) ?? [];
+
+    return (
+      <div className="mailTreeNode" key={`group-${group.id}`}>
+        <button
+          className={selectedGroupId === group.id ? "mailTreeRow mailTreeGroup active" : "mailTreeRow mailTreeGroup"}
+          style={treeDepthStyle(depth)}
+          onClick={() => onGroupChange(group.id)}
+        >
+          <span className="dot" style={{ backgroundColor: group.color }} />
+          <span className="mailTreeLabel">{group.name}</span>
+          <small>{group.account_count}</small>
+        </button>
+        {childGroups.map((child) => renderTreeGroup(child, depth + 1))}
+        {groupAccounts.map((account) => renderTreeAccount(account, depth + 1))}
+      </div>
+    );
+  }
+
   return (
     <section className="workspaceGrid">
       {importDialogOpen && (
@@ -1342,31 +1408,9 @@ function MailWorkspace({
           onSaveOAuthAccount={onSaveOAuthAccount}
         />
       )}
-      <aside className="pane groupPane">
+      <aside className="pane mailTreePane">
         <div className="paneHeader">
-          <h2>分组</h2>
-        </div>
-        <button className={selectedGroupId === "all" ? "listRow active" : "listRow"} onClick={() => onGroupChange("all")}>
-          <Archive size={16} />
-          <span>全部账号</span>
-          <b>{accounts.length}</b>
-        </button>
-        {groups.map((group) => (
-          <button
-            key={group.id}
-            className={selectedGroupId === group.id ? "listRow active" : "listRow"}
-            onClick={() => onGroupChange(group.id)}
-          >
-            <span className="dot" style={{ backgroundColor: group.color }} />
-            <span>{group.name}</span>
-            <b>{group.account_count}</b>
-          </button>
-        ))}
-      </aside>
-
-      <aside className="pane accountPane">
-        <div className="paneHeader">
-          <h2>账号</h2>
+          <h2>邮箱账号</h2>
           <div className="paneHeaderActions">
             <button className="iconMini" title="导入账号" onClick={() => setImportDialogOpen(true)} disabled={busy}>
               <Upload size={16} />
@@ -1380,19 +1424,19 @@ function MailWorkspace({
           <Search size={15} />
           <span>账号搜索即将支持</span>
         </div>
-        {accounts.map((account) => (
+        <div className="mailTree">
           <button
-            key={account.id}
-            className={selectedAccountId === account.id ? "accountRow active" : "accountRow"}
-            onClick={() => onAccountSelect(account.id)}
+            className={selectedGroupId === "all" ? "mailTreeRow mailTreeGroup active" : "mailTreeRow mailTreeGroup"}
+            style={treeDepthStyle(0)}
+            onClick={() => onGroupChange("all")}
           >
-            <span className="mailAvatar">{account.email.slice(0, 2).toUpperCase()}</span>
-            <span className="accountText">
-              <strong>{account.email}</strong>
-              <small>{formatStatus(account.last_refresh_status)} · {account.message_count} 封邮件</small>
-            </span>
+            <Archive size={16} />
+            <span className="mailTreeLabel">全部账号</span>
+            <small>{accounts.length}</small>
           </button>
-        ))}
+          {(childGroupsByParent.get(null) ?? []).map((group) => renderTreeGroup(group, 1))}
+          {(accountsByGroup.get(null) ?? []).map((account) => renderTreeAccount(account, 1))}
+        </div>
         {accounts.length === 0 && <EmptyState icon={<Mail size={24} />} text="导入账号后开始使用。" />}
       </aside>
 

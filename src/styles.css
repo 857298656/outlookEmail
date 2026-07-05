@@ -343,7 +343,7 @@ button:disabled {
 
 .workspaceGrid {
   display: grid;
-  grid-template-columns: 230px 320px minmax(320px, 0.95fr) minmax(360px, 1.2fr);
+  grid-template-columns: 340px minmax(320px, 0.95fr) minmax(360px, 1.2fr);
   gap: 1px;
   min-height: 0;
   background: #d7dde4;
@@ -465,6 +465,87 @@ button:disabled {
   margin-top: 4px;
   color: #64748b;
   font-size: 12px;
+}
+
+.mailTree {
+  display: grid;
+  gap: 2px;
+  padding: 4px 8px 12px;
+}
+
+.mailTreeNode {
+  display: grid;
+  gap: 2px;
+}
+
+.mailTreeRow {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #334155;
+  text-align: left;
+}
+
+.mailTreeRow:hover,
+.mailTreeRow.active {
+  border-color: #cfd8e3;
+  background: var(--skin-accent-soft);
+}
+
+.mailTreeGroup {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 8px 0 calc(8px + var(--tree-indent, 0px));
+}
+
+.mailTreeGroup small {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.mailTreeLabel,
+.mailTreeText strong,
+.mailTreeText small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mailTreeAccount {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 7px 8px 7px calc(8px + var(--tree-indent, 0px));
+}
+
+.mailTreeAccount .mailAvatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.mailTreeText {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.mailTreeText strong {
+  color: #17202a;
+  font-size: 12px;
+}
+
+.mailTreeText small {
+  color: #64748b;
+  font-size: 11px;
 }
 
 .searchBox {

@@ -543,5 +543,7 @@ pub fn run_refresh_job(state: State<'_, AppState>, input: Option<RefreshInput>, 
         account_id,
         folder: Some("all".to_string()),
         top: Some(25),
+        trigger_type: None,
+        record_history: None,
     }))
 }

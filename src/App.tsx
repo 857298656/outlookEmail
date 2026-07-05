@@ -80,6 +80,8 @@ type MailFilters = {
 
 const colors = ["#111827", "#374151", "#4b5563", "#64748b", "#0f172a", "#52525b"];
 const mailPageSize = 100;
+const liveMailRefreshIntervalMs = 15_000;
+const mailSearchDebounceMs = 450;
 const defaultGraphClientId = "6daa9f56-5e67-4cb6-ae52-ef89ef912d36";
 const defaultOAuthRedirectUri = "http://localhost:8080";
 const themePresets = [
@@ -153,11 +155,13 @@ function App() {
   const [railExpanded, setRailExpanded] = useState(false);
   const [railMenuOpen, setRailMenuOpen] = useState(false);
   const railMenuRef = useRef<HTMLDivElement | null>(null);
+  const liveRefreshRunningRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
+  const liveRefreshReady = Boolean(selectedAccount && isRefreshReady(selectedAccount));
   const selectedMessage = messages.find((message) => message.id === selectedMessageId);
   const selectedTempMessage = tempMessages.find((message) => message.message_id === selectedTempMessageId);
   const railIdentity = selectedAccount?.email ?? accounts[0]?.email ?? "管理员";
@@ -327,6 +331,38 @@ function App() {
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [busy]);
+
+  useEffect(() => {
+    if (!status?.unlocked || view !== "mail" || !selectedAccountId || !liveRefreshReady || busy) return;
+
+    let cancelled = false;
+    async function refreshLiveMailbox() {
+      if (cancelled || liveRefreshRunningRef.current) return;
+      liveRefreshRunningRef.current = true;
+      try {
+        await api.runRefreshJob(selectedAccountId, folder, mailPageSize, {
+          triggerType: "live",
+          recordHistory: false
+        });
+        if (cancelled) return;
+        await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
+        if (!cancelled) await loadStatus();
+      } catch (err) {
+        if (!cancelled) setError(readError(err));
+      } finally {
+        liveRefreshRunningRef.current = false;
+      }
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshLiveMailbox();
+    }, liveMailRefreshIntervalMs);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [status?.unlocked, view, selectedAccountId, liveRefreshReady, folder, mailFilters, mailPage, busy]);
 
   async function runAction(action: () => Promise<void>, success?: string) {
     setBusy(true);
@@ -1279,6 +1315,7 @@ function MailWorkspace({
   const [rawError, setRawError] = useState<string | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [oauthSaveOpen, setOauthSaveOpen] = useState(false);
+  const searchApplyTimerRef = useRef<number | null>(null);
   const selectedCount = selectedMessageIds.length;
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const accountMailRetentionDays = Math.max(1, Math.min(3650, selectedAccount?.mail_retention_days ?? 30));
@@ -1314,6 +1351,14 @@ function MailWorkspace({
   useEffect(() => {
     setDraftFilters(filters);
   }, [filters]);
+
+  useEffect(() => {
+    return () => {
+      if (searchApplyTimerRef.current !== null) {
+        window.clearTimeout(searchApplyTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     setAttachmentError(null);
@@ -1361,8 +1406,23 @@ function MailWorkspace({
   }
 
   function applyDraftFilters(nextFilters: MailFilters) {
+    if (searchApplyTimerRef.current !== null) {
+      window.clearTimeout(searchApplyTimerRef.current);
+      searchApplyTimerRef.current = null;
+    }
     setDraftFilters(nextFilters);
     onFilterApply(nextFilters);
+  }
+
+  function scheduleDraftFilters(nextFilters: MailFilters) {
+    setDraftFilters(nextFilters);
+    if (searchApplyTimerRef.current !== null) {
+      window.clearTimeout(searchApplyTimerRef.current);
+    }
+    searchApplyTimerRef.current = window.setTimeout(() => {
+      searchApplyTimerRef.current = null;
+      onFilterApply(nextFilters);
+    }, mailSearchDebounceMs);
   }
 
   function treeDepthStyle(depth: number): CSSProperties {
@@ -1478,9 +1538,9 @@ function MailWorkspace({
             <input
               value={draftFilters.search}
               placeholder="搜索发件人、主题、正文"
-              onChange={(event) => setDraftFilters({ ...draftFilters, search: event.target.value })}
+              onChange={(event) => scheduleDraftFilters({ ...draftFilters, search: event.target.value })}
               onKeyDown={(event) => {
-                if (event.key === "Enter") onFilterApply(draftFilters);
+                if (event.key === "Enter") applyDraftFilters(draftFilters);
               }}
             />
           </label>
@@ -1531,10 +1591,6 @@ function MailWorkspace({
               <option value="desc">降序</option>
               <option value="asc">升序</option>
             </select>
-            <button className="button compact secondary" onClick={() => onFilterApply(draftFilters)}>
-              <Search size={14} />
-              应用
-            </button>
           </div>
         </div>
         {selectedCount > 0 && (

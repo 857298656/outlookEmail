@@ -59,7 +59,7 @@ impl AutomationRunFilter {
     fn from_query(query: AutomationRunQuery) -> AppResult<Self> {
         Ok(Self {
             job_type: normalize_automation_value(query.job_type.as_deref(), &["refresh", "forwarding", "backup", "retry"], "job_type")?,
-            trigger_type: normalize_automation_value(query.trigger_type.as_deref(), &["manual", "schedule"], "trigger_type")?,
+            trigger_type: normalize_automation_value(query.trigger_type.as_deref(), &["manual", "schedule", "live"], "trigger_type")?,
             status: normalize_automation_value(query.status.as_deref(), &["success", "failed"], "status")?,
             search: query.search.unwrap_or_default().trim().to_string(),
             limit: query.limit.unwrap_or(100).clamp(1, 500),
@@ -69,7 +69,7 @@ impl AutomationRunFilter {
     fn from_clear_input(input: &ClearAutomationRunsInput) -> AppResult<Self> {
         Ok(Self {
             job_type: normalize_automation_value(input.job_type.as_deref(), &["refresh", "forwarding", "backup", "retry"], "job_type")?,
-            trigger_type: normalize_automation_value(input.trigger_type.as_deref(), &["manual", "schedule"], "trigger_type")?,
+            trigger_type: normalize_automation_value(input.trigger_type.as_deref(), &["manual", "schedule", "live"], "trigger_type")?,
             status: normalize_automation_value(input.status.as_deref(), &["success", "failed"], "status")?,
             search: input.search.clone().unwrap_or_default().trim().to_string(),
             limit: 500,
@@ -1552,17 +1552,21 @@ impl Database {
     }
 
     pub fn refresh_accounts(&self, input: RefreshInput) -> AppResult<JobResult> {
-        self.refresh_accounts_with_trigger(input, "manual")
+        let trigger_type = normalize_refresh_trigger(input.trigger_type.as_deref())?;
+        let record_history = input.record_history.unwrap_or(true);
+        self.refresh_accounts_with_trigger(input, &trigger_type, record_history)
     }
 
-    fn refresh_accounts_with_trigger(&self, input: RefreshInput, trigger_type: &str) -> AppResult<JobResult> {
+    fn refresh_accounts_with_trigger(&self, input: RefreshInput, trigger_type: &str, record_history: bool) -> AppResult<JobResult> {
         let started_at = Utc::now();
-        let result = self.refresh_accounts_inner(input);
-        let _ = self.record_job_result("refresh", trigger_type, started_at, &result);
+        let result = self.refresh_accounts_inner(input, trigger_type, record_history);
+        if record_history {
+            let _ = self.record_job_result("refresh", trigger_type, started_at, &result);
+        }
         result
     }
 
-    fn refresh_accounts_inner(&self, input: RefreshInput) -> AppResult<JobResult> {
+    fn refresh_accounts_inner(&self, input: RefreshInput, trigger_type: &str, record_history: bool) -> AppResult<JobResult> {
         self.require_unlocked()?;
         let credentials = self.account_credentials(input.account_id)?;
         if credentials.is_empty() {
@@ -1581,13 +1585,13 @@ impl Database {
                 Ok(count) => {
                     refreshed += 1;
                     cached_messages += count;
-                    self.mark_account_refresh_success(account.id, &account.email, count)?;
+                    self.mark_account_refresh_success(account.id, &account.email, count, trigger_type, record_history)?;
                 }
                 Err(err) => {
                     failed += 1;
                     let message = err.to_string();
                     errors.push(format!("{}: {}", account.email, message));
-                    self.mark_account_refresh_failed(account.id, &account.email, &message)?;
+                    self.mark_account_refresh_failed(account.id, &account.email, &message, trigger_type, record_history)?;
                     self.enqueue_refresh_retry(&account, &folder, top, &message)?;
                 }
             }
@@ -2883,7 +2887,9 @@ impl Database {
                 account_id: None,
                 folder: Some("all".to_string()),
                 top: Some(settings.scheduler_refresh_top.clamp(1, 50) as usize),
-            }, "schedule") {
+                trigger_type: None,
+                record_history: None,
+            }, "schedule", true) {
                 Ok(result) => self.audit("scheduler.refresh", "scheduler", None, &result.message)?,
                 Err(err) => self.audit("scheduler.refresh_failed", "scheduler", None, &err.to_string())?,
             }
@@ -4535,7 +4541,14 @@ impl Database {
         Ok(parse_attachments_json(&attachments_json))
     }
 
-    fn mark_account_refresh_success(&self, account_id: i64, email: &str, count: usize) -> AppResult<()> {
+    fn mark_account_refresh_success(
+        &self,
+        account_id: i64,
+        email: &str,
+        count: usize,
+        refresh_type: &str,
+        record_history: bool,
+    ) -> AppResult<()> {
         self.conn.execute(
             "
             UPDATE accounts
@@ -4547,17 +4560,26 @@ impl Database {
             ",
             [account_id],
         )?;
-        self.conn.execute(
-            "
-            INSERT INTO refresh_logs (account_id, account_email, refresh_type, status, error_message)
-            VALUES (?, ?, 'manual', 'success', ?)
-            ",
-            params![account_id, email, format!("{} message(s) cached", count)],
-        )?;
+        if record_history {
+            self.conn.execute(
+                "
+                INSERT INTO refresh_logs (account_id, account_email, refresh_type, status, error_message)
+                VALUES (?, ?, ?, 'success', ?)
+                ",
+                params![account_id, email, refresh_type, format!("{} message(s) cached", count)],
+            )?;
+        }
         Ok(())
     }
 
-    fn mark_account_refresh_failed(&self, account_id: i64, email: &str, error: &str) -> AppResult<()> {
+    fn mark_account_refresh_failed(
+        &self,
+        account_id: i64,
+        email: &str,
+        error: &str,
+        refresh_type: &str,
+        record_history: bool,
+    ) -> AppResult<()> {
         self.conn.execute(
             "
             UPDATE accounts
@@ -4569,13 +4591,15 @@ impl Database {
             ",
             params![error, account_id],
         )?;
-        self.conn.execute(
-            "
-            INSERT INTO refresh_logs (account_id, account_email, refresh_type, status, error_message)
-            VALUES (?, ?, 'manual', 'failed', ?)
-            ",
-            params![account_id, email, error],
-        )?;
+        if record_history {
+            self.conn.execute(
+                "
+                INSERT INTO refresh_logs (account_id, account_email, refresh_type, status, error_message)
+                VALUES (?, ?, ?, 'failed', ?)
+                ",
+                params![account_id, email, refresh_type, error],
+            )?;
+        }
         Ok(())
     }
 
@@ -5554,13 +5578,13 @@ impl Database {
         let top = payload.top.clamp(1, 50);
         match self.refresh_account_credential(&account, &folder, top) {
             Ok(count) => {
-                self.mark_account_refresh_success(account.id, &account.email, count)?;
+                self.mark_account_refresh_success(account.id, &account.email, count, "retry", true)?;
                 self.clear_refresh_retry(account.id, &folder)?;
                 Ok(())
             }
             Err(err) => {
                 let message = err.to_string();
-                self.mark_account_refresh_failed(account.id, &account.email, &message)?;
+                self.mark_account_refresh_failed(account.id, &account.email, &message, "retry", true)?;
                 Err(err)
             }
         }
@@ -5828,6 +5852,19 @@ fn normalize_automation_value(value: Option<&str>, allowed: &[&str], field: &str
         "{field} must be one of: all, {}",
         allowed.join(", ")
     )))
+}
+
+fn normalize_refresh_trigger(value: Option<&str>) -> AppResult<String> {
+    let normalized = value.unwrap_or("manual").trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Ok("manual".to_string());
+    }
+    match normalized.as_str() {
+        "manual" | "schedule" | "retry" | "live" => Ok(normalized),
+        _ => Err(AppError::InvalidInput(
+            "refresh trigger_type must be manual, schedule, retry, or live".to_string(),
+        )),
+    }
 }
 
 fn normalize_retry_value(value: Option<&str>, allowed: &[&str], field: &str) -> AppResult<String> {
@@ -7131,6 +7168,8 @@ mod project_tests {
                 account_id: Some(account.id),
                 folder: Some("inbox".to_string()),
                 top: Some(1),
+                trigger_type: None,
+                record_history: None,
             })
             .expect("refresh result");
         assert_eq!(refresh.failed, 1);
@@ -8312,6 +8351,8 @@ mod project_tests {
             account_id: None,
             folder: Some("all".to_string()),
             top: Some(10),
+            trigger_type: None,
+            record_history: None,
         });
         assert!(result.is_err());
 
@@ -8321,6 +8362,27 @@ mod project_tests {
         assert_eq!(runs[0].trigger_type, "manual");
         assert_eq!(runs[0].status, "failed");
         assert_eq!(runs[0].failed, 1);
+    }
+
+    #[test]
+    fn live_refresh_can_skip_history_records() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+
+        let result = db.refresh_accounts(RefreshInput {
+            account_id: None,
+            folder: Some("all".to_string()),
+            top: Some(10),
+            trigger_type: Some("live".to_string()),
+            record_history: Some(false),
+        });
+        assert!(result.is_err());
+        assert!(db.list_automation_runs(Some(10)).expect("runs").is_empty());
     }
 
     #[test]
@@ -8832,6 +8894,8 @@ mod project_tests {
                 account_id: Some(1),
                 folder: Some("inbox".to_string()),
                 top: Some(10),
+                trigger_type: None,
+                record_history: None,
             })
             .expect("refresh result");
         assert!(!result.success);

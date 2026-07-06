@@ -2429,6 +2429,54 @@ button:disabled {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.providerFailureGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.providerFailureCard {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff7f7;
+  padding: 11px;
+  color: #7f1d1d;
+  text-align: left;
+  cursor: pointer;
+}
+
+.providerFailureCard:hover {
+  border-color: #fca5a5;
+  background: #fff1f1;
+}
+
+.providerFailureCard:focus-visible {
+  outline: 2px solid #ef4444;
+  outline-offset: 2px;
+}
+
+.providerFailureCard strong,
+.providerFailureCard small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.providerFailureCard strong {
+  color: #7f1d1d;
+  font-size: 13px;
+}
+
+.providerFailureCard small {
+  color: #991b1b;
+  font-size: 12px;
+}
+
 .summaryTile {
   display: grid;
   gap: 10px;

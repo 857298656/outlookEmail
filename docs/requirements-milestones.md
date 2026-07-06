@@ -322,9 +322,9 @@ Outlook/Graph 接入已基本可用，下一批服务商接入记录在 [`docs/p
 - P9.2 Gmail Incremental Sync and Remote Actions：Gmail 远端已读/未读、移入垃圾箱、失败重试和 `historyId` 增量同步已接入；仍需要真实 Gmail 测试账号验收。
 - P9.3 QQ Mail IMAP Provider：QQ provider 选项、`imap.qq.com:993` preset、导入识别、账号设置授权码提示和导入提示已接入；仍需要真实 QQ 邮箱账号验证 IMAP 开启、授权码、文件夹映射和远端 UID 操作。
 - P9.4 163 Mail IMAP Provider：163 provider 选项、`imap.163.com:993` preset、导入识别、账号设置授权密码提示和常见中文文件夹映射已接入；仍需要真实 163 邮箱账号验证 IMAP 开启、授权密码、实际文件夹命名和远端 UID 操作。
-- P9.5 Provider UX and Batch Operations：服务商筛选已接入，批量导入弹窗已显示账号级服务商/凭据类型预览；服务商徽标细化和刷新失败按服务商分组仍需补齐。
+- P9.5 Provider UX and Batch Operations：服务商筛选、批量导入账号级服务商/凭据类型预览，以及刷新失败按服务商分组已接入；服务商徽标细化仍需补齐。
 - P9.6 Hardening and Documentation：故障排查、手工验收清单、回归测试和 README/架构文档更新。
 
 ## 当前推荐下一步
 
-继续按“桌面版够用，优先补功能”推进。当前桌面优先级中的 P0/P1/P2 项已补齐；M9 已启动并完成首批 Provider Foundation、Gmail OAuth/API 同步基础、Gmail 远端操作、Gmail `historyId` 增量同步、QQ IMAP preset/提示基础、163 IMAP preset/中文文件夹映射基础，以及 P9.5 批量导入账号级预览。下一步建议继续 P9.5：补刷新失败按服务商分组和服务商徽标细化；同时在具备真实 Gmail/QQ/163 测试账号时补做人工验收。Web 服务和浏览器扩展暂不处理。
+继续按“桌面版够用，优先补功能”推进。当前桌面优先级中的 P0/P1/P2 项已补齐；M9 已启动并完成首批 Provider Foundation、Gmail OAuth/API 同步基础、Gmail 远端操作、Gmail `historyId` 增量同步、QQ IMAP preset/提示基础、163 IMAP preset/中文文件夹映射基础，以及 P9.5 批量导入账号级预览和刷新失败服务商汇总。下一步建议继续 P9.5：补服务商徽标细化；同时在具备真实 Gmail/QQ/163 测试账号时补做人工验收。Web 服务和浏览器扩展暂不处理。

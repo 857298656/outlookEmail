@@ -3261,6 +3261,7 @@ function RefreshManagementView({
   const failedCount = accounts.filter((account) => account.last_refresh_status === "failed").length;
   const successCount = accounts.filter((account) => account.last_refresh_status === "success").length;
   const neverCount = accounts.filter((account) => account.last_refresh_status === "never").length;
+  const providerFailureSummaries = useMemo(() => summarizeProviderFailures(accounts), [accounts]);
   const selectedSet = useMemo(() => new Set(selectedAccountIds), [selectedAccountIds]);
   const accountSearchTokens = useMemo(() => searchTokens(accountSearch), [accountSearch]);
   const visibleAccounts = useMemo(() => {
@@ -3316,6 +3317,26 @@ function RefreshManagementView({
           <Stat label="从未刷新" value={neverCount} />
           <Stat label="重试队列" value={refreshRetryQueue.length} />
         </div>
+        {providerFailureSummaries.length > 0 && (
+          <div className="providerFailureGrid" aria-label="刷新失败服务商汇总">
+            {providerFailureSummaries.map((summary) => (
+              <button
+                className="providerFailureCard"
+                type="button"
+                key={summary.providerId}
+                title={`查看 ${summary.label} 失败账号`}
+                onClick={() => {
+                  setAccountFilter("failed");
+                  setAccountSearch(summary.label);
+                }}
+              >
+                <span className="providerBadge">{summary.label}</span>
+                <strong>{summary.count} 个失败</strong>
+                <small title={summary.topError}>{summary.topError}</small>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="runStatusGrid">
           <RunStatus label="上次定时刷新" value={schedulerStatus?.last_refresh_at} />
         </div>
@@ -4270,6 +4291,38 @@ function refreshCredentialLabel(account: Account) {
     return `${provider.label} 账号密码`;
   }
   return `${provider.label} ${provider.credentialLabel}`;
+}
+
+function summarizeProviderFailures(accounts: Account[]) {
+  const grouped = new Map<string, { count: number; errors: Map<string, number> }>();
+  for (const account of accounts) {
+    if (account.last_refresh_status !== "failed") continue;
+    const providerId = normalizeAccountProviderId(account.provider);
+    const summary = grouped.get(providerId) ?? { count: 0, errors: new Map<string, number>() };
+    const error = account.last_refresh_error?.trim() || "暂无错误详情";
+    summary.count += 1;
+    summary.errors.set(error, (summary.errors.get(error) ?? 0) + 1);
+    grouped.set(providerId, summary);
+  }
+
+  return Array.from(grouped.entries())
+    .map(([providerId, summary]) => {
+      const topError =
+        Array.from(summary.errors.entries()).sort(([leftError, leftCount], [rightError, rightCount]) => {
+          if (rightCount !== leftCount) return rightCount - leftCount;
+          return leftError.localeCompare(rightError);
+        })[0]?.[0] ?? "暂无错误详情";
+      return {
+        providerId,
+        label: accountProviderLabel(providerId),
+        count: summary.count,
+        topError
+      };
+    })
+    .sort((left, right) => {
+      if (right.count !== left.count) return right.count - left.count;
+      return left.label.localeCompare(right.label);
+    });
 }
 
 function AccountAuthDialog({

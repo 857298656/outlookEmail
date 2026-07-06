@@ -260,7 +260,9 @@ Mock 网络集成测试：
 - 后端已接入 Google token endpoint，OAuth token exchange / save account 会按 provider 分发到 Microsoft 或 Google；Gmail refresh token 复用现有加密字段保存，provider/account_type 归一为 `gmail`。
 - 前端“授权并保存 OAuth 账号”和账号编辑弹窗已支持 Outlook/Gmail 切换、Gmail Client ID、PKCE verifier 传递、Gmail token 预览与保存；mock API 也返回 Gmail readonly scope。
 - 已补充 PKCE、Gmail OAuth URL、OAuth provider 归一化测试；`pnpm test`、`pnpm build`、`cargo test` 通过。
-- 尚未完成 Gmail API `messages.list`/`messages.get` 同步、正文/附件归一化和 Gmail adapter refresh，这是 P9.1 的下一功能点。
+- 已完成 Gmail API 首次只读同步：Gmail adapter 会刷新 access token，按 `INBOX`/`SPAM`/`TRASH` 映射现有 inbox/junkemail/deleteditems 文件夹，使用 `messages.list` 获取 id，再用 `messages.get(format=full)` 归一化 subject/from/to/cc、`internalDate`、`labelIds` 未读状态、snippet、HTML/文本正文和附件元数据。
+- 已接入 Gmail 附件下载：缓存中的 Gmail attachment id 会通过 `users.messages.attachments.get` 下载内容，并回查 message payload 取得文件名和 MIME 类型。
+- P9.1 尚未通过真实 Gmail 测试账号人工验收；P9.2 继续处理 `historyId` 增量同步、Gmail 远端已读/未读和删除/移入垃圾箱。
 
 ### P9.2 Gmail Incremental Sync and Remote Actions
 

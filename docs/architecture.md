@@ -43,6 +43,8 @@ The application is a single-user local desktop app. It does not expose a public 
 - Account providers are normalized through a shared provider registry. Current ids are `graph`/Outlook, `gmail`, `qq`, `netease_163`, `imap`, and `imap_custom`; `imap` is retained for the existing Outlook IMAP OAuth/generic IMAP path, while `imap_custom` is the new unknown-domain import fallback.
 - Graph uses Microsoft OAuth v2 and Graph `/me/mailFolders/{folder}/messages` calls.
 - Gmail OAuth uses the Google installed-app flow with PKCE S256 and the initial `https://www.googleapis.com/auth/gmail.readonly` scope. The resulting refresh token is stored through the existing encrypted OAuth account fields with provider/account_type normalized to `gmail`.
+- Gmail read sync refreshes Google access tokens from the encrypted refresh token, maps `INBOX`/`SPAM`/`TRASH` to the existing inbox/junkemail/deleteditems folders, lists messages with Gmail API `messages.list`, loads details with `messages.get(format=full)`, and stores normalized headers, unread state, snippet, body, and attachment metadata in the same SQLite cache as Graph/IMAP messages.
+- Gmail attachment downloads use `users.messages.attachments.get` and reuse the cached Gmail message id plus attachment id from `attachments_json`.
 - Graph attachments are listed during sync and downloaded to the local app data `attachments` directory on demand.
 - Graph message read/unread and delete actions update the local cache and attempt Microsoft Graph `PATCH`/`DELETE` synchronization. Failed remote actions are stored in `retry_queue` with the original account, folder, provider message id, action, error, attempt count, and next attempt time. Failed deletes keep the cached message visible as a rollback surface until the delete retry succeeds.
 - IMAP uses TLS login, UID search/fetch, and MIME parsing.
@@ -55,7 +57,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Cached message rows are joined with the latest pending or failed same-folder `mail_mark` / `mail_delete` retry item so the UI can show remote-sync failures and expose retry or dismiss actions without duplicating failure state.
 - Refreshed messages are upserted into SQLite and read by the workspace UI.
 - Refresh failures are recorded on the account and in `refresh_logs`; failed account refreshes queue a `refresh_account` retry item with account, folder, and page size.
-- Provider-aware routing now selects Graph, IMAP, or the future Gmail adapter before refresh, attachment download, and remote read/delete actions. Gmail authorization and account saving are wired, while Gmail refresh/attachment/read-delete actions still return an explicit unsupported-adapter error until the Gmail API read implementation lands.
+- Provider-aware routing now selects Graph, IMAP, or Gmail before refresh and attachment download. Gmail remote read/unread and delete actions still return an explicit unsupported-adapter error until P9.2 adds Gmail modify-scope operations.
 - Forwarding is controlled by a per-account `forward_enabled` flag and deduplicated through `forwarding_logs`. Failed SMTP/Telegram/WeCom sends are queued with message id and channel for later replay.
 - Backups are created with SQLite `VACUUM INTO`, stored locally under the app data backup directory, then uploaded with WebDAV `PUT`. Failed backup attempts queue a `backup_job` retry item.
 - Restores are limited to successful backup log entries that resolve to local `.sqlite` snapshots under the app backup directory. The restore command validates the snapshot with SQLite `integrity_check`, creates a pre-restore safety snapshot, replaces the current database file set, reopens SQLite, and audits the restore.
@@ -69,7 +71,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Optional local HTTP API remains deferred.
 - Gmail, QQ Mail, and 163 Mail provider expansion is tracked in [`provider-integration-plan.md`](provider-integration-plan.md).
 - Provider expansion should keep the desktop app local-first and reuse SQLite cache, encrypted local secrets, refresh logs, retry queue, attachment cache, and mailbox UI.
-- Provider foundation work has started with registry-backed import detection, provider labels, provider filtering, IMAP presets for QQ/163, centralized adapter routing, and Gmail OAuth account save support.
+- Provider foundation work has started with registry-backed import detection, provider labels, provider filtering, IMAP presets for QQ/163, centralized adapter routing, Gmail OAuth account save support, and Gmail API first-read sync.
 - Gmail should be implemented as a first-class OAuth/API provider first, with IMAP XOAUTH2 only as a fallback path.
 - QQ Mail and 163 Mail should initially be provider presets over the generic IMAP adapter, using provider-specific setup hints, import auto-detection, folder mapping validation, and real-account verification.
 - Remaining foundation work should continue replacing hard-coded Outlook/Graph labels where they are tied to OAuth setup rather than general account display.

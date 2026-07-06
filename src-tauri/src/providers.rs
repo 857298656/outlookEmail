@@ -304,6 +304,24 @@ fn refresh_graph_access_token_with_client(account: &AccountCredentials, client: 
     refresh_microsoft_access_token_with_scope(account, client, GRAPH_SCOPE, "Graph")
 }
 
+fn refresh_gmail_access_token_with_client(account: &AccountCredentials, client: &Client) -> AppResult<OAuthTokenResponse> {
+    if account.client_id.trim().is_empty() || account.refresh_token.trim().is_empty() {
+        return Err(AppError::InvalidInput(
+            "Gmail account is missing client id or refresh token".to_string(),
+        ));
+    }
+    let response = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("client_id", account.client_id.as_str()),
+            ("grant_type", "refresh_token"),
+            ("refresh_token", account.refresh_token.as_str()),
+        ])
+        .send()
+        .map_err(network_error)?;
+    parse_token_response(response)
+}
+
 fn refresh_imap_oauth_access_token(account: &AccountCredentials) -> AppResult<String> {
     with_account_http_client(account, |client| {
         refresh_microsoft_access_token_with_scope(account, client, IMAP_OAUTH_SCOPE, "IMAP").map(|token| token.access_token)
@@ -405,6 +423,70 @@ pub fn download_graph_attachment(
         Ok(DownloadedAttachment {
             name: attachment.name.unwrap_or_else(|| "attachment.bin".to_string()),
             content_type: attachment.content_type.unwrap_or_default(),
+            bytes,
+        })
+    })
+}
+
+pub fn fetch_gmail_messages(account: &AccountCredentials, folder: &str, top: usize) -> AppResult<(String, Vec<ProviderMessage>)> {
+    with_account_http_client(account, |client| {
+        let token = refresh_gmail_access_token_with_client(account, client)?;
+        let targets = gmail_folder_targets(folder);
+        let mut all = Vec::new();
+        for target in targets {
+            let page = list_gmail_messages(client, &token.access_token, target.label_id, top.clamp(1, 50))?;
+            for item in page.messages.unwrap_or_default() {
+                let detail = fetch_gmail_message_detail(client, &token.access_token, &item.id)?;
+                all.push(detail.into_provider_message(target.app_folder)?);
+            }
+        }
+        all.sort_by(|a, b| b.received_at_sort.total_cmp(&a.received_at_sort));
+        Ok((token.refresh_token, all))
+    })
+}
+
+pub fn download_gmail_attachment(
+    account: &AccountCredentials,
+    message_id: &str,
+    attachment_id: &str,
+) -> AppResult<DownloadedAttachment> {
+    let message_id = message_id.trim();
+    let attachment_id = attachment_id.trim();
+    if message_id.is_empty() || attachment_id.is_empty() {
+        return Err(AppError::InvalidInput(
+            "Gmail message id and attachment id are required".to_string(),
+        ));
+    }
+    with_account_http_client(account, |client| {
+        let token = refresh_gmail_access_token_with_client(account, client)?;
+        let url = format!(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}/attachments/{}",
+            urlencoding::encode(message_id),
+            urlencoding::encode(attachment_id)
+        );
+        let response = client
+            .get(url)
+            .bearer_auth(&token.access_token)
+            .send()
+            .map_err(network_error)?;
+        if !response.status().is_success() {
+            return Err(AppError::Internal(format!(
+                "Gmail attachment download failed: HTTP {} {}",
+                response.status(),
+                response.text().unwrap_or_default()
+            )));
+        }
+        let body: GmailMessagePartBody = response.json().map_err(network_error)?;
+        let bytes = decode_gmail_base64(body.data.as_deref().unwrap_or_default())?;
+        let detail = fetch_gmail_message_detail(client, &token.access_token, message_id)?;
+        let (name, content_type) = detail
+            .payload
+            .as_ref()
+            .and_then(|payload| find_gmail_attachment_metadata(payload, attachment_id))
+            .unwrap_or_else(|| ("attachment.bin".to_string(), String::new()));
+        Ok(DownloadedAttachment {
+            name,
+            content_type,
             bytes,
         })
     })
@@ -1080,6 +1162,53 @@ fn fetch_graph_attachments_metadata(client: &Client, access_token: &str, message
         .collect())
 }
 
+fn list_gmail_messages(
+    client: &Client,
+    access_token: &str,
+    label_id: &str,
+    top: usize,
+) -> AppResult<GmailMessageList> {
+    let response = client
+        .get("https://gmail.googleapis.com/gmail/v1/users/me/messages")
+        .bearer_auth(access_token)
+        .query(&[
+            ("maxResults", top.to_string()),
+            ("labelIds", label_id.to_string()),
+            ("includeSpamTrash", "true".to_string()),
+        ])
+        .send()
+        .map_err(network_error)?;
+    if !response.status().is_success() {
+        return Err(AppError::Internal(format!(
+            "Gmail list messages failed: HTTP {} {}",
+            response.status(),
+            response.text().unwrap_or_default()
+        )));
+    }
+    response.json().map_err(network_error)
+}
+
+fn fetch_gmail_message_detail(client: &Client, access_token: &str, message_id: &str) -> AppResult<GmailMessage> {
+    let url = format!(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}",
+        urlencoding::encode(message_id)
+    );
+    let response = client
+        .get(url)
+        .bearer_auth(access_token)
+        .query(&[("format", "full")])
+        .send()
+        .map_err(network_error)?;
+    if !response.status().is_success() {
+        return Err(AppError::Internal(format!(
+            "Gmail get message failed: HTTP {} {}",
+            response.status(),
+            response.text().unwrap_or_default()
+        )));
+    }
+    response.json().map_err(network_error)
+}
+
 fn extract_code(code_or_url: &str) -> AppResult<String> {
     let compact = code_or_url.split_whitespace().collect::<String>();
     let value = compact.trim();
@@ -1105,6 +1234,42 @@ fn folders_for(folder: &str) -> Vec<&'static str> {
         "junk" | "junkemail" => vec!["junkemail"],
         "deleted" | "deleteditems" => vec!["deleteditems"],
         _ => vec!["inbox", "junkemail", "deleteditems"],
+    }
+}
+
+struct GmailFolderTarget {
+    app_folder: &'static str,
+    label_id: &'static str,
+}
+
+fn gmail_folder_targets(folder: &str) -> Vec<GmailFolderTarget> {
+    match folder.to_ascii_lowercase().as_str() {
+        "inbox" => vec![GmailFolderTarget {
+            app_folder: "inbox",
+            label_id: "INBOX",
+        }],
+        "junk" | "junkemail" => vec![GmailFolderTarget {
+            app_folder: "junkemail",
+            label_id: "SPAM",
+        }],
+        "deleted" | "deleteditems" => vec![GmailFolderTarget {
+            app_folder: "deleteditems",
+            label_id: "TRASH",
+        }],
+        _ => vec![
+            GmailFolderTarget {
+                app_folder: "inbox",
+                label_id: "INBOX",
+            },
+            GmailFolderTarget {
+                app_folder: "junkemail",
+                label_id: "SPAM",
+            },
+            GmailFolderTarget {
+                app_folder: "deleteditems",
+                label_id: "TRASH",
+            },
+        ],
     }
 }
 
@@ -1684,6 +1849,228 @@ fn recipients_to_string(value: Option<Vec<GraphRecipient>>) -> String {
         .join(", ")
 }
 
+#[derive(Debug, Deserialize)]
+struct GmailMessageList {
+    messages: Option<Vec<GmailMessageRef>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GmailMessageRef {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GmailMessage {
+    id: String,
+    #[serde(default, rename = "labelIds")]
+    label_ids: Vec<String>,
+    #[serde(default, rename = "internalDate")]
+    internal_date: Option<String>,
+    #[serde(default)]
+    snippet: String,
+    #[serde(default)]
+    payload: Option<GmailMessagePart>,
+}
+
+impl GmailMessage {
+    fn into_provider_message(self, folder: &str) -> AppResult<ProviderMessage> {
+        let subject = self
+            .payload
+            .as_ref()
+            .and_then(|payload| gmail_header(payload, "Subject"))
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "(no subject)".to_string());
+        let sender = self
+            .payload
+            .as_ref()
+            .and_then(|payload| gmail_header(payload, "From"))
+            .unwrap_or_default();
+        let recipients = self
+            .payload
+            .as_ref()
+            .and_then(|payload| gmail_header(payload, "To"))
+            .unwrap_or_default();
+        let cc = self
+            .payload
+            .as_ref()
+            .and_then(|payload| gmail_header(payload, "Cc"))
+            .unwrap_or_default();
+        let (received_at, received_at_sort) = gmail_received_at(self.internal_date.as_deref(), self.payload.as_ref());
+        let mut content = GmailParsedContent::default();
+        if let Some(payload) = self.payload.as_ref() {
+            collect_gmail_part(payload, &mut content)?;
+        }
+        let has_html_body = !content.html_body.is_empty();
+        let body = if has_html_body {
+            Some(content.html_body)
+        } else if !content.text_body.is_empty() {
+            Some(content.text_body)
+        } else {
+            None
+        };
+        let body_type = if has_html_body {
+            "html".to_string()
+        } else {
+            "text".to_string()
+        };
+        let body_preview = if self.snippet.trim().is_empty() {
+            body.as_deref()
+                .unwrap_or_default()
+                .split_whitespace()
+                .take(30)
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            self.snippet
+        };
+        Ok(ProviderMessage {
+            folder: folder.to_string(),
+            provider_message_id: self.id,
+            subject,
+            sender,
+            recipients,
+            cc,
+            received_at,
+            received_at_sort,
+            is_read: !self.label_ids.iter().any(|label| label.eq_ignore_ascii_case("UNREAD")),
+            has_attachments: !content.attachments.is_empty(),
+            body_preview,
+            body,
+            body_type,
+            attachments: content.attachments,
+            raw_mime: None,
+        })
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GmailMessagePart {
+    #[serde(default, rename = "mimeType")]
+    mime_type: String,
+    #[serde(default)]
+    filename: String,
+    #[serde(default)]
+    headers: Vec<GmailHeader>,
+    #[serde(default)]
+    body: Option<GmailMessagePartBody>,
+    #[serde(default)]
+    parts: Vec<GmailMessagePart>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GmailHeader {
+    name: String,
+    value: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GmailMessagePartBody {
+    #[serde(default, rename = "attachmentId")]
+    attachment_id: Option<String>,
+    #[serde(default)]
+    size: Option<i64>,
+    #[serde(default)]
+    data: Option<String>,
+}
+
+#[derive(Default)]
+struct GmailParsedContent {
+    text_body: String,
+    html_body: String,
+    attachments: Vec<AttachmentInfo>,
+}
+
+fn collect_gmail_part(part: &GmailMessagePart, content: &mut GmailParsedContent) -> AppResult<()> {
+    let mime_type = part.mime_type.to_ascii_lowercase();
+    let filename = part.filename.trim();
+    if !filename.is_empty() || part.body.as_ref().and_then(|body| body.attachment_id.as_ref()).is_some() {
+        if let Some(attachment_id) = part.body.as_ref().and_then(|body| body.attachment_id.as_ref()) {
+            content.attachments.push(AttachmentInfo {
+                id: attachment_id.clone(),
+                name: if filename.is_empty() {
+                    "attachment".to_string()
+                } else {
+                    filename.to_string()
+                },
+                content_type: part.mime_type.clone(),
+                size: part.body.as_ref().and_then(|body| body.size).unwrap_or_default(),
+            });
+            return Ok(());
+        }
+    }
+    if let Some(data) = part.body.as_ref().and_then(|body| body.data.as_deref()) {
+        if mime_type == "text/html" && content.html_body.is_empty() {
+            content.html_body = decode_gmail_text(data)?;
+        } else if mime_type == "text/plain" && content.text_body.is_empty() {
+            content.text_body = decode_gmail_text(data)?;
+        }
+    }
+    for child in &part.parts {
+        collect_gmail_part(child, content)?;
+    }
+    Ok(())
+}
+
+fn find_gmail_attachment_metadata(part: &GmailMessagePart, attachment_id: &str) -> Option<(String, String)> {
+    if part
+        .body
+        .as_ref()
+        .and_then(|body| body.attachment_id.as_deref())
+        .is_some_and(|value| value == attachment_id)
+    {
+        let name = if part.filename.trim().is_empty() {
+            "attachment.bin".to_string()
+        } else {
+            part.filename.trim().to_string()
+        };
+        return Some((name, part.mime_type.clone()));
+    }
+    part.parts
+        .iter()
+        .find_map(|child| find_gmail_attachment_metadata(child, attachment_id))
+}
+
+fn gmail_header(part: &GmailMessagePart, name: &str) -> Option<String> {
+    part.headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case(name))
+        .map(|header| header.value.clone())
+}
+
+fn gmail_received_at(internal_date: Option<&str>, payload: Option<&GmailMessagePart>) -> (String, f64) {
+    if let Some(ms) = internal_date.and_then(|value| value.parse::<i64>().ok()) {
+        let secs = ms / 1000;
+        let nanos = ((ms % 1000).max(0) as u32) * 1_000_000;
+        if let Some(value) = DateTime::<Utc>::from_timestamp(secs, nanos) {
+            return (value.to_rfc3339(), ms as f64 / 1000.0);
+        }
+    }
+    if let Some(date_header) = payload.and_then(|part| gmail_header(part, "Date")) {
+        if let Ok(timestamp) = mailparse::dateparse(&date_header) {
+            let value = DateTime::<Utc>::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
+            return (value.to_rfc3339(), timestamp as f64);
+        }
+    }
+    let now = Utc::now();
+    (now.to_rfc3339(), now.timestamp() as f64)
+}
+
+fn decode_gmail_text(data: &str) -> AppResult<String> {
+    let bytes = decode_gmail_base64(data)?;
+    Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+fn decode_gmail_base64(data: &str) -> AppResult<Vec<u8>> {
+    let compact = data
+        .split_whitespace()
+        .collect::<String>()
+        .trim_end_matches('=')
+        .to_string();
+    URL_SAFE_NO_PAD
+        .decode(compact)
+        .map_err(|err| AppError::Internal(format!("Gmail base64 decode failed: {err}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1763,5 +2150,79 @@ mod tests {
         assert!(url.contains("access_type=offline"));
         assert!(url.contains("login_hint=person%40gmail.com"));
         assert!(!url.contains(&verifier));
+    }
+
+    #[test]
+    fn maps_gmail_folder_targets_to_app_folders() {
+        let targets = gmail_folder_targets("all");
+        assert_eq!(targets.len(), 3);
+        assert_eq!(targets[0].app_folder, "inbox");
+        assert_eq!(targets[0].label_id, "INBOX");
+        assert_eq!(gmail_folder_targets("junkemail")[0].label_id, "SPAM");
+        assert_eq!(gmail_folder_targets("deleteditems")[0].label_id, "TRASH");
+    }
+
+    #[test]
+    fn normalizes_gmail_message_payload() {
+        let message = GmailMessage {
+            id: "gmail-1".to_string(),
+            label_ids: vec!["INBOX".to_string(), "UNREAD".to_string()],
+            internal_date: Some("1700000000000".to_string()),
+            snippet: "Preview from Gmail".to_string(),
+            payload: Some(GmailMessagePart {
+                mime_type: "multipart/mixed".to_string(),
+                headers: vec![
+                    GmailHeader {
+                        name: "Subject".to_string(),
+                        value: "Gmail subject".to_string(),
+                    },
+                    GmailHeader {
+                        name: "From".to_string(),
+                        value: "Sender <sender@gmail.com>".to_string(),
+                    },
+                    GmailHeader {
+                        name: "To".to_string(),
+                        value: "Receiver <to@example.com>".to_string(),
+                    },
+                ],
+                parts: vec![
+                    GmailMessagePart {
+                        mime_type: "text/html".to_string(),
+                        body: Some(GmailMessagePartBody {
+                            data: Some("PGI-SGVsbG88L2I-".to_string()),
+                            ..GmailMessagePartBody::default()
+                        }),
+                        ..GmailMessagePart::default()
+                    },
+                    GmailMessagePart {
+                        mime_type: "application/pdf".to_string(),
+                        filename: "invoice.pdf".to_string(),
+                        body: Some(GmailMessagePartBody {
+                            attachment_id: Some("att-1".to_string()),
+                            size: Some(42),
+                            data: None,
+                        }),
+                        ..GmailMessagePart::default()
+                    },
+                ],
+                ..GmailMessagePart::default()
+            }),
+        };
+
+        let normalized = message.into_provider_message("inbox").expect("normalize gmail");
+        assert_eq!(normalized.folder, "inbox");
+        assert_eq!(normalized.provider_message_id, "gmail-1");
+        assert_eq!(normalized.subject, "Gmail subject");
+        assert_eq!(normalized.sender, "Sender <sender@gmail.com>");
+        assert_eq!(normalized.recipients, "Receiver <to@example.com>");
+        assert!(!normalized.is_read);
+        assert_eq!(normalized.body_type, "html");
+        assert_eq!(normalized.body.as_deref(), Some("<b>Hello</b>"));
+        assert_eq!(normalized.body_preview, "Preview from Gmail");
+        assert_eq!(normalized.attachments.len(), 1);
+        assert_eq!(normalized.attachments[0].id, "att-1");
+        assert_eq!(normalized.attachments[0].name, "invoice.pdf");
+        assert_eq!(normalized.attachments[0].content_type, "application/pdf");
+        assert_eq!(normalized.attachments[0].size, 42);
     }
 }

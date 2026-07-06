@@ -1800,7 +1800,7 @@ impl Database {
                 let raw_mime = self.cached_imap_raw_mime(account.id, message_id, folder)?;
                 providers::download_imap_attachment_from_raw(&raw_mime, attachment_id)
             }
-            MailProviderAdapter::Gmail => Err(unsupported_mail_adapter(account, "attachment download")),
+            MailProviderAdapter::Gmail => providers::download_gmail_attachment(account, message_id, attachment_id),
         }
     }
 
@@ -5538,7 +5538,13 @@ impl Database {
                 self.upsert_provider_messages(account.id, &messages)?;
                 Ok(messages.len())
             }),
-            MailProviderAdapter::Gmail => Err(unsupported_mail_adapter(account, "mail refresh")),
+            MailProviderAdapter::Gmail => providers::fetch_gmail_messages(account, folder, top).and_then(|(next_refresh_token, messages)| {
+                if !next_refresh_token.is_empty() && next_refresh_token != account.refresh_token {
+                    self.save_refresh_token(account.id, &next_refresh_token)?;
+                }
+                self.upsert_provider_messages(account.id, &messages)?;
+                Ok(messages.len())
+            }),
         }
     }
 

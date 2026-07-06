@@ -202,6 +202,19 @@ P2：后续增强
 - Docker/服务器部署、Watchtower 在线更新和远程多设备访问。
 - Web 登录、Session/CSRF、API Key 鉴权、面向公网部署的安全体系。
 
+### 多邮箱服务商接入计划
+
+Outlook/Graph 接入已基本可用，下一批服务商接入记录在 [`docs/provider-integration-plan.md`](provider-integration-plan.md)。该计划只覆盖桌面版本地能力，不恢复 Web 服务和浏览器扩展。
+
+接入优先级：
+
+- Gmail：优先走 Gmail API + Google OAuth，补齐首次同步、增量同步、附件、远端操作和本地缓存复用。
+- QQ 邮箱：优先走 IMAP 授权码，复用现有 IMAP 同步、缓存 MIME、附件解析和远端 UID 操作。
+- 163 邮箱：优先走 IMAP 客户端授权密码，复用现有 IMAP 同步、缓存 MIME、附件解析和远端 UID 操作。
+- Custom IMAP：作为 QQ/163 以外邮箱的手动兜底。
+
+注意：Gmail API scope、QQ 授权码和 163 客户端授权密码都需要按真实账号进行人工验证；Web 推送类能力仍归入后续增强，不进入本轮桌面接入验收口径。
+
 ### 分享与外部集成增强
 
 - 面向外部脚本的本地 HTTP API（暂缓）。
@@ -300,6 +313,18 @@ P2：后续增强
 - 剩余交付物：无当前桌面 P0/P1/P2 缺口。
 - 风险点：自动化任务会触发真实网络请求，需要更强的失败隔离和可观测性。
 
+### M9：多邮箱服务商接入，规划中
+
+详细拆分见 [`docs/provider-integration-plan.md`](provider-integration-plan.md)。
+
+- P9.0 Provider Foundation：服务商注册表、provider-aware UI 文案、刷新路由和导入识别。
+- P9.1 Gmail OAuth and Gmail API Read Sync：Google OAuth、Gmail 首次同步、附件和本地缓存复用。
+- P9.2 Gmail Incremental Sync and Remote Actions：Gmail `historyId` 增量同步、标记已读/未读、删除/移入垃圾箱和失败重试。
+- P9.3 QQ Mail IMAP Provider：QQ 邮箱授权码接入、IMAP preset、导入识别、文件夹映射和真实账号验证。
+- P9.4 163 Mail IMAP Provider：163 邮箱客户端授权密码接入、IMAP preset、导入识别、中文文件夹映射和真实账号验证。
+- P9.5 Provider UX and Batch Operations：服务商筛选、服务商徽标、批量导入预览、刷新失败按服务商分组。
+- P9.6 Hardening and Documentation：故障排查、手工验收清单、回归测试和 README/架构文档更新。
+
 ## 当前推荐下一步
 
-继续按“桌面版够用，优先补功能”推进。当前桌面优先级中的 P0/P1/P2 项已补齐；下一批建议根据真实使用反馈补小功能。Web 服务和浏览器扩展暂不处理。
+继续按“桌面版够用，优先补功能”推进。当前桌面优先级中的 P0/P1/P2 项已补齐；下一批建议按 M9 进行 Gmail、QQ、163 邮箱接入。Web 服务和浏览器扩展暂不处理。

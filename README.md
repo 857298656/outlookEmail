@@ -16,6 +16,8 @@ The implementation includes the desktop project scaffold, SQLite schema, lock/se
 
 See [`docs/requirements-milestones.md`](docs/requirements-milestones.md) for the full requirement record, completed scope, unfinished scope, and milestone plan.
 
+Gmail, QQ Mail, and 163 Mail provider expansion is planned in [`docs/provider-integration-plan.md`](docs/provider-integration-plan.md). The plan keeps the app desktop-only and does not reintroduce the web service or browser extension.
+
 ## Prerequisites
 
 - Node.js 22+

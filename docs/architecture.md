@@ -64,3 +64,8 @@ The application is a single-user local desktop app. It does not expose a public 
 ## Next provider work
 
 - Optional local HTTP API remains deferred.
+- Gmail, QQ Mail, and 163 Mail provider expansion is planned in [`provider-integration-plan.md`](provider-integration-plan.md).
+- Provider expansion should keep the desktop app local-first and reuse SQLite cache, encrypted local secrets, refresh logs, retry queue, attachment cache, and mailbox UI.
+- Gmail should be implemented as a first-class OAuth/API provider first, with IMAP XOAUTH2 only as a fallback path.
+- QQ Mail and 163 Mail should initially be provider presets over the generic IMAP adapter, using provider-specific setup hints, import auto-detection, folder mapping validation, and real-account verification.
+- A provider registry should replace hard-coded Outlook/Graph labels before adding additional provider-specific UI.

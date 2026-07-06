@@ -46,6 +46,7 @@ import {
   normalizeAccountProviderId,
   providerCapabilitySummary,
   providerFailureHint,
+  providerReadiness,
   providerAccountType,
   providerDefaultImap
 } from "./lib/providerRegistry";
@@ -163,8 +164,11 @@ function accountMatchesSearch(account: Account, tokens: string[]) {
       formatStatus(account.last_refresh_status),
       account.last_refresh_error,
       account.forward_enabled ? "转发 已启用 enabled forwarding" : "未转发 disabled",
+      account.has_client_id ? "Client ID" : "",
       account.has_refresh_token ? "Outlook Graph OAuth" : "",
       account.has_imap_password ? "IMAP" : "",
+      providerReadiness(account).label,
+      providerReadiness(account).detail,
       ...account.aliases,
       ...account.tags.map((tag) => tag.name)
     ],
@@ -4317,33 +4321,20 @@ function providerBadgeCode(provider: string) {
 }
 
 function isRefreshReady(account: Account) {
-  const provider = accountProviderDefinition(account.provider);
-  if (provider.accountType === "imap") return account.has_imap_password || account.has_password || account.has_refresh_token;
-  return account.has_refresh_token;
+  return providerReadiness(account).status === "ready";
 }
 
 function RefreshCredentialCell({ account }: { account: Account }) {
+  const readiness = providerReadiness(account);
   return (
-    <span className="credentialCell">
+    <span className={`credentialCell readiness-${readiness.status}`} title={readiness.detail}>
       <ProviderBadge provider={account.provider} compact />
-      <span>{refreshCredentialDetail(account)}</span>
+      <span className="credentialDetail">
+        <span>{readiness.label}</span>
+        <small>{readiness.detail}</small>
+      </span>
     </span>
   );
-}
-
-function refreshCredentialDetail(account: Account) {
-  const provider = accountProviderDefinition(account.provider);
-  if (!isRefreshReady(account)) return "缺少凭据";
-  if (provider.accountType === "imap") {
-    if (account.has_imap_password) return provider.credentialLabel;
-    if (account.has_refresh_token) return "OAuth";
-    return "账号密码";
-  }
-  return provider.credentialLabel;
-}
-
-function refreshCredentialLabel(account: Account) {
-  return `${accountProviderLabel(account.provider)} ${refreshCredentialDetail(account)}`;
 }
 
 function RefreshErrorCell({ account }: { account: Account }) {

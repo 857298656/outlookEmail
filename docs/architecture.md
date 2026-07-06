@@ -60,6 +60,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Refreshed messages are upserted into SQLite and read by the workspace UI.
 - Refresh failures are recorded on the account and in `refresh_logs`; failed account refreshes queue a `refresh_account` retry item with account, folder, and page size.
 - Provider-aware routing now selects Graph, IMAP, or Gmail before refresh, attachment download, remote read/unread, and delete actions. Gmail delete uses `users.messages.trash`; permanent delete is intentionally not exposed.
+- Provider readiness shown in the account inventory and refresh management views is derived from non-secret account flags such as Client ID presence, refresh token presence, IMAP host/port, and IMAP password presence; it does not decrypt or display stored secrets.
 - Forwarding is controlled by a per-account `forward_enabled` flag and deduplicated through `forwarding_logs`. Failed SMTP/Telegram/WeCom sends are queued with message id and channel for later replay.
 - Backups are created with SQLite `VACUUM INTO`, stored locally under the app data backup directory, then uploaded with WebDAV `PUT`. Failed backup attempts queue a `backup_job` retry item.
 - Restores are limited to successful backup log entries that resolve to local `.sqlite` snapshots under the app backup directory. The restore command validates the snapshot with SQLite `integrity_check`, creates a pre-restore safety snapshot, replaces the current database file set, reopens SQLite, and audits the restore.
@@ -74,7 +75,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Gmail, QQ Mail, and 163 Mail provider expansion is tracked in [`provider-integration-plan.md`](provider-integration-plan.md).
 - Provider setup, troubleshooting, manual validation, and regression coverage are tracked in [`provider-operations.md`](provider-operations.md).
 - Provider expansion should keep the desktop app local-first and reuse SQLite cache, encrypted local secrets, refresh logs, retry queue, attachment cache, and mailbox UI.
-- Provider foundation work has started with registry-backed import detection, provider labels and badges, provider capability metadata, provider filtering, batch import provider/credential previews, refresh failure provider summaries, IMAP presets for QQ/163, provider-specific credential hints, centralized adapter routing, Gmail OAuth account save support, and Gmail API first-read sync.
+- Provider foundation work has started with registry-backed import detection, provider labels and badges, provider capability metadata, provider filtering, batch import provider/credential previews, provider readiness checks, refresh failure provider summaries, IMAP presets for QQ/163, provider-specific credential hints, centralized adapter routing, Gmail OAuth account save support, and Gmail API first-read sync.
 - Gmail should be implemented as a first-class OAuth/API provider first, with IMAP XOAUTH2 only as a fallback path.
 - QQ Mail and 163 Mail should initially be provider presets over the generic IMAP adapter, using provider-specific setup hints, import auto-detection, folder mapping validation, and real-account verification.
 - Remaining foundation work should continue replacing hard-coded Outlook/Graph labels where they are tied to OAuth setup rather than general account display.

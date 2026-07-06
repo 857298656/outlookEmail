@@ -54,6 +54,7 @@ pub struct Account {
     pub tags: Vec<Tag>,
     pub aliases: Vec<String>,
     pub has_password: bool,
+    pub has_client_id: bool,
     pub has_refresh_token: bool,
     pub has_imap_password: bool,
     pub imap_host: String,

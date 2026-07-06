@@ -22,6 +22,26 @@ export type AccountProviderDefinition = {
   capabilities: AccountProviderCapability[];
 };
 
+export type ProviderReadinessInput = {
+  provider?: string | null;
+  account_type?: string | null;
+  has_password?: boolean | null;
+  has_client_id?: boolean | null;
+  has_refresh_token?: boolean | null;
+  has_imap_password?: boolean | null;
+  imap_host?: string | null;
+  imap_port?: number | null;
+};
+
+export type ProviderReadinessStatus = "ready" | "missing";
+
+export type ProviderReadinessResult = {
+  status: ProviderReadinessStatus;
+  label: string;
+  detail: string;
+  missing: string[];
+};
+
 export const accountProviderRegistry: AccountProviderDefinition[] = [
   {
     id: "graph",
@@ -158,6 +178,66 @@ export function providerCapabilitySummary(value?: string | null): string {
   return accountProviderDefinition(value)
     .capabilities.map((capability) => labels[capability])
     .join(" / ");
+}
+
+export function providerReadiness(account: ProviderReadinessInput): ProviderReadinessResult {
+  const provider = accountProviderDefinition(account.provider ?? account.account_type);
+  const host = (account.imap_host ?? provider.defaultImapHost).trim();
+  const port = account.imap_port ?? provider.defaultImapPort;
+  const hasClientId = Boolean(account.has_client_id);
+  const hasRefreshToken = Boolean(account.has_refresh_token);
+  const hasImapPassword = Boolean(account.has_imap_password);
+  const hasAccountPassword = Boolean(account.has_password);
+  const missing: string[] = [];
+
+  if (provider.accountType !== "imap") {
+    if (!hasClientId) missing.push(provider.id === "gmail" ? "Google Client ID" : "Microsoft Client ID");
+    if (!hasRefreshToken) missing.push(provider.id === "gmail" ? "Google refresh token" : "Microsoft refresh token");
+    return readinessResult(missing, provider.credentialLabel, `${provider.credentialLabel} 已保存`);
+  }
+
+  if (!host) missing.push("IMAP host");
+  if (!Number.isFinite(port) || port < 1 || port > 65535) missing.push("IMAP port");
+
+  if (provider.id === "qq") {
+    if (!hasImapPassword) missing.push("QQ IMAP/SMTP 授权码");
+    return readinessResult(missing, provider.credentialLabel, `${provider.credentialLabel} + ${host || provider.defaultImapHost}:${port || provider.defaultImapPort}`);
+  }
+
+  if (provider.id === "netease_163") {
+    if (!hasImapPassword) missing.push("163 客户端授权密码");
+    return readinessResult(missing, provider.credentialLabel, `${provider.credentialLabel} + ${host || provider.defaultImapHost}:${port || provider.defaultImapPort}`);
+  }
+
+  const hasImapOAuth = hasClientId && hasRefreshToken;
+  if (!hasImapPassword && !hasAccountPassword && !hasImapOAuth) {
+    missing.push(provider.id === "imap" ? "IMAP 密码或 OAuth refresh token" : "IMAP 密码或应用密码");
+  }
+
+  if (hasImapOAuth && !hasImapPassword && !hasAccountPassword) {
+    return readinessResult(missing, "IMAP OAuth", `IMAP OAuth + ${host}:${port}`);
+  }
+  if (hasImapPassword) {
+    return readinessResult(missing, provider.credentialLabel, `${provider.credentialLabel} + ${host}:${port}`);
+  }
+  return readinessResult(missing, "账号密码", `账号密码 + ${host}:${port}`);
+}
+
+function readinessResult(missing: string[], readyLabel: string, readyDetail: string): ProviderReadinessResult {
+  if (missing.length > 0) {
+    return {
+      status: "missing",
+      label: "缺少配置",
+      detail: `缺少 ${missing.join("、")}`,
+      missing
+    };
+  }
+  return {
+    status: "ready",
+    label: readyLabel,
+    detail: readyDetail,
+    missing
+  };
 }
 
 export function providerFailureHint(value?: string | null, error?: string | null): string {

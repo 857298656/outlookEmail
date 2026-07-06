@@ -250,17 +250,25 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       mockTags = mockTags.filter((tag) => tag.id !== args?.tagId);
       return undefined as T;
     case "update_account": {
-      const input = args?.input as Partial<Account> & { id: number; tag_ids?: number[] };
-      const { tag_ids, ...accountInput } = input;
-      mockAccounts = mockAccounts.map((account) =>
-        account.id === input.id
-          ? {
-              ...account,
-              ...accountInput,
-              tags: tag_ids ? mockTags.filter((tag) => tag_ids.includes(tag.id)) : account.tags
-            }
-          : account
-      );
+      const input = args?.input as Partial<Account> & {
+        id: number;
+        tag_ids?: number[];
+        client_id?: string;
+        refresh_token?: string;
+        imap_password?: string;
+      };
+      const { tag_ids, client_id, refresh_token, imap_password, ...accountInput } = input;
+      mockAccounts = mockAccounts.map((account) => {
+        if (account.id !== input.id) return account;
+        return {
+          ...account,
+          ...accountInput,
+          has_client_id: client_id === undefined ? account.has_client_id : Boolean(client_id),
+          has_refresh_token: refresh_token === undefined ? account.has_refresh_token : Boolean(refresh_token),
+          has_imap_password: imap_password === undefined ? account.has_imap_password : Boolean(imap_password),
+          tags: tag_ids ? mockTags.filter((tag) => tag_ids.includes(tag.id)) : account.tags
+        };
+      });
       return mockAccounts.find((account) => account.id === input.id) as T;
     }
     case "list_accounts":
@@ -292,6 +300,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
           tags: [],
           aliases: [],
           has_password: Boolean(row.password) && !isImapProvider,
+          has_client_id: Boolean(row.client_id),
           has_refresh_token: Boolean(row.refresh_token),
           has_imap_password: Boolean(row.password) && isImapProvider,
           imap_host: imapDefaults.host,
@@ -710,6 +719,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         tags: [],
         aliases: [],
         has_password: false,
+        has_client_id: Boolean(input.client_id),
         has_refresh_token: Boolean(input.refresh_token),
         has_imap_password: false,
         imap_host: "",

@@ -45,6 +45,7 @@ export type Account = {
   tags: Tag[];
   aliases: string[];
   has_password: boolean;
+  has_client_id: boolean;
   has_refresh_token: boolean;
   has_imap_password: boolean;
   imap_host: string;

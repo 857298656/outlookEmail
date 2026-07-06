@@ -392,6 +392,7 @@ P9.2 进展（2026-07-06）：
 - 前后端 provider registry 已补齐能力元数据，显式记录读取、附件、已读/未读、远端删除/移入垃圾箱、Gmail history 增量同步和 IMAP 文件夹能力，并增加前后端回归测试。
 - 已补齐 provider-specific 凭据错误归类：Gmail HTTP 401/403、`invalid_grant`、`insufficientPermissions`/scope，QQ 授权码错误，以及 163 客户端授权密码错误会归入 `auth`，以便刷新失败汇总和重试退避按凭据错误处理。
 - 刷新管理页的失败账号和服务商失败汇总已显示 provider-specific 处理建议，例如 Gmail 重新授权、QQ 开启 IMAP/SMTP 并使用授权码、163 使用客户端授权密码、网络/代理检查。
+- 账号库存和刷新管理页已显示 provider-aware 接入就绪状态；OAuth 账号检查 Client ID 与 refresh token，QQ/163 检查 IMAP host/port 和授权码/授权密码，Custom IMAP 检查 host/port 和 IMAP 密钥。
 - README 和架构文档已链接该操作文档；仍需要在拿到真实 Gmail/QQ/163 测试账号后执行人工验收清单。
 
 ## 风险和待确认问题

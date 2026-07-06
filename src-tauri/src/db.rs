@@ -430,7 +430,7 @@ impl Database {
             SELECT a.id, a.email, a.group_id, g.name, COALESCE(a.remark, ''), a.status,
                    a.provider, a.account_type, a.forward_enabled, a.last_refresh_status,
                    a.last_refresh_error, a.last_refresh_at, COUNT(m.id) AS message_count, a.created_at, a.updated_at,
-                   a.password_enc, a.refresh_token_enc, a.imap_password_enc, COALESCE(a.imap_host, ''),
+                   a.password_enc, a.client_id_enc, a.refresh_token_enc, a.imap_password_enc, COALESCE(a.imap_host, ''),
                    a.imap_port, COALESCE(a.proxy_url, ''), COALESCE(a.fallback_proxy_url_1, ''),
                    COALESCE(a.fallback_proxy_url_2, ''), COALESCE(a.mail_retention_days, 30)
             FROM accounts a
@@ -461,14 +461,15 @@ impl Database {
                 tags: Vec::new(),
                 aliases: Vec::new(),
                 has_password: !row.get::<_, String>(15)?.is_empty(),
-                has_refresh_token: !row.get::<_, String>(16)?.is_empty(),
-                has_imap_password: !row.get::<_, String>(17)?.is_empty(),
-                imap_host: row.get(18)?,
-                imap_port: row.get(19)?,
-                proxy_url: row.get(20)?,
-                fallback_proxy_url_1: row.get(21)?,
-                fallback_proxy_url_2: row.get(22)?,
-                mail_retention_days: row.get(23)?,
+                has_client_id: !row.get::<_, String>(16)?.is_empty(),
+                has_refresh_token: !row.get::<_, String>(17)?.is_empty(),
+                has_imap_password: !row.get::<_, String>(18)?.is_empty(),
+                imap_host: row.get(19)?,
+                imap_port: row.get(20)?,
+                proxy_url: row.get(21)?,
+                fallback_proxy_url_1: row.get(22)?,
+                fallback_proxy_url_2: row.get(23)?,
+                mail_retention_days: row.get(24)?,
             })
         })?;
 
@@ -7465,10 +7466,10 @@ mod project_tests {
                 ImportedAccount {
                     email: "person@gmail.com".to_string(),
                     password: String::new(),
-                    client_id: String::new(),
-                    refresh_token: String::new(),
+                    client_id: "gmail-client".to_string(),
+                    refresh_token: "gmail-refresh".to_string(),
                     remark: String::new(),
-                    provider: None,
+                    provider: Some("gmail".to_string()),
                 },
             ],
             None,
@@ -7499,6 +7500,8 @@ mod project_tests {
         assert_eq!(gmail.provider, "gmail");
         assert_eq!(gmail.account_type, "gmail");
         assert_eq!(gmail.imap_host, "");
+        assert!(gmail.has_client_id);
+        assert!(gmail.has_refresh_token);
     }
 
     #[test]

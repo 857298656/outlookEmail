@@ -474,7 +474,8 @@ button:disabled {
 }
 
 .accountMetaLine small,
-.credentialCell > span:last-child,
+.credentialDetail > span,
+.credentialDetail > small,
 .mailTreeMeta small {
   min-width: 0;
   overflow: hidden;
@@ -483,8 +484,30 @@ button:disabled {
 }
 
 .credentialCell {
+  align-items: flex-start;
   color: #475569;
   font-size: 12px;
+}
+
+.credentialDetail {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.credentialDetail > span {
+  color: #334155;
+  font-weight: 700;
+}
+
+.credentialDetail > small {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.credentialCell.readiness-missing .credentialDetail > span,
+.credentialCell.readiness-missing .credentialDetail > small {
+  color: #b45309;
 }
 
 .refreshErrorCell {
@@ -2484,7 +2507,7 @@ button:disabled {
 
 .accountInventoryPanel .tableHeader,
 .accountInventoryPanel .tableRow {
-  grid-template-columns: 32px minmax(220px, 1.2fr) minmax(120px, 0.6fr) 110px 140px 76px;
+  grid-template-columns: 32px minmax(220px, 1.2fr) minmax(120px, 0.6fr) 110px 150px 76px;
 }
 
 .accountRowActions {
@@ -2761,7 +2784,7 @@ button:disabled {
 
 .refreshAccountTable .logHeader,
 .refreshAccountTable .logRow {
-  grid-template-columns: 32px minmax(190px, 1.2fr) 100px 90px 120px 70px minmax(220px, 1.4fr) 60px;
+  grid-template-columns: 32px minmax(190px, 1.2fr) minmax(150px, 0.9fr) 90px 120px 70px minmax(220px, 1.4fr) 60px;
 }
 
 .refreshRetryTable .logHeader,

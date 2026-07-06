@@ -27,6 +27,7 @@ person@gmail.com----optional-password----google-client-id----refresh-token----re
 | 现象 | 优先检查 | 处理方式 |
 | --- | --- | --- |
 | 账号显示“缺少凭据” | provider 是否正确、OAuth refresh token 或 IMAP 密码是否存在 | Outlook/Gmail 重新授权并保存；QQ/163/Custom IMAP 在账号设置里填入 IMAP 授权码/密码。 |
+| 账号显示“缺少配置” | OAuth Client ID、refresh token、IMAP host/port、授权码或授权密码是否完整 | 先在账号设置补齐本地配置，再执行真实账号刷新验证。 |
 | Gmail 远端标记失败或 403 | OAuth scope 是否仍是旧 `gmail.readonly` | 重新生成 Gmail OAuth URL，完成授权并保存 refresh token。 |
 | Gmail 刷新 401 / `invalid_grant` | refresh token 是否被撤销、Client ID 是否变更 | 使用同一个 Google Client ID 重新授权；必要时删除旧账号后重新保存。 |
 | Gmail history 404 | Gmail `historyId` 已过期 | 当前实现会回退到全量同步；观察下一次 all 文件夹刷新是否恢复。 |
@@ -39,6 +40,7 @@ person@gmail.com----optional-password----google-client-id----refresh-token----re
 
 Gmail `HTTP 401/403`、`invalid_grant`、`insufficientPermissions`、scope 缺失，QQ 授权码错误，以及 163 客户端授权密码/网页登录密码错误都会归类为 `auth`，刷新失败汇总和重试退避会按凭据问题处理。
 刷新管理页会在失败服务商汇总和失败账号错误列中显示对应处理建议，优先提示重新授权、授权码/授权密码、IMAP 开启或代理网络检查。
+账号库存和刷新管理页的凭据列会显示本地接入就绪状态。该状态只检查本地配置完整性，不替代真实账号登录验证。
 
 ## 手工验收前置条件
 
@@ -85,10 +87,11 @@ Gmail `HTTP 401/403`、`invalid_grant`、`insufficientPermissions`、scope 缺�
 
 1. 混合导入 Outlook/Gmail/QQ/163/Custom IMAP 测试账号，确认导入预览显示正确服务商和凭据类型。
 2. 账号树、账号管理表、刷新管理表均应显示统一服务商徽标。
-3. 使用账号筛选选择 Outlook、Gmail、QQ、163、IMAP，确认列表结果正确。
-4. 刷新全部账号，确认失败账号按服务商出现在刷新管理汇总中。
-5. 点击失败服务商汇总块，确认账号列表切换到失败账号并填入服务商搜索词。
-6. 对跨服务商选中邮件执行批量已读/未读、删除、标签和导出，确认本地结果正确。
+3. 账号管理表和刷新管理表的凭据列应显示 OAuth、授权码/授权密码或缺少配置详情。
+4. 使用账号筛选选择 Outlook、Gmail、QQ、163、IMAP，确认列表结果正确。
+5. 刷新全部账号，确认失败账号按服务商出现在刷新管理汇总中。
+6. 点击失败服务商汇总块，确认账号列表切换到失败账号并填入服务商搜索词。
+7. 对跨服务商选中邮件执行批量已读/未读、删除、标签和导出，确认本地结果正确。
 7. 对远端失败项执行立即重试和忽略，确认重试队列状态变化符合预期。
 
 ## 自动化回归覆盖
@@ -106,8 +109,9 @@ $env:RUSTUP_HOME='E:\RustCache\.rustup'; $env:CARGO_HOME='E:\RustCache\.cargo'; 
 - `src/lib/importParser.test.ts` 覆盖批量导入 provider 字段、域名识别和 legacy 行格式。
 - `src/lib/providerRegistry.test.ts` 覆盖前端 provider capability metadata、Gmail history/trash 能力和 QQ/163 IMAP 文件夹能力。
 - `src/lib/providerRegistry.test.ts` 同时覆盖 Gmail、QQ、163 和 Custom IMAP 刷新失败处理建议。
+- `src/lib/providerRegistry.test.ts` 覆盖基于非敏感字段的 provider-aware 接入就绪判断。
 - `providers::tests::detects_mail_provider_registry_defaults` 覆盖后端 provider registry、别名和默认 IMAP preset。
-- `db::project_tests::import_accounts_detects_mail_provider_presets` 覆盖导入后 QQ/163/Gmail provider、account_type 和 IMAP host/port 归一化。
+- `db::project_tests::import_accounts_detects_mail_provider_presets` 覆盖导入后 QQ/163/Gmail provider、account_type、IMAP host/port 归一化，以及账号列表的 Client ID / refresh token 就绪布尔字段。
 - `providers::tests::normalizes_gmail_message_payload`、`maps_gmail_labels_to_cached_folders` 和 `maps_gmail_folder_targets_to_app_folders` 覆盖 Gmail 正文、附件、label 到本地文件夹映射。
 - `providers::tests::compares_gmail_history_ids_numerically` 和 `db::project_tests::extracts_gmail_history_id_from_provider_sync_state` 覆盖 Gmail `historyId` 状态解析。
 - `providers::tests::classifies_imap_special_use_and_common_mailbox_names` 覆盖 IMAP special-use 和常见中文文件夹名映射。

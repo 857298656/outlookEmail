@@ -1582,8 +1582,8 @@ fn classify_imap_mailbox(attributes: &[String], mailbox_name: &str) -> Option<&'
     }
     let leaf = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
     match leaf {
-        "junk" | "junkemail" | "spam" | "bulkmail" => Some("junkemail"),
-        "deleted" | "deleteditems" | "deletedmessages" | "trash" | "bin" => Some("deleteditems"),
+        "junk" | "junkemail" | "spam" | "bulkmail" | "垃圾邮件" | "垃圾郵件" | "垃圾信" => Some("junkemail"),
+        "deleted" | "deleteditems" | "deletedmessages" | "trash" | "bin" | "已删除" | "已刪除" | "已删除邮件" | "已刪除郵件" | "垃圾箱" | "回收站" => Some("deleteditems"),
         _ => None,
     }
 }
@@ -2351,6 +2351,9 @@ mod tests {
         assert_eq!(classify_imap_mailbox(&[], "INBOX"), Some("inbox"));
         assert_eq!(classify_imap_mailbox(&[], "[Gmail]/Spam"), Some("junkemail"));
         assert_eq!(classify_imap_mailbox(&[], "Deleted Items"), Some("deleteditems"));
+        assert_eq!(classify_imap_mailbox(&[], "垃圾邮件"), Some("junkemail"));
+        assert_eq!(classify_imap_mailbox(&[], "已删除邮件"), Some("deleteditems"));
+        assert_eq!(classify_imap_mailbox(&[], "回收站"), Some("deleteditems"));
         assert_eq!(classify_imap_mailbox(&[], "Archive"), None);
     }
 

@@ -49,6 +49,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Graph attachments are listed during sync and downloaded to the local app data `attachments` directory on demand.
 - Graph message read/unread and delete actions update the local cache and attempt Microsoft Graph `PATCH`/`DELETE` synchronization. Failed remote actions are stored in `retry_queue` with the original account, folder, provider message id, action, error, attempt count, and next attempt time. Failed deletes keep the cached message visible as a rollback surface until the delete retry succeeds.
 - IMAP uses TLS login, UID search/fetch, and MIME parsing.
+- IMAP folder discovery uses special-use flags where available and falls back to common English and Chinese mailbox names for inbox/junkemail/deleteditems, including QQ/163-style authorization-code accounts.
 - IMAP sync stores the raw RFC822 MIME for cached messages so attachment downloads can be resolved locally from SQLite-backed cache data without another network fetch.
 - IMAP message read/unread and delete actions use UID flag updates; delete applies `\Deleted` and expunges the selected mailbox. Failed IMAP flag/delete operations use the same retry queue.
 - Temp-mail providers use configurable GPTMail and DuckMail HTTP APIs plus Cloudflare Worker admin channels.

@@ -390,6 +390,7 @@ P9.2 进展（2026-07-06）：
 
 - 已新增 [`provider-operations.md`](provider-operations.md)，覆盖服务商速查、批量导入格式、常见故障处理、Gmail/QQ/163 手工验收、多服务商批量验收、自动化回归覆盖和已知限制。
 - 前后端 provider registry 已补齐能力元数据，显式记录读取、附件、已读/未读、远端删除/移入垃圾箱、Gmail history 增量同步和 IMAP 文件夹能力，并增加前后端回归测试。
+- 已补齐 provider-specific 凭据错误归类：Gmail HTTP 401/403、`invalid_grant`、`insufficientPermissions`/scope，QQ 授权码错误，以及 163 客户端授权密码错误会归入 `auth`，以便刷新失败汇总和重试退避按凭据错误处理。
 - README 和架构文档已链接该操作文档；仍需要在拿到真实 Gmail/QQ/163 测试账号后执行人工验收清单。
 
 ## 风险和待确认问题

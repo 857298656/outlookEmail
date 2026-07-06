@@ -37,6 +37,8 @@ person@gmail.com----optional-password----google-client-id----refresh-token----re
 | 批量导入识别错误 | 导入预览里的服务商和凭据类型 | 给该行加显式 `provider=...` 或以 provider 作为首列。 |
 | 代理/网络错误 | 账号代理链、全局网络、服务商访问限制 | 先用单账号刷新验证；失败会进入重试队列并按退避时间重试。 |
 
+Gmail `HTTP 401/403`、`invalid_grant`、`insufficientPermissions`、scope 缺失，QQ 授权码错误，以及 163 客户端授权密码/网页登录密码错误都会归类为 `auth`，刷新失败汇总和重试退避会按凭据问题处理。
+
 ## 手工验收前置条件
 
 - 使用单独测试分组，避免真实账号与生产账号混在一起。
@@ -107,6 +109,7 @@ $env:RUSTUP_HOME='E:\RustCache\.rustup'; $env:CARGO_HOME='E:\RustCache\.cargo'; 
 - `providers::tests::normalizes_gmail_message_payload`、`maps_gmail_labels_to_cached_folders` 和 `maps_gmail_folder_targets_to_app_folders` 覆盖 Gmail 正文、附件、label 到本地文件夹映射。
 - `providers::tests::compares_gmail_history_ids_numerically` 和 `db::project_tests::extracts_gmail_history_id_from_provider_sync_state` 覆盖 Gmail `historyId` 状态解析。
 - `providers::tests::classifies_imap_special_use_and_common_mailbox_names` 覆盖 IMAP special-use 和常见中文文件夹名映射。
+- `db::project_tests::classifies_provider_specific_credential_errors` 覆盖 Gmail、QQ、163 provider-specific 凭据错误归类。
 - `db::project_tests::queues_failed_account_refresh_retry`、`queues_and_retries_failed_remote_mail_action`、`failed_remote_delete_keeps_message_visible_until_retry_success` 覆盖刷新失败、远端操作失败和删除回滚路径。
 
 ## 已知限制

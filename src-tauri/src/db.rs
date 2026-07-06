@@ -6152,11 +6152,28 @@ fn classify_error_category(error: &str) -> &'static str {
     if lower.contains("auth")
         || lower.contains("unauthorized")
         || lower.contains("forbidden")
+        || lower.contains("http 401")
+        || lower.contains("http 403")
+        || lower.contains("status 401")
+        || lower.contains("status 403")
         || lower.contains("invalid_grant")
+        || lower.contains("insufficientpermissions")
+        || lower.contains("insufficient permissions")
+        || lower.contains("insufficient privileges")
+        || lower.contains("scope")
         || lower.contains("credential")
         || lower.contains("password")
         || lower.contains("token")
         || lower.contains("login")
+        || lower.contains("授权码")
+        || lower.contains("授权密码")
+        || lower.contains("客户端授权")
+        || lower.contains("登录密码")
+        || lower.contains("未授权")
+        || lower.contains("权限不足")
+        || lower.contains("认证")
+        || lower.contains("鉴权")
+        || lower.contains("令牌")
     {
         return "auth";
     }
@@ -7266,7 +7283,7 @@ fn remote_sync_failure_from_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Re
 #[cfg(test)]
 mod project_tests {
     use super::{
-        attachment_dir, backup_dir, exports_dir, gmail_history_id_from_state, normalize_oauth_provider,
+        attachment_dir, backup_dir, classify_error_category, exports_dir, gmail_history_id_from_state, normalize_oauth_provider,
         normalize_project_key, Database, MailMessageRef,
     };
     use crate::error::AppError;
@@ -8771,6 +8788,27 @@ mod project_tests {
             .expect("retry item");
         assert_eq!(retry.error_category, "network");
         assert!(retry.due_now);
+    }
+
+    #[test]
+    fn classifies_provider_specific_credential_errors() {
+        assert_eq!(
+            classify_error_category("Gmail list messages failed: HTTP 401 {\"error\":\"invalid_grant\"}"),
+            "auth"
+        );
+        assert_eq!(
+            classify_error_category("Gmail mark message failed: HTTP 403 insufficientPermissions: missing gmail.modify scope"),
+            "auth"
+        );
+        assert_eq!(
+            classify_error_category("IMAP login failed: NO [AUTHENTICATIONFAILED] invalid QQ 授权码"),
+            "auth"
+        );
+        assert_eq!(
+            classify_error_category("163 客户端授权密码错误，请不要使用网页登录密码"),
+            "auth"
+        );
+        assert_eq!(classify_error_category("Gmail list messages failed: HTTP 429 rate limit"), "rate_limit");
     }
 
     #[test]

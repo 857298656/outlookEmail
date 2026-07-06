@@ -1583,7 +1583,10 @@ function MailWorkspace({
         <span className="mailAvatar">{account.email.slice(0, 2).toUpperCase()}</span>
         <span className="mailTreeText">
           <strong>{account.email}</strong>
-          <small>{accountProviderLabel(account.provider)} · {formatStatus(account.last_refresh_status)} · {account.message_count} 封邮件</small>
+          <span className="mailTreeMeta">
+            <ProviderBadge provider={account.provider} compact />
+            <small>{formatStatus(account.last_refresh_status)} · {account.message_count} 封邮件</small>
+          </span>
         </span>
       </button>
     );
@@ -2347,11 +2350,14 @@ function AccountsView({
               </span>
               <span className="accountText">
                 <strong>{account.email}</strong>
-                {account.aliases.length > 0 && <small>{account.aliases.join(", ")}</small>}
+                <span className="accountMetaLine">
+                  <ProviderBadge provider={account.provider} compact />
+                  {account.aliases.length > 0 && <small>{account.aliases.join(", ")}</small>}
+                </span>
               </span>
               <span>{account.group_name ?? "无"}</span>
               <span>{formatStatus(account.last_refresh_status)}</span>
-              <span>{refreshCredentialLabel(account)}</span>
+              <RefreshCredentialCell account={account} />
               <span className="rowActions accountRowActions">
                 <button
                   className="iconMini"
@@ -2803,7 +2809,7 @@ function AccountImportDialog({
                       <span className="importPreviewEmail" title={row.email}>
                         {row.email}
                       </span>
-                      <span className="providerBadge">{provider.label}</span>
+                      <ProviderBadge provider={provider.id} />
                       <span className="credentialBadge" title={provider.setupHint || provider.credentialLabel}>
                         {provider.credentialLabel}
                       </span>
@@ -3330,7 +3336,7 @@ function RefreshManagementView({
                   setAccountSearch(summary.label);
                 }}
               >
-                <span className="providerBadge">{summary.label}</span>
+                <ProviderBadge provider={summary.providerId} />
                 <strong>{summary.count} 个失败</strong>
                 <small title={summary.topError}>{summary.topError}</small>
               </button>
@@ -3431,7 +3437,7 @@ function RefreshManagementView({
                 />
               </span>
               <span>{account.email}</span>
-              <span>{refreshCredentialLabel(account)}</span>
+              <RefreshCredentialCell account={account} />
               <StatusPill status={account.last_refresh_status} />
               <span>{account.last_refresh_at ? formatDate(account.last_refresh_at) : "从未"}</span>
               <span>{account.message_count}</span>
@@ -4276,21 +4282,65 @@ function StatusPill({ status }: { status: string }) {
   return <span className={`statusPill status-${status}`}>{formatStatus(status)}</span>;
 }
 
+function ProviderBadge({ provider, compact = false }: { provider: string; compact?: boolean }) {
+  const providerId = normalizeAccountProviderId(provider);
+  const definition = accountProviderDefinition(providerId);
+  return (
+    <span
+      className={`providerBadge provider-${providerId}${compact ? " compact" : ""}`}
+      title={`${definition.label} · ${definition.credentialLabel}`}
+    >
+      <span className="providerBadgeMark">{providerBadgeCode(providerId)}</span>
+      <span className="providerBadgeText">{definition.label}</span>
+    </span>
+  );
+}
+
+function providerBadgeCode(provider: string) {
+  switch (normalizeAccountProviderId(provider)) {
+    case "graph":
+      return "O";
+    case "gmail":
+      return "G";
+    case "qq":
+      return "Q";
+    case "netease_163":
+      return "163";
+    case "imap":
+      return "IM";
+    default:
+      return "C";
+  }
+}
+
 function isRefreshReady(account: Account) {
   const provider = accountProviderDefinition(account.provider);
   if (provider.accountType === "imap") return account.has_imap_password || account.has_password || account.has_refresh_token;
   return account.has_refresh_token;
 }
 
-function refreshCredentialLabel(account: Account) {
+function RefreshCredentialCell({ account }: { account: Account }) {
+  return (
+    <span className="credentialCell">
+      <ProviderBadge provider={account.provider} compact />
+      <span>{refreshCredentialDetail(account)}</span>
+    </span>
+  );
+}
+
+function refreshCredentialDetail(account: Account) {
   const provider = accountProviderDefinition(account.provider);
-  if (!isRefreshReady(account)) return `${provider.label} 缺少凭据`;
+  if (!isRefreshReady(account)) return "缺少凭据";
   if (provider.accountType === "imap") {
-    if (account.has_imap_password) return `${provider.label} ${provider.credentialLabel}`;
-    if (account.has_refresh_token) return `${provider.label} OAuth`;
-    return `${provider.label} 账号密码`;
+    if (account.has_imap_password) return provider.credentialLabel;
+    if (account.has_refresh_token) return "OAuth";
+    return "账号密码";
   }
-  return `${provider.label} ${provider.credentialLabel}`;
+  return provider.credentialLabel;
+}
+
+function refreshCredentialLabel(account: Account) {
+  return `${accountProviderLabel(account.provider)} ${refreshCredentialDetail(account)}`;
 }
 
 function summarizeProviderFailures(accounts: Account[]) {

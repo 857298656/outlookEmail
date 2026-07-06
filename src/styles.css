@@ -464,6 +464,29 @@ button:disabled {
   min-width: 0;
 }
 
+.accountMetaLine,
+.credentialCell,
+.mailTreeMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.accountMetaLine small,
+.credentialCell > span:last-child,
+.mailTreeMeta small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credentialCell {
+  color: #475569;
+  font-size: 12px;
+}
+
 .accountText strong,
 .accountText small,
 .messageTop strong,
@@ -564,6 +587,10 @@ button:disabled {
 .mailTreeText small {
   color: #64748b;
   font-size: 11px;
+}
+
+.mailTreeMeta .providerBadge {
+  flex: 0 1 auto;
 }
 
 .searchBox {
@@ -1495,6 +1522,7 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 5px;
   min-width: 0;
   width: fit-content;
   max-width: 100%;
@@ -1510,6 +1538,61 @@ button:disabled {
 .providerBadge {
   background: #ecfeff;
   color: #0e7490;
+}
+
+.providerBadge.compact {
+  min-height: 20px;
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+.providerBadgeMark {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 0 4px;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.providerBadgeText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.provider-graph {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.provider-gmail {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.provider-qq {
+  background: #ecfeff;
+  color: #0e7490;
+}
+
+.provider-netease_163 {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.provider-imap {
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.provider-imap_custom {
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #e2e8f0;
 }
 
 .credentialBadge {

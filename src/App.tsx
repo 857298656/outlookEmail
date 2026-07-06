@@ -629,6 +629,7 @@ function App() {
             groups={groups}
             settings={settings}
             accounts={accounts}
+            tags={tags}
             messages={messages}
             selectedGroupId={selectedGroupId}
             selectedAccountId={selectedAccountId}
@@ -1274,6 +1275,7 @@ function MailWorkspace({
   groups,
   settings,
   accounts,
+  tags,
   messages,
   selectedGroupId,
   selectedAccountId,
@@ -1314,6 +1316,7 @@ function MailWorkspace({
   groups: Group[];
   settings: Settings | null;
   accounts: Account[];
+  tags: Tag[];
   messages: MailMessage[];
   selectedGroupId: number | "all";
   selectedAccountId?: number;
@@ -1361,6 +1364,7 @@ function MailWorkspace({
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [oauthSaveOpen, setOauthSaveOpen] = useState(false);
   const [accountSearch, setAccountSearch] = useState("");
+  const [accountTagFilter, setAccountTagFilter] = useState<number | "all">("all");
   const searchApplyTimerRef = useRef<number | null>(null);
   const selectedCount = selectedMessageIds.length;
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
@@ -1395,8 +1399,10 @@ function MailWorkspace({
   }, [accounts, groupIds]);
   const accountSearchTokens = useMemo(() => searchTokens(accountSearch), [accountSearch]);
   const accountSearchActive = accountSearchTokens.length > 0;
+  const accountTagFilterActive = accountTagFilter !== "all";
+  const accountFilterActive = accountSearchActive || accountTagFilterActive;
   const accountTree = useMemo(() => {
-    if (!accountSearchActive) {
+    if (!accountFilterActive) {
       return { childGroupsByParent, accountsByGroup };
     }
 
@@ -1405,6 +1411,8 @@ function MailWorkspace({
     const visibleAccountIds = new Set<number>();
 
     const normalizeGroupId = (groupId: number | null) => (groupId !== null && groupById.has(groupId) ? groupId : null);
+    const matchesTagFilter = (account: Account) =>
+      accountTagFilter === "all" || account.tags.some((tag) => tag.id === accountTagFilter);
 
     const markGroupAncestors = (groupId: number | null) => {
       const visited = new Set<number>();
@@ -1420,18 +1428,20 @@ function MailWorkspace({
       if (!groupById.has(groupId) || visited.has(groupId)) return;
       visited.add(groupId);
       visibleGroupIds.add(groupId);
-      (accountsByGroup.get(groupId) ?? []).forEach((account) => visibleAccountIds.add(account.id));
+      (accountsByGroup.get(groupId) ?? []).forEach((account) => {
+        if (matchesTagFilter(account)) visibleAccountIds.add(account.id);
+      });
       (childGroupsByParent.get(groupId) ?? []).forEach((child) => markGroupAndDescendants(child.id, visited));
     };
 
     accounts.forEach((account) => {
-      if (!accountMatchesSearch(account, accountSearchTokens)) return;
+      if (!matchesTagFilter(account) || !accountMatchesSearch(account, accountSearchTokens)) return;
       visibleAccountIds.add(account.id);
       markGroupAncestors(account.group_id);
     });
 
     groups.forEach((group) => {
-      if (!groupMatchesSearch(group, accountSearchTokens)) return;
+      if (!accountSearchActive || !groupMatchesSearch(group, accountSearchTokens)) return;
       markGroupAncestors(group.id);
       markGroupAndDescendants(group.id);
     });
@@ -1455,7 +1465,7 @@ function MailWorkspace({
     });
 
     return { childGroupsByParent: nextChildGroupsByParent, accountsByGroup: nextAccountsByGroup };
-  }, [accountSearchActive, accountSearchTokens, accounts, accountsByGroup, childGroupsByParent, groups]);
+  }, [accountFilterActive, accountSearchActive, accountSearchTokens, accountTagFilter, accounts, accountsByGroup, childGroupsByParent, groups]);
   const treeChildGroupsByParent = accountTree.childGroupsByParent;
   const treeAccountsByGroup = accountTree.accountsByGroup;
   const hasAccountTreeItems = (treeChildGroupsByParent.get(null)?.length ?? 0) > 0 || (treeAccountsByGroup.get(null)?.length ?? 0) > 0;
@@ -1463,6 +1473,12 @@ function MailWorkspace({
   useEffect(() => {
     setDraftFilters(filters);
   }, [filters]);
+
+  useEffect(() => {
+    if (accountTagFilter !== "all" && !tags.some((tag) => tag.id === accountTagFilter)) {
+      setAccountTagFilter("all");
+    }
+  }, [accountTagFilter, tags]);
 
   useEffect(() => {
     return () => {
@@ -1624,26 +1640,44 @@ function MailWorkspace({
             </button>
           </div>
         </div>
-        <label className="searchBox">
-          <Search size={15} />
-          <input
-            value={accountSearch}
-            placeholder="搜索邮箱、分组、别名、备注或标签"
-            onChange={(event) => setAccountSearch(event.target.value)}
-          />
-          {accountSearch && (
-            <button className="searchClear" type="button" title="清空搜索" onClick={() => setAccountSearch("")}>
-              <X size={14} />
-            </button>
-          )}
-        </label>
+        <div className="accountSearchTools">
+          <label className="searchBox accountSearchBox">
+            <Search size={15} />
+            <input
+              value={accountSearch}
+              placeholder="搜索账号、分组或备注"
+              onChange={(event) => setAccountSearch(event.target.value)}
+            />
+            {accountSearch && (
+              <button className="searchClear" type="button" title="清空搜索" onClick={() => setAccountSearch("")}>
+                <X size={14} />
+              </button>
+            )}
+          </label>
+          <select
+            className="select accountTagFilter"
+            value={accountTagFilter}
+            title="按标签筛选账号"
+            onChange={(event) => {
+              const value = event.target.value;
+              setAccountTagFilter(value === "all" ? "all" : Number(value));
+            }}
+          >
+            <option value="all">全部标签</option>
+            {tags.map((tag) => (
+              <option value={tag.id} key={tag.id}>
+                {tag.name}
+              </option>
+            ))}
+          </select>
+        </div>
         {hasAccountTreeItems ? (
           <div className="mailTree">
             {(treeChildGroupsByParent.get(null) ?? []).map((group) => renderTreeGroup(group, 0))}
             {(treeAccountsByGroup.get(null) ?? []).map((account) => renderTreeAccount(account, 0))}
           </div>
         ) : (
-          <EmptyState icon={<Mail size={24} />} text={accountSearchActive ? "没有匹配的账号或分组。" : "导入账号后开始使用。"} />
+          <EmptyState icon={<Mail size={24} />} text={accountFilterActive ? "没有匹配的账号、标签或分组。" : "导入账号后开始使用。"} />
         )}
       </aside>
 
@@ -2306,7 +2340,7 @@ function AccountsView({
               </span>
               <span>{account.group_name ?? "无"}</span>
               <span>{formatStatus(account.last_refresh_status)}</span>
-              <span>{account.has_refresh_token ? "Outlook / Graph" : account.has_imap_password || account.has_password ? "IMAP" : "无"}</span>
+              <span>{account.has_refresh_token ? "Outlook" : account.has_imap_password || account.has_password ? "IMAP" : "无"}</span>
               <span className="rowActions accountRowActions">
                 <button
                   className="iconMini"
@@ -4150,7 +4184,7 @@ function isRefreshReady(account: Account) {
 }
 
 function refreshCredentialLabel(account: Account) {
-  if (account.has_refresh_token) return "Outlook / Graph";
+  if (account.has_refresh_token) return "Outlook";
   if (account.has_imap_password) return "IMAP 密码";
   if (account.has_password) return "账号密码";
   return "缺少凭据";
@@ -4333,7 +4367,7 @@ function AccountEditor({
       <div className="formLine">
         <input className="input grow" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} />
         <select className="select" value={draft.provider} onChange={(event) => setDraft({ ...draft, provider: event.target.value })}>
-          <option value="graph">Outlook / Graph</option>
+          <option value="graph">Outlook</option>
           <option value="imap">IMAP</option>
         </select>
       </div>

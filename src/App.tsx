@@ -78,6 +78,10 @@ type MailFilters = {
   sortBy: "date" | "subject" | "sender" | "read" | "attachments" | "folder";
   sortOrder: "asc" | "desc";
 };
+type ToastState = {
+  id: number;
+  message: string;
+};
 
 const colors = ["#111827", "#374151", "#4b5563", "#64748b", "#0f172a", "#52525b"];
 const mailPageSize = 100;
@@ -158,6 +162,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
 
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const selectedMessage = messages.find((message) => message.id === selectedMessageId);
@@ -330,6 +335,16 @@ function App() {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [busy]);
 
+  useEffect(() => {
+    if (!toast) return;
+    const timeoutId = window.setTimeout(() => setToast(null), 2200);
+    return () => window.clearTimeout(timeoutId);
+  }, [toast?.id]);
+
+  function showToast(message: string) {
+    setToast({ id: Date.now(), message });
+  }
+
   async function runAction(action: () => Promise<void>, success?: string) {
     setBusy(true);
     setError(null);
@@ -389,7 +404,8 @@ function App() {
     try {
       await writeTextToClipboard(code);
       setError(null);
-      setNotice(`验证码已复制：${code}`);
+      setNotice(null);
+      showToast(`验证码已复制：${code}`);
     } catch {
       setNotice(null);
       setError("复制验证码失败，请打开邮件后手动复制");
@@ -421,6 +437,12 @@ function App() {
 
   return (
     <div className={`${railExpanded ? "appShell railExpanded" : "appShell"} ${skin.className}`} style={skin.style}>
+      {toast && (
+        <div className="toastNotice" role="status" aria-live="polite">
+          <CheckCircle2 size={16} />
+          <span>{toast.message}</span>
+        </div>
+      )}
       <aside className={railExpanded ? "rail expanded" : "rail"}>
         <div className="railHeader">
           <span className="brandName">OutlookEmail</span>

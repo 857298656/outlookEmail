@@ -2602,6 +2602,34 @@ code {
   font-size: 13px;
 }
 
+.toastNotice {
+  position: fixed;
+  top: 18px;
+  right: 22px;
+  z-index: 80;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(360px, calc(100vw - 44px));
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  background: #f0fdf4;
+  color: #166534;
+  box-shadow: 0 14px 38px rgba(15, 23, 42, 0.16);
+  font-size: 13px;
+  font-weight: 700;
+  animation: toastIn 160ms ease-out;
+}
+
+.toastNotice span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .emptyState {
   display: grid;
   place-items: center;
@@ -2649,5 +2677,16 @@ code {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }

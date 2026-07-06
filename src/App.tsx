@@ -34,6 +34,8 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { api } from "./api";
+import { Toast } from "./components/Toast";
+import type { ToastMessage } from "./components/Toast";
 import { buildSandboxedEmailHtml } from "./lib/emailHtml";
 import { extractVerificationCode } from "./lib/verificationCode";
 import { parseAccountRows } from "./lib/importParser";
@@ -77,10 +79,6 @@ type MailFilters = {
   attachmentFilter: "all" | "attachments" | "plain";
   sortBy: "date" | "subject" | "sender" | "read" | "attachments" | "folder";
   sortOrder: "asc" | "desc";
-};
-type ToastState = {
-  id: number;
-  message: string;
 };
 
 const colors = ["#111827", "#374151", "#4b5563", "#64748b", "#0f172a", "#52525b"];
@@ -162,7 +160,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [toast, setToast] = useState<ToastState | null>(null);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
 
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const selectedMessage = messages.find((message) => message.id === selectedMessageId);
@@ -437,12 +435,6 @@ function App() {
 
   return (
     <div className={`${railExpanded ? "appShell railExpanded" : "appShell"} ${skin.className}`} style={skin.style}>
-      {toast && (
-        <div className="toastNotice" role="status" aria-live="polite">
-          <CheckCircle2 size={16} />
-          <span>{toast.message}</span>
-        </div>
-      )}
       <aside className={railExpanded ? "rail expanded" : "rail"}>
         <div className="railHeader">
           <span className="brandName">OutlookEmail</span>
@@ -561,6 +553,7 @@ function App() {
       </aside>
 
       <main className="mainSurface">
+        <Toast toast={toast} />
         <header className="topBar">
           <div>
             <h1>OutlookEmail 桌面版</h1>

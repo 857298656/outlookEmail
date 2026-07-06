@@ -306,6 +306,7 @@ button:disabled {
 }
 
 .mainSurface {
+  position: relative;
   display: grid;
   grid-template-rows: 76px 1fr;
   min-width: 0;
@@ -2603,9 +2604,9 @@ code {
 }
 
 .toastNotice {
-  position: fixed;
-  top: 18px;
-  right: 22px;
+  position: absolute;
+  top: 50%;
+  left: 50%;
   z-index: 80;
   display: inline-flex;
   align-items: center;
@@ -2620,6 +2621,7 @@ code {
   box-shadow: 0 14px 38px rgba(15, 23, 42, 0.16);
   font-size: 13px;
   font-weight: 700;
+  transform: translate(-50%, -50%);
   animation: toastIn 160ms ease-out;
 }
 
@@ -2683,10 +2685,10 @@ code {
 @keyframes toastIn {
   from {
     opacity: 0;
-    transform: translateY(-8px);
+    transform: translate(-50%, calc(-50% - 8px));
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translate(-50%, -50%);
   }
 }

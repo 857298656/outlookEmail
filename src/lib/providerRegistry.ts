@@ -4,6 +4,8 @@ export type AccountProviderDefinition = {
   id: AccountProviderId;
   label: string;
   credentialLabel: string;
+  credentialPlaceholder: string;
+  setupHint: string;
   accountType: string;
   defaultImapHost: string;
   defaultImapPort: number;
@@ -16,6 +18,8 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
     id: "graph",
     label: "Outlook",
     credentialLabel: "Microsoft OAuth",
+    credentialPlaceholder: "Outlook 密码，可选",
+    setupHint: "Outlook Graph 账号优先使用 Microsoft OAuth；需要 IMAP OAuth 时可在账号设置中生成授权链接。",
     accountType: "outlook",
     defaultImapHost: "",
     defaultImapPort: 993,
@@ -26,6 +30,8 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
     id: "gmail",
     label: "Gmail",
     credentialLabel: "Google OAuth",
+    credentialPlaceholder: "Gmail 不使用网页登录密码",
+    setupHint: "Gmail 使用 Google OAuth；已用旧 scope 授权的 Gmail 账号需要重新授权后才能远端标记已读和移入垃圾箱。",
     accountType: "gmail",
     defaultImapHost: "",
     defaultImapPort: 993,
@@ -36,6 +42,8 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
     id: "qq",
     label: "QQ 邮箱",
     credentialLabel: "IMAP 授权码",
+    credentialPlaceholder: "QQ 邮箱 IMAP/SMTP 授权码",
+    setupHint: "QQ 邮箱请填写网页端生成的 IMAP/SMTP 客户端授权码，不是 QQ 登录密码；导入行的 password 字段也按授权码处理。",
     accountType: "imap",
     defaultImapHost: "imap.qq.com",
     defaultImapPort: 993,
@@ -46,6 +54,8 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
     id: "imap",
     label: "IMAP",
     credentialLabel: "IMAP OAuth/密码",
+    credentialPlaceholder: "IMAP 密码或 OAuth token",
+    setupHint: "通用 IMAP 账号使用已配置的 host、port 和 IMAP 密码；Outlook IMAP OAuth 仍可使用 Client ID 和 OAuth 链接。",
     accountType: "imap",
     defaultImapHost: "",
     defaultImapPort: 993,
@@ -56,6 +66,8 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
     id: "netease_163",
     label: "163 邮箱",
     credentialLabel: "IMAP 授权密码",
+    credentialPlaceholder: "163 客户端授权密码",
+    setupHint: "163 邮箱请填写客户端授权密码或应用密码，不是网页登录密码；导入行的 password 字段也按授权密码处理。",
     accountType: "imap",
     defaultImapHost: "imap.163.com",
     defaultImapPort: 993,
@@ -66,6 +78,8 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
     id: "imap_custom",
     label: "Custom IMAP",
     credentialLabel: "IMAP 密码",
+    credentialPlaceholder: "IMAP 密码",
+    setupHint: "Custom IMAP 需要手动填写 host、port，以及该邮箱服务商提供的 IMAP 密码或应用密码。",
     accountType: "imap",
     defaultImapHost: "",
     defaultImapPort: 993,

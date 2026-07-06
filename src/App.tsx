@@ -2758,6 +2758,7 @@ function AccountImportDialog({
           <section className="oauthAccountBox">
             <h3>账号数据</h3>
             <p>每行一条账号，支持邮箱、密码、client_id、refresh_token、备注和 provider 字段。</p>
+            <p className="oauthHint">QQ/163 导入行的 password 字段会保存为 IMAP 授权码或客户端授权密码；可用 provider=qq 或 provider=netease_163 显式指定服务商。</p>
             <textarea
               className="textarea importTextarea"
               value={raw}
@@ -4459,6 +4460,7 @@ function AccountEditor({
           ))}
         </select>
       </div>
+      {selectedProvider.setupHint && <p className="oauthHint">{selectedProvider.setupHint}</p>}
       <div className="formLine">
         <select
           className="select grow"
@@ -4627,7 +4629,7 @@ function AccountEditor({
           className="input grow"
           type="password"
           value={draft.imap_password}
-          placeholder="IMAP 密码，可选"
+          placeholder={`${selectedProvider.credentialPlaceholder}，可选`}
           onChange={(event) => setDraft({ ...draft, imap_password: event.target.value })}
         />
       </div>

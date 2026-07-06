@@ -1659,7 +1659,7 @@ function MailWorkspace({
               <option value="outlook">Outlook</option>
               <option value="imap">IMAP</option>
             </select>
-            <span className="accountCredentialSuffix">凭据</span>
+            <span className="accountCredentialSuffix">后缀</span>
           </div>
         </div>
         {hasAccountTreeItems ? (

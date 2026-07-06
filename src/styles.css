@@ -685,7 +685,7 @@ button:disabled {
 .messageRow {
   position: relative;
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) 154px;
+  grid-template-columns: 20px minmax(0, 1fr) 178px;
   align-items: center;
   gap: 12px;
   min-height: 46px;

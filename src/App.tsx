@@ -35,6 +35,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { api } from "./api";
 import { buildSandboxedEmailHtml } from "./lib/emailHtml";
+import { extractVerificationCode } from "./lib/verificationCode";
 import { parseAccountRows } from "./lib/importParser";
 import type {
   Account,
@@ -378,6 +379,23 @@ function App() {
     }
   }
 
+  async function copyVerificationCode(message: MailMessage) {
+    const code = extractVerificationCode(message);
+    if (!code) {
+      setNotice(null);
+      setError("未识别到验证码");
+      return;
+    }
+    try {
+      await writeTextToClipboard(code);
+      setError(null);
+      setNotice(`验证码已复制：${code}`);
+    } catch {
+      setNotice(null);
+      setError("复制验证码失败，请打开邮件后手动复制");
+    }
+  }
+
   if (!status) {
     return (
       <div className="centerScreen">
@@ -631,6 +649,7 @@ function App() {
                 await loadAutomation();
               })
             }
+            onCopyVerificationCode={(message) => void copyVerificationCode(message)}
             onExportMessages={(messageIds) =>
               runAction(async () => {
                 const result = await api.exportMailMessages(messageIds, "OutlookEmail 邮件导出");
@@ -1219,6 +1238,7 @@ function MailWorkspace({
   onPageChange,
   onMarkMessages,
   onDeleteMessages,
+  onCopyVerificationCode,
   onExportMessages,
   onCreateMailShare,
   onRevokeMailShare,
@@ -1258,6 +1278,7 @@ function MailWorkspace({
   onPageChange: (page: number) => void;
   onMarkMessages: (messageIds: number[], isRead: boolean) => void;
   onDeleteMessages: (messageIds: number[]) => void;
+  onCopyVerificationCode: (message: MailMessage) => void;
   onExportMessages: (messageIds: number[]) => void;
   onCreateMailShare: (messageIds: number[], expiresInDays: number) => void;
   onRevokeMailShare: (shareId: number) => void;
@@ -1611,6 +1632,16 @@ function MailWorkspace({
             <div className="messageRowEnd">
               <small className="messageDate">{formatDate(message.received_at)}</small>
               <div className="messageQuickActions" aria-label="邮件快捷操作">
+                <button
+                  className="iconMini"
+                  title="复制验证码"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onCopyVerificationCode(message);
+                  }}
+                >
+                  <Copy size={15} />
+                </button>
                 <button
                   className="iconMini"
                   title={message.is_read ? "标为未读" : "标为已读"}
@@ -5449,6 +5480,29 @@ function EmptyState({ icon, text }: { icon: ReactNode; text: string }) {
       <span>{text}</span>
     </div>
   );
+}
+
+async function writeTextToClipboard(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("copy command failed");
+    }
+  } finally {
+    document.body.removeChild(textarea);
+  }
 }
 
 function formatDate(value: string) {

@@ -256,13 +256,19 @@ Mock 网络集成测试：
 
 进展（2026-07-06）：
 
-- 已完成 Google OAuth 授权 URL 生成，桌面端使用 PKCE S256，首版 scope 为 `https://www.googleapis.com/auth/gmail.readonly`，并保留当前“打开授权页 -> 粘贴回调 URL”的流程。
+- 已完成 Google OAuth 授权 URL 生成，桌面端使用 PKCE S256；P9.2 开始默认 scope 升级为 `https://www.googleapis.com/auth/gmail.modify`，用于读取、已读/未读标记和移入垃圾箱。已用旧 `gmail.readonly` scope 授权的 Gmail 账号需要重新授权后才能执行远端修改。
 - 后端已接入 Google token endpoint，OAuth token exchange / save account 会按 provider 分发到 Microsoft 或 Google；Gmail refresh token 复用现有加密字段保存，provider/account_type 归一为 `gmail`。
 - 前端“授权并保存 OAuth 账号”和账号编辑弹窗已支持 Outlook/Gmail 切换、Gmail Client ID、PKCE verifier 传递、Gmail token 预览与保存；mock API 也返回 Gmail readonly scope。
 - 已补充 PKCE、Gmail OAuth URL、OAuth provider 归一化测试；`pnpm test`、`pnpm build`、`cargo test` 通过。
 - 已完成 Gmail API 首次只读同步：Gmail adapter 会刷新 access token，按 `INBOX`/`SPAM`/`TRASH` 映射现有 inbox/junkemail/deleteditems 文件夹，使用 `messages.list` 获取 id，再用 `messages.get(format=full)` 归一化 subject/from/to/cc、`internalDate`、`labelIds` 未读状态、snippet、HTML/文本正文和附件元数据。
 - 已接入 Gmail 附件下载：缓存中的 Gmail attachment id 会通过 `users.messages.attachments.get` 下载内容，并回查 message payload 取得文件名和 MIME 类型。
-- P9.1 尚未通过真实 Gmail 测试账号人工验收；P9.2 继续处理 `historyId` 增量同步、Gmail 远端已读/未读和删除/移入垃圾箱。
+- P9.1 尚未通过真实 Gmail 测试账号人工验收；P9.2 继续处理 `historyId` 增量同步。
+
+P9.2 进展（2026-07-06）：
+
+- 已接入 Gmail 远端已读/未读：通过 `users.messages.modify` 添加或移除 `UNREAD` label，并复用现有远端操作失败重试队列。
+- 已接入 Gmail 删除语义：删除操作调用 `users.messages.trash` 移入垃圾箱，不做永久删除，不请求 `https://mail.google.com/` 全量权限。
+- 已补充 Gmail read-state payload 测试；仍需要真实 Gmail 测试账号验证 scope、标记和 trash 行为。
 
 ### P9.2 Gmail Incremental Sync and Remote Actions
 

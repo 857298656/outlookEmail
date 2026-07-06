@@ -5521,7 +5521,7 @@ impl Database {
         match mail_provider_adapter(&account)? {
             MailProviderAdapter::Graph => providers::mark_graph_message_read(&account, &target.provider_message_id, is_read),
             MailProviderAdapter::Imap => providers::mark_imap_message_read(&account, &target.folder, &target.provider_message_id, is_read),
-            MailProviderAdapter::Gmail => Err(unsupported_mail_adapter(&account, "mark read/unread")),
+            MailProviderAdapter::Gmail => providers::mark_gmail_message_read(&account, &target.provider_message_id, is_read),
         }
     }
 
@@ -5571,7 +5571,7 @@ impl Database {
         match mail_provider_adapter(&account)? {
             MailProviderAdapter::Graph => providers::delete_graph_message(&account, &target.provider_message_id),
             MailProviderAdapter::Imap => providers::delete_imap_message(&account, &target.folder, &target.provider_message_id),
-            MailProviderAdapter::Gmail => Err(unsupported_mail_adapter(&account, "delete message")),
+            MailProviderAdapter::Gmail => providers::delete_gmail_message(&account, &target.provider_message_id),
         }
     }
 
@@ -6688,13 +6688,6 @@ fn mail_provider_adapter(account: &AccountCredentials) -> AppResult<MailProvider
         _ if !account.client_id.is_empty() && !account.refresh_token.is_empty() => Ok(MailProviderAdapter::Graph),
         _ => Ok(MailProviderAdapter::Imap),
     }
-}
-
-fn unsupported_mail_adapter(account: &AccountCredentials, operation: &str) -> AppError {
-    let provider_name = providers::mail_provider_definition(&account.provider)
-        .map(|provider| provider.display_name)
-        .unwrap_or(account.provider.as_str());
-    AppError::InvalidInput(format!("{provider_name} adapter does not support {operation} yet"))
 }
 
 fn table_columns(conn: &Connection, table: &str) -> AppResult<Vec<String>> {

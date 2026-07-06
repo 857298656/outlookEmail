@@ -663,7 +663,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       if (input.provider === "gmail") {
         const codeChallenge = await mockPkceS256Challenge(input.code_verifier);
         const pkceQuery = codeChallenge ? `&code_challenge=${encodeOAuthQueryValue(codeChallenge)}&code_challenge_method=S256` : "";
-        return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeOAuthQueryValue(input.client_id)}&response_type=code&redirect_uri=${encodeOAuthQueryValue(input.redirect_uri)}&scope=${encodeOAuthQueryValue("https://www.googleapis.com/auth/gmail.readonly")}&state=12345&access_type=offline&prompt=consent${pkceQuery}${input.login_hint ? `&login_hint=${encodeOAuthQueryValue(input.login_hint)}` : ""}` as T;
+        return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeOAuthQueryValue(input.client_id)}&response_type=code&redirect_uri=${encodeOAuthQueryValue(input.redirect_uri)}&scope=${encodeOAuthQueryValue("https://www.googleapis.com/auth/gmail.modify")}&state=12345&access_type=offline&prompt=consent${pkceQuery}${input.login_hint ? `&login_hint=${encodeOAuthQueryValue(input.login_hint)}` : ""}` as T;
       }
       const scope =
         input.provider === "imap"
@@ -675,7 +675,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       const input = args?.input as { account_id?: number; provider?: string };
       const scope =
         input.provider === "gmail"
-          ? "https://www.googleapis.com/auth/gmail.readonly"
+          ? "https://www.googleapis.com/auth/gmail.modify"
           : input.provider === "imap"
           ? "offline_access https://outlook.office.com/IMAP.AccessAsUser.All"
           : defaultGraphOAuthScope;
@@ -723,7 +723,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       return {
         success: true,
         account,
-        scope: provider === "gmail" ? "https://www.googleapis.com/auth/gmail.readonly" : defaultGraphOAuthScope,
+        scope: provider === "gmail" ? "https://www.googleapis.com/auth/gmail.modify" : defaultGraphOAuthScope,
         expires_in: 3600,
         refresh_token_preview: "mock...oken"
       } as T;

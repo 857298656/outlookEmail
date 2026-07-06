@@ -20,12 +20,11 @@ use std::time::Duration;
 const GRAPH_SCOPE: &str =
     "offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read";
 const IMAP_OAUTH_SCOPE: &str = "offline_access https://outlook.office.com/IMAP.AccessAsUser.All";
-const GMAIL_READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
+const GMAIL_MODIFY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
 
 #[derive(Clone, Copy)]
 pub struct MailProviderDefinition {
     pub id: &'static str,
-    pub display_name: &'static str,
     pub credential_kind: &'static str,
     pub account_type: &'static str,
     pub default_imap_host: &'static str,
@@ -37,7 +36,6 @@ pub struct MailProviderDefinition {
 pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
     MailProviderDefinition {
         id: "graph",
-        display_name: "Outlook",
         credential_kind: "oauth",
         account_type: "outlook",
         default_imap_host: "",
@@ -47,7 +45,6 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
     },
     MailProviderDefinition {
         id: "gmail",
-        display_name: "Gmail",
         credential_kind: "oauth",
         account_type: "gmail",
         default_imap_host: "",
@@ -57,7 +54,6 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
     },
     MailProviderDefinition {
         id: "qq",
-        display_name: "QQ Mail",
         credential_kind: "imap_auth_code",
         account_type: "imap",
         default_imap_host: "imap.qq.com",
@@ -67,7 +63,6 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
     },
     MailProviderDefinition {
         id: "imap",
-        display_name: "IMAP",
         credential_kind: "imap_password",
         account_type: "imap",
         default_imap_host: "",
@@ -77,7 +72,6 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
     },
     MailProviderDefinition {
         id: "netease_163",
-        display_name: "163 Mail",
         credential_kind: "imap_auth_code",
         account_type: "imap",
         default_imap_host: "imap.163.com",
@@ -87,7 +81,6 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
     },
     MailProviderDefinition {
         id: "imap_custom",
-        display_name: "Custom IMAP",
         credential_kind: "imap_password",
         account_type: "imap",
         default_imap_host: "",
@@ -195,7 +188,7 @@ fn build_google_auth_url(input: &OAuthAuthUrlInput) -> AppResult<String> {
         "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&response_type=code&redirect_uri={}&scope={}&state=12345&access_type=offline&prompt=consent&code_challenge={}&code_challenge_method=S256",
         urlencoding::encode(client_id),
         urlencoding::encode(redirect_uri),
-        urlencoding::encode(GMAIL_READONLY_SCOPE),
+        urlencoding::encode(GMAIL_MODIFY_SCOPE),
         urlencoding::encode(&code_challenge)
     );
     if let Some(login_hint) = input.login_hint.as_ref().filter(|value| !value.trim().is_empty()) {
@@ -489,6 +482,61 @@ pub fn download_gmail_attachment(
             content_type,
             bytes,
         })
+    })
+}
+
+pub fn mark_gmail_message_read(account: &AccountCredentials, message_id: &str, is_read: bool) -> AppResult<()> {
+    let message_id = message_id.trim();
+    if message_id.is_empty() {
+        return Err(AppError::InvalidInput("Gmail message id is required".to_string()));
+    }
+    with_account_http_client(account, |client| {
+        let token = refresh_gmail_access_token_with_client(account, client)?;
+        let url = format!(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}/modify",
+            urlencoding::encode(message_id)
+        );
+        let response = client
+            .post(url)
+            .bearer_auth(&token.access_token)
+            .json(&gmail_read_state_payload(is_read))
+            .send()
+            .map_err(network_error)?;
+        if !response.status().is_success() {
+            return Err(AppError::Internal(format!(
+                "Gmail mark message failed: HTTP {} {}",
+                response.status(),
+                response.text().unwrap_or_default()
+            )));
+        }
+        Ok(())
+    })
+}
+
+pub fn delete_gmail_message(account: &AccountCredentials, message_id: &str) -> AppResult<()> {
+    let message_id = message_id.trim();
+    if message_id.is_empty() {
+        return Err(AppError::InvalidInput("Gmail message id is required".to_string()));
+    }
+    with_account_http_client(account, |client| {
+        let token = refresh_gmail_access_token_with_client(account, client)?;
+        let url = format!(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}/trash",
+            urlencoding::encode(message_id)
+        );
+        let response = client
+            .post(url)
+            .bearer_auth(&token.access_token)
+            .send()
+            .map_err(network_error)?;
+        if !response.status().is_success() {
+            return Err(AppError::Internal(format!(
+                "Gmail trash message failed: HTTP {} {}",
+                response.status(),
+                response.text().unwrap_or_default()
+            )));
+        }
+        Ok(())
     })
 }
 
@@ -1207,6 +1255,14 @@ fn fetch_gmail_message_detail(client: &Client, access_token: &str, message_id: &
         )));
     }
     response.json().map_err(network_error)
+}
+
+fn gmail_read_state_payload(is_read: bool) -> Value {
+    if is_read {
+        json!({ "removeLabelIds": ["UNREAD"] })
+    } else {
+        json!({ "addLabelIds": ["UNREAD"] })
+    }
 }
 
 fn extract_code(code_or_url: &str) -> AppResult<String> {
@@ -2144,7 +2200,7 @@ mod tests {
 
         assert!(url.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"));
         assert!(url.contains("client_id=google-client"));
-        assert!(url.contains("scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.readonly"));
+        assert!(url.contains("scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.modify"));
         assert!(url.contains("code_challenge="));
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("access_type=offline"));
@@ -2160,6 +2216,12 @@ mod tests {
         assert_eq!(targets[0].label_id, "INBOX");
         assert_eq!(gmail_folder_targets("junkemail")[0].label_id, "SPAM");
         assert_eq!(gmail_folder_targets("deleteditems")[0].label_id, "TRASH");
+    }
+
+    #[test]
+    fn builds_gmail_read_state_payloads() {
+        assert_eq!(gmail_read_state_payload(true), json!({ "removeLabelIds": ["UNREAD"] }));
+        assert_eq!(gmail_read_state_payload(false), json!({ "addLabelIds": ["UNREAD"] }));
     }
 
     #[test]

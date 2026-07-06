@@ -16,7 +16,7 @@ The implementation includes the desktop project scaffold, SQLite schema, lock/se
 
 See [`docs/requirements-milestones.md`](docs/requirements-milestones.md) for the full requirement record, completed scope, unfinished scope, and milestone plan.
 
-Gmail, QQ Mail, and 163 Mail provider expansion is planned in [`docs/provider-integration-plan.md`](docs/provider-integration-plan.md). The plan keeps the app desktop-only and does not reintroduce the web service or browser extension.
+Gmail, QQ Mail, and 163 Mail provider expansion is tracked in [`docs/provider-integration-plan.md`](docs/provider-integration-plan.md). Current provider setup, troubleshooting, and manual validation steps are documented in [`docs/provider-operations.md`](docs/provider-operations.md). The plan keeps the app desktop-only and does not reintroduce the web service or browser extension.
 
 ## Prerequisites
 
@@ -62,6 +62,8 @@ Sensitive fields are encrypted with a key derived from the local app password.
 ## Mail sync
 
 Graph accounts need a Microsoft client ID and OAuth callback URL. Generate the auth URL in the account authorization panel, paste the callback URL or code back into the app, then refresh the account.
+
+Gmail accounts use Google OAuth and the Gmail API. QQ Mail and 163 Mail use provider-specific IMAP presets with authorization codes or client authorization passwords rather than web login passwords.
 
 IMAP accounts need host, port, and password fields. The IMAP implementation supports TLS password login, caches recent messages in SQLite, stores raw RFC822 MIME for synced messages, and downloads attachments by extracting them from the local cached MIME.
 

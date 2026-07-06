@@ -80,7 +80,7 @@ type MailFilters = {
   sortBy: "date" | "subject" | "sender" | "read" | "attachments" | "folder";
   sortOrder: "asc" | "desc";
 };
-type AccountCredentialFilter = "all" | "outlook" | "imap" | "password" | "missing";
+type AccountCredentialFilter = "all" | "outlook" | "imap";
 
 const colors = ["#111827", "#374151", "#4b5563", "#64748b", "#0f172a", "#52525b"];
 const mailPageSize = 100;
@@ -165,9 +165,7 @@ function groupMatchesSearch(group: Group, tokens: string[]) {
 function accountMatchesCredentialFilter(account: Account, filter: AccountCredentialFilter) {
   if (filter === "all") return true;
   if (filter === "outlook") return account.has_refresh_token;
-  if (filter === "imap") return account.has_imap_password;
-  if (filter === "password") return account.has_password;
-  return !account.has_refresh_token && !account.has_imap_password && !account.has_password;
+  return account.has_imap_password;
 }
 
 function App() {
@@ -1651,18 +1649,18 @@ function MailWorkspace({
               </button>
             )}
           </label>
-          <select
-            className="select accountCredentialFilter"
-            value={accountCredentialFilter}
-            title="按凭据筛选账号"
-            onChange={(event) => setAccountCredentialFilter(event.target.value as AccountCredentialFilter)}
-          >
-            <option value="all">全部凭据</option>
-            <option value="outlook">Outlook</option>
-            <option value="imap">IMAP</option>
-            <option value="password">账号密码</option>
-            <option value="missing">缺少凭据</option>
-          </select>
+          <div className="accountCredentialControl" title="按凭据筛选账号">
+            <select
+              className="select accountCredentialFilter"
+              value={accountCredentialFilter}
+              onChange={(event) => setAccountCredentialFilter(event.target.value as AccountCredentialFilter)}
+            >
+              <option value="all">全部</option>
+              <option value="outlook">Outlook</option>
+              <option value="imap">IMAP</option>
+            </select>
+            <span className="accountCredentialSuffix">凭据</span>
+          </div>
         </div>
         {hasAccountTreeItems ? (
           <div className="mailTree">

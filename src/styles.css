@@ -600,27 +600,10 @@ button:disabled {
   margin: 0;
 }
 
-.accountCredentialControl {
-  position: relative;
-  flex: 0 0 124px;
-  min-width: 0;
-}
-
 .accountCredentialFilter {
-  width: 100%;
+  flex: 0 0 104px;
+  min-width: 0;
   height: 36px;
-  padding-right: 62px;
-}
-
-.accountCredentialSuffix {
-  position: absolute;
-  top: 50%;
-  right: 34px;
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1;
-  pointer-events: none;
-  transform: translateY(-50%);
 }
 
 .searchClear {

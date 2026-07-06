@@ -1649,18 +1649,16 @@ function MailWorkspace({
               </button>
             )}
           </label>
-          <div className="accountCredentialControl" title="按凭据筛选账号">
-            <select
-              className="select accountCredentialFilter"
-              value={accountCredentialFilter}
-              onChange={(event) => setAccountCredentialFilter(event.target.value as AccountCredentialFilter)}
-            >
-              <option value="all">全部</option>
-              <option value="outlook">Outlook</option>
-              <option value="imap">IMAP</option>
-            </select>
-            <span className="accountCredentialSuffix">后缀</span>
-          </div>
+          <select
+            className="select accountCredentialFilter"
+            value={accountCredentialFilter}
+            title="按凭据筛选账号"
+            onChange={(event) => setAccountCredentialFilter(event.target.value as AccountCredentialFilter)}
+          >
+            <option value="all">全部</option>
+            <option value="outlook">Outlook</option>
+            <option value="imap">IMAP</option>
+          </select>
         </div>
         {hasAccountTreeItems ? (
           <div className="mailTree">

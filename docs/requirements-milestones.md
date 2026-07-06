@@ -317,7 +317,7 @@ Outlook/Graph 接入已基本可用，下一批服务商接入记录在 [`docs/p
 
 详细拆分见 [`docs/provider-integration-plan.md`](provider-integration-plan.md)。
 
-- P9.0 Provider Foundation：服务商注册表、provider-aware UI 文案、刷新路由和导入识别。
+- P9.0 Provider Foundation：服务商注册表、provider-aware UI 文案、刷新路由和导入识别。已完成首批基础：provider registry、导入显式 provider/域名识别、QQ/163 IMAP preset、账号树/库存/刷新管理服务商标签和筛选、Graph/IMAP/Gmail adapter 路由骨架。
 - P9.1 Gmail OAuth and Gmail API Read Sync：Google OAuth、Gmail 首次同步、附件和本地缓存复用。
 - P9.2 Gmail Incremental Sync and Remote Actions：Gmail `historyId` 增量同步、标记已读/未读、删除/移入垃圾箱和失败重试。
 - P9.3 QQ Mail IMAP Provider：QQ 邮箱授权码接入、IMAP preset、导入识别、文件夹映射和真实账号验证。
@@ -327,4 +327,4 @@ Outlook/Graph 接入已基本可用，下一批服务商接入记录在 [`docs/p
 
 ## 当前推荐下一步
 
-继续按“桌面版够用，优先补功能”推进。当前桌面优先级中的 P0/P1/P2 项已补齐；下一批建议按 M9 进行 Gmail、QQ、163 邮箱接入。Web 服务和浏览器扩展暂不处理。
+继续按“桌面版够用，优先补功能”推进。当前桌面优先级中的 P0/P1/P2 项已补齐；M9 已启动并完成首批 Provider Foundation，下一步建议继续 P9.1：Google OAuth URL/token exchange、Gmail 账号保存和 Gmail API 首次只读同步。Web 服务和浏览器扩展暂不处理。

@@ -487,19 +487,22 @@ impl Database {
         let mut skipped = 0_usize;
 
         for row in rows {
-            let password = crypto::encrypt_text(&row.password, key)?;
+            let provider = providers::detect_mail_provider(
+                &row.email,
+                row.provider.as_deref(),
+                !row.refresh_token.trim().is_empty(),
+            )?;
+            let is_imap_provider = provider.credential_kind.starts_with("imap");
+            let password = crypto::encrypt_text(if is_imap_provider { "" } else { row.password.as_str() }, key)?;
             let client_id = crypto::encrypt_text(&row.client_id, key)?;
             let refresh_token = crypto::encrypt_text(&row.refresh_token, key)?;
-            let provider = if row.refresh_token.trim().is_empty() {
-                "outlook"
-            } else {
-                "graph"
-            };
+            let imap_password = crypto::encrypt_text(if is_imap_provider { row.password.as_str() } else { "" }, key)?;
             let changed = self.conn.execute(
                 "
                 INSERT INTO accounts
-                (email, password_enc, client_id_enc, refresh_token_enc, group_id, remark, provider, account_type)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'outlook')
+                (email, password_enc, client_id_enc, refresh_token_enc, group_id, remark, provider, account_type,
+                 imap_host, imap_port, imap_password_enc)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(email) DO UPDATE SET
                     password_enc = excluded.password_enc,
                     client_id_enc = excluded.client_id_enc,
@@ -507,9 +510,31 @@ impl Database {
                     group_id = COALESCE(excluded.group_id, accounts.group_id),
                     remark = excluded.remark,
                     provider = excluded.provider,
+                    account_type = excluded.account_type,
+                    imap_host = CASE
+                        WHEN excluded.imap_host = '' THEN accounts.imap_host
+                        ELSE excluded.imap_host
+                    END,
+                    imap_port = excluded.imap_port,
+                    imap_password_enc = CASE
+                        WHEN excluded.imap_password_enc = '' THEN accounts.imap_password_enc
+                        ELSE excluded.imap_password_enc
+                    END,
                     updated_at = CURRENT_TIMESTAMP
                 ",
-                params![row.email, password, client_id, refresh_token, group_id, row.remark, provider],
+                params![
+                    row.email,
+                    password,
+                    client_id,
+                    refresh_token,
+                    group_id,
+                    row.remark,
+                    provider.id,
+                    provider.account_type,
+                    provider.default_imap_host,
+                    provider.default_imap_port,
+                    imap_password
+                ],
             )?;
             if changed > 0 {
                 imported += 1;
@@ -536,6 +561,26 @@ impl Database {
         self.ensure_primary_email_is_not_alias(existing_id, &email)?;
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
         let mail_retention_days = input.mail_retention_days.map(|days| days.clamp(1, 3650));
+        let provider_id = match input.provider.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            Some(value) => Some(
+                providers::normalize_mail_provider_id(value)
+                    .ok_or_else(|| AppError::InvalidInput(format!("unsupported mail provider: {value}")))?
+                    .to_string(),
+            ),
+            None => None,
+        };
+        let provider_definition = provider_id.as_deref().and_then(providers::mail_provider_definition);
+        let account_type = input
+            .account_type
+            .clone()
+            .or_else(|| provider_definition.map(|provider| provider.account_type.to_string()));
+        let imap_host = match (input.imap_host.clone(), provider_definition) {
+            (Some(value), _) if !value.trim().is_empty() => Some(value),
+            (_, Some(provider)) if !provider.default_imap_host.is_empty() => Some(provider.default_imap_host.to_string()),
+            (Some(value), _) => Some(value),
+            (None, _) => None,
+        };
+        let imap_port = input.imap_port.or_else(|| provider_definition.map(|provider| provider.default_imap_port));
 
         self.conn.execute(
             "
@@ -561,10 +606,10 @@ impl Database {
                 input.group_id,
                 input.remark,
                 input.status,
-                input.provider,
-                input.account_type,
-                input.imap_host,
-                input.imap_port,
+                provider_id,
+                account_type,
+                imap_host,
+                imap_port,
                 normalize_proxy_option(input.proxy_url.as_deref())?,
                 normalize_proxy_option(input.fallback_proxy_url_1.as_deref())?,
                 normalize_proxy_option(input.fallback_proxy_url_2.as_deref())?,
@@ -1735,11 +1780,13 @@ impl Database {
         attachment_id: &str,
         folder: Option<&str>,
     ) -> AppResult<DownloadedAttachment> {
-        if should_use_graph(account) {
-            providers::download_graph_attachment(account, message_id, attachment_id)
-        } else {
-            let raw_mime = self.cached_imap_raw_mime(account.id, message_id, folder)?;
-            providers::download_imap_attachment_from_raw(&raw_mime, attachment_id)
+        match mail_provider_adapter(account)? {
+            MailProviderAdapter::Graph => providers::download_graph_attachment(account, message_id, attachment_id),
+            MailProviderAdapter::Imap => {
+                let raw_mime = self.cached_imap_raw_mime(account.id, message_id, folder)?;
+                providers::download_imap_attachment_from_raw(&raw_mime, attachment_id)
+            }
+            MailProviderAdapter::Gmail => Err(unsupported_mail_adapter(account, "attachment download")),
         }
     }
 
@@ -5457,27 +5504,27 @@ impl Database {
         if target.provider_message_id.starts_with("local-demo-") {
             return Ok(());
         }
-        if should_use_graph(&account) {
-            providers::mark_graph_message_read(&account, &target.provider_message_id, is_read)
-        } else {
-            providers::mark_imap_message_read(&account, &target.folder, &target.provider_message_id, is_read)
+        match mail_provider_adapter(&account)? {
+            MailProviderAdapter::Graph => providers::mark_graph_message_read(&account, &target.provider_message_id, is_read),
+            MailProviderAdapter::Imap => providers::mark_imap_message_read(&account, &target.folder, &target.provider_message_id, is_read),
+            MailProviderAdapter::Gmail => Err(unsupported_mail_adapter(&account, "mark read/unread")),
         }
     }
 
     fn refresh_account_credential(&self, account: &AccountCredentials, folder: &str, top: usize) -> AppResult<usize> {
-        if should_use_graph(account) {
-            providers::fetch_graph_messages(account, folder, top).and_then(|(next_refresh_token, messages)| {
+        match mail_provider_adapter(account)? {
+            MailProviderAdapter::Graph => providers::fetch_graph_messages(account, folder, top).and_then(|(next_refresh_token, messages)| {
                 if !next_refresh_token.is_empty() && next_refresh_token != account.refresh_token {
                     self.save_refresh_token(account.id, &next_refresh_token)?;
                 }
                 self.upsert_provider_messages(account.id, &messages)?;
                 Ok(messages.len())
-            })
-        } else {
-            providers::fetch_imap_messages(account, folder, top).and_then(|messages| {
+            }),
+            MailProviderAdapter::Imap => providers::fetch_imap_messages(account, folder, top).and_then(|messages| {
                 self.upsert_provider_messages(account.id, &messages)?;
                 Ok(messages.len())
-            })
+            }),
+            MailProviderAdapter::Gmail => Err(unsupported_mail_adapter(account, "mail refresh")),
         }
     }
 
@@ -5501,10 +5548,10 @@ impl Database {
         if target.provider_message_id.starts_with("local-demo-") {
             return Ok(());
         }
-        if should_use_graph(&account) {
-            providers::delete_graph_message(&account, &target.provider_message_id)
-        } else {
-            providers::delete_imap_message(&account, &target.folder, &target.provider_message_id)
+        match mail_provider_adapter(&account)? {
+            MailProviderAdapter::Graph => providers::delete_graph_message(&account, &target.provider_message_id),
+            MailProviderAdapter::Imap => providers::delete_imap_message(&account, &target.folder, &target.provider_message_id),
+            MailProviderAdapter::Gmail => Err(unsupported_mail_adapter(&account, "delete message")),
         }
     }
 
@@ -6577,16 +6624,35 @@ fn preview_secret(value: &str) -> String {
     format!("{}...{}", &value[..4], &value[value.len() - 4..])
 }
 
-fn should_use_graph(account: &AccountCredentials) -> bool {
+enum MailProviderAdapter {
+    Graph,
+    Imap,
+    Gmail,
+}
+
+fn mail_provider_adapter(account: &AccountCredentials) -> AppResult<MailProviderAdapter> {
     let provider = account.provider.to_ascii_lowercase();
     let account_type = account.account_type.to_ascii_lowercase();
-    if provider == "imap" || account_type == "imap" {
-        return false;
+    match provider.as_str() {
+        "graph" | "outlook" => return Ok(MailProviderAdapter::Graph),
+        "gmail" => return Ok(MailProviderAdapter::Gmail),
+        "imap" | "imap_custom" | "qq" | "netease_163" => return Ok(MailProviderAdapter::Imap),
+        _ => {}
     }
-    provider == "graph"
-        || provider == "outlook"
-        || account_type == "outlook"
-        || (!account.client_id.is_empty() && !account.refresh_token.is_empty())
+    match account_type.as_str() {
+        "outlook" | "graph" => Ok(MailProviderAdapter::Graph),
+        "gmail" => Ok(MailProviderAdapter::Gmail),
+        "imap" => Ok(MailProviderAdapter::Imap),
+        _ if !account.client_id.is_empty() && !account.refresh_token.is_empty() => Ok(MailProviderAdapter::Graph),
+        _ => Ok(MailProviderAdapter::Imap),
+    }
+}
+
+fn unsupported_mail_adapter(account: &AccountCredentials, operation: &str) -> AppError {
+    let provider_name = providers::mail_provider_definition(&account.provider)
+        .map(|provider| provider.display_name)
+        .unwrap_or(account.provider.as_str());
+    AppError::InvalidInput(format!("{provider_name} adapter does not support {operation} yet"))
 }
 
 fn table_columns(conn: &Connection, table: &str) -> AppResult<Vec<String>> {
@@ -7119,6 +7185,7 @@ mod project_tests {
                     client_id: String::new(),
                     refresh_token: String::new(),
                     remark: "workflow".to_string(),
+                    provider: None,
                 }],
                 None,
             )
@@ -7219,6 +7286,76 @@ mod project_tests {
         let restored_temp = db.list_temp_emails().expect("restored temp").remove(0);
         assert_eq!(restored_temp.email, "temp@example.com");
         assert_eq!(restored_temp.tags, vec!["Workflow".to_string()]);
+    }
+
+    #[test]
+    fn import_accounts_detects_mail_provider_presets() {
+        let root = std::env::temp_dir().join(format!("outlook-email-provider-import-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let db_path = root.join("providers.sqlite");
+        let conn = Connection::open(&db_path).expect("open db");
+        let mut db = Database {
+            conn,
+            db_path,
+            crypto_key: Some([8; 32]),
+        };
+        db.initialize_schema().expect("schema");
+
+        db.import_accounts(
+            vec![
+                ImportedAccount {
+                    email: "user@qq.com".to_string(),
+                    password: "qq-auth-code".to_string(),
+                    client_id: String::new(),
+                    refresh_token: String::new(),
+                    remark: String::new(),
+                    provider: None,
+                },
+                ImportedAccount {
+                    email: "manual@example.com".to_string(),
+                    password: "app-password".to_string(),
+                    client_id: String::new(),
+                    refresh_token: String::new(),
+                    remark: String::new(),
+                    provider: Some("163".to_string()),
+                },
+                ImportedAccount {
+                    email: "person@gmail.com".to_string(),
+                    password: String::new(),
+                    client_id: String::new(),
+                    refresh_token: String::new(),
+                    remark: String::new(),
+                    provider: None,
+                },
+            ],
+            None,
+        )
+        .expect("import providers");
+
+        let accounts = db.list_accounts().expect("list accounts");
+        let qq = accounts.iter().find(|account| account.email == "user@qq.com").expect("qq account");
+        assert_eq!(qq.provider, "qq");
+        assert_eq!(qq.account_type, "imap");
+        assert_eq!(qq.imap_host, "imap.qq.com");
+        assert!(qq.has_imap_password);
+        assert!(!qq.has_password);
+
+        let netease = accounts
+            .iter()
+            .find(|account| account.email == "manual@example.com")
+            .expect("163 account");
+        assert_eq!(netease.provider, "netease_163");
+        assert_eq!(netease.account_type, "imap");
+        assert_eq!(netease.imap_host, "imap.163.com");
+        assert!(netease.has_imap_password);
+
+        let gmail = accounts
+            .iter()
+            .find(|account| account.email == "person@gmail.com")
+            .expect("gmail account");
+        assert_eq!(gmail.provider, "gmail");
+        assert_eq!(gmail.account_type, "gmail");
+        assert_eq!(gmail.imap_host, "");
     }
 
     #[test]
@@ -7533,6 +7670,7 @@ mod project_tests {
                 client_id: "client-id-value".to_string(),
                 refresh_token: "refresh-token-value".to_string(),
                 remark: "secret".to_string(),
+                provider: None,
             }],
             Some(1),
         )

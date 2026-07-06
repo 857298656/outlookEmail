@@ -226,6 +226,15 @@ Mock 网络集成测试：
 - 现有测试通过。
 - UI 不再把 Gmail/QQ/163 误标成 Outlook。
 
+进展（2026-07-06）：
+
+- 已新增前后端 provider registry，覆盖 `graph`/Outlook、`gmail`、`qq`、`netease_163`、`imap` 和 `imap_custom`。其中 `imap` 保留用于兼容现有 Outlook IMAP OAuth/通用 IMAP 路径，`imap_custom` 作为新导入的未知域名兜底。
+- 账号导入 parser 已支持显式 provider 字段，例如 `provider=qq----user@example.com----auth` 和 `netease_163----user@custom.test----secret`；未显式指定时会按 `gmail.com`/`googlemail.com`、`qq.com`/`foxmail.com`、`163.com` 自动识别。
+- QQ/163/Custom IMAP 导入行中的 `password` 字段已写入 IMAP 密钥位置；QQ 和 163 会自动填充默认 IMAP host/port。
+- 账号树、账号库存、刷新管理和导入预览已改为显示真实服务商标签，支持按 Outlook/Gmail/QQ/163/IMAP 筛选，不再用 refresh token 状态把 Gmail/QQ/163 误标为 Outlook。
+- 刷新、附件下载、远端标记和远端删除已集中到 provider adapter 路由。Gmail adapter 在 P9.1 前会返回明确的未接入错误，不再误走 Graph/IMAP。
+- 已补充前端导入 parser 测试、Rust provider registry 测试和数据库导入 preset 测试；`pnpm test`、`pnpm build`、`cargo test` 均已通过。
+
 ### P9.1 Gmail OAuth and Gmail API Read Sync
 
 目标：把 Gmail 作为一等 OAuth 服务商接入，先完成只读同步。

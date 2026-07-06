@@ -1,9 +1,12 @@
+import { detectAccountProvider, normalizeAccountProviderId } from "./providerRegistry";
+
 export type ParsedAccount = {
   email: string;
   password: string;
   client_id: string;
   refresh_token: string;
   remark: string;
+  provider: string;
 };
 
 export function parseAccountRows(raw: string): ParsedAccount[] {
@@ -11,18 +14,60 @@ export function parseAccountRows(raw: string): ParsedAccount[] {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith("#"))
-    .map((line) => splitLine(line))
-    .filter((parts) => parts[0]?.includes("@"))
-    .map((parts) => ({
-      email: parts[0].trim().toLowerCase(),
-      password: parts[1]?.trim() ?? "",
-      client_id: parts[2]?.trim() ?? "",
-      refresh_token: parts[3]?.trim() ?? "",
-      remark: parts[4]?.trim() ?? ""
-    }));
+    .map((line) => parseParts(splitLine(line)))
+    .filter((row): row is ParsedAccount => row !== null);
 }
 
 function splitLine(line: string): string[] {
   const delimiter = ["----", "|||", "\t", ","].find((item) => line.includes(item));
   return delimiter ? line.split(delimiter) : [line];
+}
+
+function parseParts(parts: string[]): ParsedAccount | null {
+  const trimmedParts = parts.map((part) => part.trim());
+  const explicitProvider = findExplicitProvider(trimmedParts);
+  const positionalParts = trimmedParts.filter((part) => !isProviderAssignment(part));
+  let provider = explicitProvider;
+
+  if (positionalParts.length >= 2 && isProviderToken(positionalParts[0]) && positionalParts[1].includes("@")) {
+    provider = positionalParts[0];
+    positionalParts.shift();
+  }
+
+  const emailIndex = positionalParts.findIndex((part) => part.includes("@"));
+  if (emailIndex < 0) return null;
+
+  const email = positionalParts[emailIndex].toLowerCase();
+  const password = positionalParts[emailIndex + 1] ?? "";
+  const client_id = positionalParts[emailIndex + 2] ?? "";
+  const refresh_token = positionalParts[emailIndex + 3] ?? "";
+  const remark = positionalParts[emailIndex + 4] ?? "";
+  const detectedProvider = detectAccountProvider(email, Boolean(refresh_token), provider);
+
+  return {
+    email,
+    password,
+    client_id,
+    refresh_token,
+    remark,
+    provider: detectedProvider
+  };
+}
+
+function findExplicitProvider(parts: string[]) {
+  for (const part of parts) {
+    if (!isProviderAssignment(part)) continue;
+    const value = part.split(/[:=]/, 2)[1]?.trim();
+    if (value) return normalizeAccountProviderId(value);
+  }
+  return "";
+}
+
+function isProviderAssignment(value: string) {
+  return /^provider\s*[:=]/i.test(value);
+}
+
+function isProviderToken(value: string) {
+  const normalized = normalizeAccountProviderId(value);
+  return normalized !== "imap_custom" || ["imap", "custom", "custom_imap", "imap_custom"].includes(value.trim().toLowerCase());
 }

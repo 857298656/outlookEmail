@@ -39,6 +39,14 @@ import type { ToastMessage } from "./components/Toast";
 import { buildSandboxedEmailHtml } from "./lib/emailHtml";
 import { extractVerificationCode } from "./lib/verificationCode";
 import { parseAccountRows } from "./lib/importParser";
+import {
+  accountProviderDefinition,
+  accountProviderLabel,
+  accountProviderRegistry,
+  normalizeAccountProviderId,
+  providerAccountType,
+  providerDefaultImap
+} from "./lib/providerRegistry";
 import type {
   Account,
   AppStatus,
@@ -80,7 +88,7 @@ type MailFilters = {
   sortBy: "date" | "subject" | "sender" | "read" | "attachments" | "folder";
   sortOrder: "asc" | "desc";
 };
-type AccountCredentialFilter = "all" | "outlook" | "imap";
+type AccountCredentialFilter = "all" | "outlook" | "gmail" | "qq" | "netease_163" | "imap";
 
 const colors = ["#111827", "#374151", "#4b5563", "#64748b", "#0f172a", "#52525b"];
 const mailPageSize = 100;
@@ -142,6 +150,8 @@ function accountMatchesSearch(account: Account, tokens: string[]) {
       account.remark,
       account.group_name,
       account.provider,
+      accountProviderLabel(account.provider),
+      accountProviderDefinition(account.provider).credentialLabel,
       account.account_type,
       account.status,
       formatStatus(account.status),
@@ -164,8 +174,10 @@ function groupMatchesSearch(group: Group, tokens: string[]) {
 
 function accountMatchesCredentialFilter(account: Account, filter: AccountCredentialFilter) {
   if (filter === "all") return true;
-  if (filter === "outlook") return account.has_refresh_token;
-  return account.has_imap_password;
+  const provider = normalizeAccountProviderId(account.provider);
+  if (filter === "outlook") return provider === "graph" || account.provider === "outlook";
+  if (filter === "imap") return provider === "imap" || provider === "imap_custom";
+  return provider === filter;
 }
 
 function App() {
@@ -1569,7 +1581,7 @@ function MailWorkspace({
         <span className="mailAvatar">{account.email.slice(0, 2).toUpperCase()}</span>
         <span className="mailTreeText">
           <strong>{account.email}</strong>
-          <small>{formatStatus(account.last_refresh_status)} · {account.message_count} 封邮件</small>
+          <small>{accountProviderLabel(account.provider)} · {formatStatus(account.last_refresh_status)} · {account.message_count} 封邮件</small>
         </span>
       </button>
     );
@@ -1648,11 +1660,14 @@ function MailWorkspace({
           <select
             className="select accountCredentialFilter"
             value={accountCredentialFilter}
-            title="按凭据筛选账号"
+            title="按服务商筛选账号"
             onChange={(event) => setAccountCredentialFilter(event.target.value as AccountCredentialFilter)}
           >
             <option value="all">全部</option>
             <option value="outlook">Outlook</option>
+            <option value="gmail">Gmail</option>
+            <option value="qq">QQ 邮箱</option>
+            <option value="netease_163">163 邮箱</option>
             <option value="imap">IMAP</option>
           </select>
         </div>
@@ -1662,7 +1677,7 @@ function MailWorkspace({
             {(treeAccountsByGroup.get(null) ?? []).map((account) => renderTreeAccount(account, 0))}
           </div>
         ) : (
-          <EmptyState icon={<Mail size={24} />} text={accountFilterActive ? "没有匹配的账号、凭据或分组。" : "导入账号后开始使用。"} />
+          <EmptyState icon={<Mail size={24} />} text={accountFilterActive ? "没有匹配的账号、服务商或分组。" : "导入账号后开始使用。"} />
         )}
       </aside>
 
@@ -2334,7 +2349,7 @@ function AccountsView({
               </span>
               <span>{account.group_name ?? "无"}</span>
               <span>{formatStatus(account.last_refresh_status)}</span>
-              <span>{account.has_refresh_token ? "Outlook" : account.has_imap_password || account.has_password ? "IMAP" : "无"}</span>
+              <span>{refreshCredentialLabel(account)}</span>
               <span className="rowActions accountRowActions">
                 <button
                   className="iconMini"
@@ -2689,6 +2704,7 @@ function AccountImportDialog({
   const [localBusy, setLocalBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const parsedRows = useMemo(() => parseAccountRows(raw), [raw]);
+  const providerPreview = useMemo(() => formatProviderPreview(parsedRows), [parsedRows]);
   const loading = busy || localBusy;
 
   useEffect(() => {
@@ -2738,7 +2754,7 @@ function AccountImportDialog({
         <div className="oauthDialogBody">
           <section className="oauthAccountBox">
             <h3>账号数据</h3>
-            <p>每行一条账号，支持邮箱、密码、client_id、refresh_token、备注字段。</p>
+            <p>每行一条账号，支持邮箱、密码、client_id、refresh_token、备注和 provider 字段。</p>
             <textarea
               className="textarea importTextarea"
               value={raw}
@@ -2764,7 +2780,7 @@ function AccountImportDialog({
                   ))}
                 </select>
               </label>
-              <span className="dialogMeta">已识别 {parsedRows.length} 个账号</span>
+              <span className="dialogMeta">已识别 {parsedRows.length} 个账号{providerPreview ? ` · ${providerPreview}` : ""}</span>
             </div>
           </section>
           {localError && <div className="formError">{localError}</div>}
@@ -4174,14 +4190,20 @@ function StatusPill({ status }: { status: string }) {
 }
 
 function isRefreshReady(account: Account) {
-  return account.has_refresh_token || account.has_imap_password || account.has_password;
+  const provider = accountProviderDefinition(account.provider);
+  if (provider.accountType === "imap") return account.has_imap_password || account.has_password || account.has_refresh_token;
+  return account.has_refresh_token;
 }
 
 function refreshCredentialLabel(account: Account) {
-  if (account.has_refresh_token) return "Outlook";
-  if (account.has_imap_password) return "IMAP 密码";
-  if (account.has_password) return "账号密码";
-  return "缺少凭据";
+  const provider = accountProviderDefinition(account.provider);
+  if (!isRefreshReady(account)) return `${provider.label} 缺少凭据`;
+  if (provider.accountType === "imap") {
+    if (account.has_imap_password) return `${provider.label} ${provider.credentialLabel}`;
+    if (account.has_refresh_token) return `${provider.label} OAuth`;
+    return `${provider.label} 账号密码`;
+  }
+  return `${provider.label} ${provider.credentialLabel}`;
 }
 
 function AccountAuthDialog({
@@ -4314,11 +4336,12 @@ function AccountEditor({
 
   useEffect(() => {
     if (!account) return;
+    const provider = normalizeAccountProviderId(account.provider);
     setDraft({
       email: account.email,
       group_id: account.group_id,
-      provider: account.provider === "imap" ? "imap" : "graph",
-      account_type: account.account_type || "outlook",
+      provider,
+      account_type: account.account_type || providerAccountType(provider),
       remark: account.remark,
       forward_enabled: account.forward_enabled,
       imap_host: account.imap_host,
@@ -4349,6 +4372,20 @@ function AccountEditor({
   }
 
   const redirectUri = settings?.oauth_redirect_uri || defaultOAuthRedirectUri;
+  const oauthLinkSupported = draft.provider === "graph" || draft.provider === "imap";
+
+  function updateProvider(provider: string) {
+    const normalizedProvider = normalizeAccountProviderId(provider);
+    const defaults = providerDefaultImap(normalizedProvider);
+    const accountType = providerAccountType(normalizedProvider);
+    setDraft({
+      ...draft,
+      provider: normalizedProvider,
+      account_type: accountType,
+      imap_host: defaults.host || (accountType === "imap" ? draft.imap_host : ""),
+      imap_port: defaults.port
+    });
+  }
 
   return (
     <div className="panel">
@@ -4360,9 +4397,12 @@ function AccountEditor({
       )}
       <div className="formLine">
         <input className="input grow" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} />
-        <select className="select" value={draft.provider} onChange={(event) => setDraft({ ...draft, provider: event.target.value })}>
-          <option value="graph">Outlook</option>
-          <option value="imap">IMAP</option>
+        <select className="select" value={draft.provider} onChange={(event) => updateProvider(event.target.value)}>
+          {accountProviderRegistry.map((provider) => (
+            <option value={provider.id} key={provider.id}>
+              {provider.label}
+            </option>
+          ))}
         </select>
       </div>
       <div className="formLine">
@@ -4445,7 +4485,7 @@ function AccountEditor({
         />
         <button
           className="button secondary"
-          disabled={!draft.client_id.trim()}
+          disabled={!oauthLinkSupported || !draft.client_id.trim()}
           onClick={() => onGenerateOAuthUrl({ client_id: draft.client_id, redirect_uri: redirectUri, login_hint: draft.email, provider: draft.provider })}
         >
           <KeyRound size={16} />
@@ -4462,7 +4502,7 @@ function AccountEditor({
         />
         <button
           className="button secondary"
-          disabled={!draft.client_id.trim() || !oauthCallback.trim()}
+          disabled={!oauthLinkSupported || !draft.client_id.trim() || !oauthCallback.trim()}
           onClick={() =>
             onExchangeOAuthToken({
               account_id: account.id,
@@ -5724,6 +5764,18 @@ function parseAliasText(value: string) {
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
   return Array.from(new Set(aliases));
+}
+
+function formatProviderPreview(rows: Array<{ provider: string }>) {
+  if (rows.length === 0) return "";
+  const counts = rows.reduce((map, row) => {
+    const provider = normalizeAccountProviderId(row.provider);
+    map.set(provider, (map.get(provider) ?? 0) + 1);
+    return map;
+  }, new Map<string, number>());
+  return Array.from(counts.entries())
+    .map(([provider, count]) => `${accountProviderLabel(provider)} ${count}`)
+    .join(" / ");
 }
 
 function parseTagText(value: string) {

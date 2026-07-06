@@ -20,11 +20,125 @@ const GRAPH_SCOPE: &str =
     "offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read";
 const IMAP_OAUTH_SCOPE: &str = "offline_access https://outlook.office.com/IMAP.AccessAsUser.All";
 
+#[derive(Clone, Copy)]
+pub struct MailProviderDefinition {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub credential_kind: &'static str,
+    pub account_type: &'static str,
+    pub default_imap_host: &'static str,
+    pub default_imap_port: i64,
+    aliases: &'static [&'static str],
+    domains: &'static [&'static str],
+}
+
+pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
+    MailProviderDefinition {
+        id: "graph",
+        display_name: "Outlook",
+        credential_kind: "oauth",
+        account_type: "outlook",
+        default_imap_host: "",
+        default_imap_port: 993,
+        aliases: &["outlook", "microsoft", "msgraph"],
+        domains: &["outlook.com", "hotmail.com", "live.com", "msn.com"],
+    },
+    MailProviderDefinition {
+        id: "gmail",
+        display_name: "Gmail",
+        credential_kind: "oauth",
+        account_type: "gmail",
+        default_imap_host: "",
+        default_imap_port: 993,
+        aliases: &["google", "googlemail"],
+        domains: &["gmail.com", "googlemail.com"],
+    },
+    MailProviderDefinition {
+        id: "qq",
+        display_name: "QQ Mail",
+        credential_kind: "imap_auth_code",
+        account_type: "imap",
+        default_imap_host: "imap.qq.com",
+        default_imap_port: 993,
+        aliases: &["qqmail"],
+        domains: &["qq.com", "foxmail.com"],
+    },
+    MailProviderDefinition {
+        id: "imap",
+        display_name: "IMAP",
+        credential_kind: "imap_password",
+        account_type: "imap",
+        default_imap_host: "",
+        default_imap_port: 993,
+        aliases: &["outlook_imap"],
+        domains: &[],
+    },
+    MailProviderDefinition {
+        id: "netease_163",
+        display_name: "163 Mail",
+        credential_kind: "imap_auth_code",
+        account_type: "imap",
+        default_imap_host: "imap.163.com",
+        default_imap_port: 993,
+        aliases: &["163", "netease", "163mail"],
+        domains: &["163.com"],
+    },
+    MailProviderDefinition {
+        id: "imap_custom",
+        display_name: "Custom IMAP",
+        credential_kind: "imap_password",
+        account_type: "imap",
+        default_imap_host: "",
+        default_imap_port: 993,
+        aliases: &["custom_imap", "custom"],
+        domains: &[],
+    },
+];
+
 pub struct OAuthTokenResponse {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_in: i64,
     pub scope: String,
+}
+
+pub fn normalize_mail_provider_id(value: &str) -> Option<&'static str> {
+    let provider = value.trim().to_ascii_lowercase();
+    if provider.is_empty() {
+        return None;
+    }
+    MAIL_PROVIDER_REGISTRY
+        .iter()
+        .find(|item| item.id == provider || item.aliases.iter().any(|alias| *alias == provider))
+        .map(|item| item.id)
+}
+
+pub fn mail_provider_definition(value: &str) -> Option<&'static MailProviderDefinition> {
+    let provider_id = normalize_mail_provider_id(value)?;
+    MAIL_PROVIDER_REGISTRY.iter().find(|item| item.id == provider_id)
+}
+
+pub fn detect_mail_provider(email: &str, explicit_provider: Option<&str>, has_refresh_token: bool) -> AppResult<&'static MailProviderDefinition> {
+    if let Some(provider) = explicit_provider.and_then(normalize_mail_provider_id) {
+        return mail_provider_definition(provider)
+            .ok_or_else(|| AppError::InvalidInput(format!("unsupported mail provider: {provider}")));
+    }
+    if has_refresh_token {
+        return mail_provider_definition("graph")
+            .ok_or_else(|| AppError::Internal("Graph provider definition is missing".to_string()));
+    }
+
+    let domain = email
+        .trim()
+        .to_ascii_lowercase()
+        .rsplit_once('@')
+        .map(|(_, domain)| domain.to_string())
+        .unwrap_or_default();
+    MAIL_PROVIDER_REGISTRY
+        .iter()
+        .find(|item| item.domains.iter().any(|known| *known == domain))
+        .or_else(|| mail_provider_definition("imap_custom"))
+        .ok_or_else(|| AppError::Internal("Custom IMAP provider definition is missing".to_string()))
 }
 
 fn microsoft_oauth_scope(provider: Option<&str>) -> &'static str {
@@ -1498,5 +1612,23 @@ mod tests {
             address: "noreply@tm.openai.com".to_string(),
         });
         assert_eq!(sender, "OpenAI <noreply@tm.openai.com>");
+    }
+
+    #[test]
+    fn detects_mail_provider_registry_defaults() {
+        let gmail = detect_mail_provider("person@gmail.com", None, false).expect("gmail");
+        assert_eq!(gmail.id, "gmail");
+        assert_eq!(gmail.account_type, "gmail");
+
+        let qq = detect_mail_provider("user@foxmail.com", None, false).expect("qq");
+        assert_eq!(qq.id, "qq");
+        assert_eq!(qq.default_imap_host, "imap.qq.com");
+
+        let netease = detect_mail_provider("manual@example.com", Some("163"), false).expect("163");
+        assert_eq!(netease.id, "netease_163");
+        assert_eq!(netease.default_imap_host, "imap.163.com");
+
+        let graph = detect_mail_provider("user@example.com", None, true).expect("graph");
+        assert_eq!(graph.id, "graph");
     }
 }

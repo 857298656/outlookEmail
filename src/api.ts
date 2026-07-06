@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { parseAccountRows } from "./lib/importParser";
+import { providerAccountType, providerDefaultImap } from "./lib/providerRegistry";
 import type {
   Account,
   AccountSecretsPreview,
@@ -257,22 +259,21 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       return mockAccounts as T;
     case "import_accounts": {
       const input = args?.input as { raw: string; group_id?: number };
-      const rows = input.raw
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line.includes("@"));
+      const rows = parseAccountRows(input.raw);
       const imported = rows.length;
-      const nextAccounts = rows.map((line, index) => {
-        const parts = line.includes("----") ? line.split("----") : line.split(",");
+      const nextAccounts = rows.map((row, index) => {
+        const imapDefaults = providerDefaultImap(row.provider);
+        const accountType = providerAccountType(row.provider);
+        const isImapProvider = accountType === "imap";
         return {
           id: Date.now() + index,
-          email: parts[0].toLowerCase(),
+          email: row.email,
           group_id: input.group_id ?? 1,
           group_name: "Default",
-          remark: parts[4] ?? "",
+          remark: row.remark,
           status: "active",
-          provider: "outlook",
-          account_type: "outlook",
+          provider: row.provider,
+          account_type: accountType,
           forward_enabled: false,
           last_refresh_status: "never",
           last_refresh_error: null,
@@ -282,11 +283,11 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
           updated_at: new Date().toISOString(),
           tags: [],
           aliases: [],
-          has_password: Boolean(parts[1]),
-          has_refresh_token: Boolean(parts[3]),
-          has_imap_password: false,
-          imap_host: "",
-          imap_port: 993,
+          has_password: Boolean(row.password) && !isImapProvider,
+          has_refresh_token: Boolean(row.refresh_token),
+          has_imap_password: Boolean(row.password) && isImapProvider,
+          imap_host: imapDefaults.host,
+          imap_port: imapDefaults.port,
           proxy_url: "",
           fallback_proxy_url_1: "",
           fallback_proxy_url_2: "",

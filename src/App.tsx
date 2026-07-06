@@ -613,21 +613,6 @@ function App() {
           <div className="topActions">
             {notice && <span className="notice">{notice}</span>}
             {error && <span className="errorText">{error}</span>}
-            <button
-              className="button secondary"
-              onClick={() =>
-                runAction(async () => {
-                  const result = await api.runRefreshJob(selectedAccountId);
-                  setNotice(formatResultMessage(result.message));
-                  await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
-                  await loadStatus();
-                })
-              }
-              disabled={busy}
-            >
-              {busy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-              刷新
-            </button>
           </div>
         </header>
 
@@ -673,6 +658,15 @@ function App() {
                 setFolder(nextFolder);
                 setMailPage(0);
                 await loadMailboxMessages(selectedAccountId, nextFolder, mailFilters, 0);
+              })
+            }
+            onRefreshCurrentAccount={() =>
+              runAction(async () => {
+                if (!selectedAccountId) return;
+                const result = await api.runRefreshJob(selectedAccountId);
+                setNotice(formatResultMessage(result.message));
+                await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
+                await loadStatus();
               })
             }
             onMessageSelect={setSelectedMessageId}
@@ -1295,6 +1289,7 @@ function MailWorkspace({
   onGroupChange,
   onAccountSelect,
   onFolderChange,
+  onRefreshCurrentAccount,
   onMessageSelect,
   onMessageClose,
   onToggleMessageSelect,
@@ -1335,6 +1330,7 @@ function MailWorkspace({
   onGroupChange: (groupId: number | "all") => void;
   onAccountSelect: (accountId: number) => void;
   onFolderChange: (folder: string) => void;
+  onRefreshCurrentAccount: () => void;
   onMessageSelect: (messageId: number) => void;
   onMessageClose: () => void;
   onToggleMessageSelect: (messageId: number) => void;
@@ -1673,6 +1669,15 @@ function MailWorkspace({
       <section className="pane messagePane">
         <div className="paneHeader">
           <h2>邮件</h2>
+          <button
+            className="button compact secondary"
+            disabled={busy || !selectedAccountId}
+            title={selectedAccountId ? "刷新当前账号邮件" : "请选择账号后刷新"}
+            onClick={onRefreshCurrentAccount}
+          >
+            {busy ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}
+            刷新
+          </button>
         </div>
         <div className="messageTools">
           <label className="searchBox messageSearch">

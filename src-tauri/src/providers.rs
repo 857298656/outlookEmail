@@ -30,6 +30,7 @@ pub struct MailProviderDefinition {
     pub account_type: &'static str,
     pub default_imap_host: &'static str,
     pub default_imap_port: i64,
+    pub capabilities: &'static [&'static str],
     aliases: &'static [&'static str],
     domains: &'static [&'static str],
 }
@@ -41,6 +42,7 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
         account_type: "outlook",
         default_imap_host: "",
         default_imap_port: 993,
+        capabilities: &["read_mail", "download_attachments", "mark_read", "remote_delete"],
         aliases: &["outlook", "microsoft", "msgraph"],
         domains: &["outlook.com", "hotmail.com", "live.com", "msn.com"],
     },
@@ -50,6 +52,7 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
         account_type: "gmail",
         default_imap_host: "",
         default_imap_port: 993,
+        capabilities: &["read_mail", "download_attachments", "mark_read", "trash", "history_sync"],
         aliases: &["google", "googlemail"],
         domains: &["gmail.com", "googlemail.com"],
     },
@@ -59,6 +62,7 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
         account_type: "imap",
         default_imap_host: "imap.qq.com",
         default_imap_port: 993,
+        capabilities: &["read_mail", "download_attachments", "mark_read", "remote_delete", "imap_folders"],
         aliases: &["qqmail"],
         domains: &["qq.com", "foxmail.com"],
     },
@@ -68,6 +72,7 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
         account_type: "imap",
         default_imap_host: "",
         default_imap_port: 993,
+        capabilities: &["read_mail", "download_attachments", "mark_read", "remote_delete", "imap_folders"],
         aliases: &["outlook_imap"],
         domains: &[],
     },
@@ -77,6 +82,7 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
         account_type: "imap",
         default_imap_host: "imap.163.com",
         default_imap_port: 993,
+        capabilities: &["read_mail", "download_attachments", "mark_read", "remote_delete", "imap_folders"],
         aliases: &["163", "netease", "163mail"],
         domains: &["163.com"],
     },
@@ -86,6 +92,7 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
         account_type: "imap",
         default_imap_host: "",
         default_imap_port: 993,
+        capabilities: &["read_mail", "download_attachments", "mark_read", "remote_delete", "imap_folders"],
         aliases: &["custom_imap", "custom"],
         domains: &[],
     },
@@ -120,6 +127,14 @@ pub fn normalize_mail_provider_id(value: &str) -> Option<&'static str> {
 pub fn mail_provider_definition(value: &str) -> Option<&'static MailProviderDefinition> {
     let provider_id = normalize_mail_provider_id(value)?;
     MAIL_PROVIDER_REGISTRY.iter().find(|item| item.id == provider_id)
+}
+
+pub fn mail_provider_capabilities(value: &str) -> Option<&'static [&'static str]> {
+    mail_provider_definition(value).map(|provider| provider.capabilities)
+}
+
+pub fn mail_provider_supports_capability(value: &str, capability: &str) -> bool {
+    mail_provider_capabilities(value).is_some_and(|capabilities| capabilities.contains(&capability))
 }
 
 pub fn detect_mail_provider(email: &str, explicit_provider: Option<&str>, has_refresh_token: bool) -> AppResult<&'static MailProviderDefinition> {
@@ -2383,17 +2398,23 @@ mod tests {
         let gmail = detect_mail_provider("person@gmail.com", None, false).expect("gmail");
         assert_eq!(gmail.id, "gmail");
         assert_eq!(gmail.account_type, "gmail");
+        assert!(gmail.capabilities.contains(&"history_sync"));
+        assert!(gmail.capabilities.contains(&"trash"));
 
         let qq = detect_mail_provider("user@foxmail.com", None, false).expect("qq");
         assert_eq!(qq.id, "qq");
         assert_eq!(qq.default_imap_host, "imap.qq.com");
+        assert!(qq.capabilities.contains(&"imap_folders"));
+        assert!(qq.capabilities.contains(&"remote_delete"));
 
         let netease = detect_mail_provider("manual@example.com", Some("163"), false).expect("163");
         assert_eq!(netease.id, "netease_163");
         assert_eq!(netease.default_imap_host, "imap.163.com");
+        assert!(netease.capabilities.contains(&"imap_folders"));
 
         let graph = detect_mail_provider("user@example.com", None, true).expect("graph");
         assert_eq!(graph.id, "graph");
+        assert!(graph.capabilities.contains(&"remote_delete"));
     }
 
     #[test]

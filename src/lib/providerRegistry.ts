@@ -1,4 +1,12 @@
 export type AccountProviderId = "graph" | "outlook" | "gmail" | "qq" | "netease_163" | "imap_custom" | "imap";
+export type AccountProviderCapability =
+  | "read_mail"
+  | "download_attachments"
+  | "mark_read"
+  | "remote_delete"
+  | "trash"
+  | "history_sync"
+  | "imap_folders";
 
 export type AccountProviderDefinition = {
   id: AccountProviderId;
@@ -11,6 +19,7 @@ export type AccountProviderDefinition = {
   defaultImapPort: number;
   aliases: string[];
   domains: string[];
+  capabilities: AccountProviderCapability[];
 };
 
 export const accountProviderRegistry: AccountProviderDefinition[] = [
@@ -24,7 +33,8 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
     defaultImapHost: "",
     defaultImapPort: 993,
     aliases: ["outlook", "microsoft", "msgraph"],
-    domains: ["outlook.com", "hotmail.com", "live.com", "msn.com"]
+    domains: ["outlook.com", "hotmail.com", "live.com", "msn.com"],
+    capabilities: ["read_mail", "download_attachments", "mark_read", "remote_delete"]
   },
   {
     id: "gmail",
@@ -36,7 +46,8 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
     defaultImapHost: "",
     defaultImapPort: 993,
     aliases: ["google", "googlemail"],
-    domains: ["gmail.com", "googlemail.com"]
+    domains: ["gmail.com", "googlemail.com"],
+    capabilities: ["read_mail", "download_attachments", "mark_read", "trash", "history_sync"]
   },
   {
     id: "qq",
@@ -48,7 +59,8 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
     defaultImapHost: "imap.qq.com",
     defaultImapPort: 993,
     aliases: ["qqmail"],
-    domains: ["qq.com", "foxmail.com"]
+    domains: ["qq.com", "foxmail.com"],
+    capabilities: ["read_mail", "download_attachments", "mark_read", "remote_delete", "imap_folders"]
   },
   {
     id: "imap",
@@ -60,7 +72,8 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
     defaultImapHost: "",
     defaultImapPort: 993,
     aliases: ["outlook_imap"],
-    domains: []
+    domains: [],
+    capabilities: ["read_mail", "download_attachments", "mark_read", "remote_delete", "imap_folders"]
   },
   {
     id: "netease_163",
@@ -72,7 +85,8 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
     defaultImapHost: "imap.163.com",
     defaultImapPort: 993,
     aliases: ["163", "netease", "163mail"],
-    domains: ["163.com"]
+    domains: ["163.com"],
+    capabilities: ["read_mail", "download_attachments", "mark_read", "remote_delete", "imap_folders"]
   },
   {
     id: "imap_custom",
@@ -84,7 +98,8 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
     defaultImapHost: "",
     defaultImapPort: 993,
     aliases: ["custom_imap", "custom"],
-    domains: []
+    domains: [],
+    capabilities: ["read_mail", "download_attachments", "mark_read", "remote_delete", "imap_folders"]
   }
 ];
 
@@ -124,4 +139,23 @@ export function providerDefaultImap(value?: string | null) {
     host: provider.defaultImapHost,
     port: provider.defaultImapPort
   };
+}
+
+export function providerSupportsCapability(value: string | null | undefined, capability: AccountProviderCapability): boolean {
+  return accountProviderDefinition(value).capabilities.includes(capability);
+}
+
+export function providerCapabilitySummary(value?: string | null): string {
+  const labels: Record<AccountProviderCapability, string> = {
+    read_mail: "读取",
+    download_attachments: "附件",
+    mark_read: "已读/未读",
+    remote_delete: "远端删除",
+    trash: "移入垃圾箱",
+    history_sync: "增量同步",
+    imap_folders: "IMAP 文件夹"
+  };
+  return accountProviderDefinition(value)
+    .capabilities.map((capability) => labels[capability])
+    .join(" / ");
 }

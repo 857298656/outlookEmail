@@ -74,7 +74,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Gmail, QQ Mail, and 163 Mail provider expansion is tracked in [`provider-integration-plan.md`](provider-integration-plan.md).
 - Provider setup, troubleshooting, manual validation, and regression coverage are tracked in [`provider-operations.md`](provider-operations.md).
 - Provider expansion should keep the desktop app local-first and reuse SQLite cache, encrypted local secrets, refresh logs, retry queue, attachment cache, and mailbox UI.
-- Provider foundation work has started with registry-backed import detection, provider labels and badges, provider filtering, batch import provider/credential previews, refresh failure provider summaries, IMAP presets for QQ/163, provider-specific credential hints, centralized adapter routing, Gmail OAuth account save support, and Gmail API first-read sync.
+- Provider foundation work has started with registry-backed import detection, provider labels and badges, provider capability metadata, provider filtering, batch import provider/credential previews, refresh failure provider summaries, IMAP presets for QQ/163, provider-specific credential hints, centralized adapter routing, Gmail OAuth account save support, and Gmail API first-read sync.
 - Gmail should be implemented as a first-class OAuth/API provider first, with IMAP XOAUTH2 only as a fallback path.
 - QQ Mail and 163 Mail should initially be provider presets over the generic IMAP adapter, using provider-specific setup hints, import auto-detection, folder mapping validation, and real-account verification.
 - Remaining foundation work should continue replacing hard-coded Outlook/Graph labels where they are tied to OAuth setup rather than general account display.

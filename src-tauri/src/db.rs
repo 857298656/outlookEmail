@@ -1794,6 +1794,7 @@ impl Database {
         attachment_id: &str,
         folder: Option<&str>,
     ) -> AppResult<DownloadedAttachment> {
+        require_provider_capability(account, "download_attachments", "attachment download")?;
         match mail_provider_adapter(account)? {
             MailProviderAdapter::Graph => providers::download_graph_attachment(account, message_id, attachment_id),
             MailProviderAdapter::Imap => {
@@ -5559,6 +5560,7 @@ impl Database {
         if target.provider_message_id.starts_with("local-demo-") {
             return Ok(());
         }
+        require_provider_capability(&account, "mark_read", "mark read/unread")?;
         match mail_provider_adapter(&account)? {
             MailProviderAdapter::Graph => providers::mark_graph_message_read(&account, &target.provider_message_id, is_read),
             MailProviderAdapter::Imap => providers::mark_imap_message_read(&account, &target.folder, &target.provider_message_id, is_read),
@@ -5567,6 +5569,7 @@ impl Database {
     }
 
     fn refresh_account_credential(&self, account: &AccountCredentials, folder: &str, top: usize) -> AppResult<usize> {
+        require_provider_capability(account, "read_mail", "mail refresh")?;
         match mail_provider_adapter(account)? {
             MailProviderAdapter::Graph => providers::fetch_graph_messages(account, folder, top).and_then(|(next_refresh_token, messages)| {
                 if !next_refresh_token.is_empty() && next_refresh_token != account.refresh_token {
@@ -5620,6 +5623,7 @@ impl Database {
         if target.provider_message_id.starts_with("local-demo-") {
             return Ok(());
         }
+        require_provider_delete_capability(&account)?;
         match mail_provider_adapter(&account)? {
             MailProviderAdapter::Graph => providers::delete_graph_message(&account, &target.provider_message_id),
             MailProviderAdapter::Imap => providers::delete_imap_message(&account, &target.folder, &target.provider_message_id),
@@ -6747,6 +6751,31 @@ fn mail_provider_adapter(account: &AccountCredentials) -> AppResult<MailProvider
         _ if !account.client_id.is_empty() && !account.refresh_token.is_empty() => Ok(MailProviderAdapter::Graph),
         _ => Ok(MailProviderAdapter::Imap),
     }
+}
+
+fn require_provider_capability(account: &AccountCredentials, capability: &str, action: &str) -> AppResult<()> {
+    if account_provider_supports_capability(account, capability) {
+        return Ok(());
+    }
+    Err(AppError::InvalidInput(format!(
+        "mail provider {} does not support {action}",
+        account.provider
+    )))
+}
+
+fn require_provider_delete_capability(account: &AccountCredentials) -> AppResult<()> {
+    if account_provider_supports_capability(account, "trash") || account_provider_supports_capability(account, "remote_delete") {
+        return Ok(());
+    }
+    Err(AppError::InvalidInput(format!(
+        "mail provider {} does not support remote delete",
+        account.provider
+    )))
+}
+
+fn account_provider_supports_capability(account: &AccountCredentials, capability: &str) -> bool {
+    providers::mail_provider_supports_capability(&account.provider, capability)
+        || providers::mail_provider_supports_capability(&account.account_type, capability)
 }
 
 fn table_columns(conn: &Connection, table: &str) -> AppResult<Vec<String>> {

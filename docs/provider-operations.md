@@ -12,6 +12,8 @@
 | 163 邮箱 | `netease_163` | 客户端授权密码或应用密码 | `imap.163.com:993` | 必须先在网页端开启客户端授权；不要填写网页登录密码。 |
 | Custom IMAP | `imap_custom` | IMAP 密码或应用密码 | 手动 host/port | 需要确认服务商支持 TLS IMAP 和远端 UID 操作。 |
 
+注册表能力元数据当前覆盖：读取邮件、附件下载、已读/未读、远端删除或移入垃圾箱、Gmail history 增量同步、IMAP 文件夹发现。Gmail 使用 `trash` 和 `history_sync`；QQ、163 和 Custom IMAP 使用 `remote_delete` 和 `imap_folders`。
+
 批量导入支持自动按域名识别 Gmail、QQ、Foxmail、163，也支持显式 provider，例如：
 
 ```text
@@ -99,6 +101,7 @@ $env:RUSTUP_HOME='E:\RustCache\.rustup'; $env:CARGO_HOME='E:\RustCache\.cargo'; 
 当前回归重点：
 
 - `src/lib/importParser.test.ts` 覆盖批量导入 provider 字段、域名识别和 legacy 行格式。
+- `src/lib/providerRegistry.test.ts` 覆盖前端 provider capability metadata、Gmail history/trash 能力和 QQ/163 IMAP 文件夹能力。
 - `providers::tests::detects_mail_provider_registry_defaults` 覆盖后端 provider registry、别名和默认 IMAP preset。
 - `db::project_tests::import_accounts_detects_mail_provider_presets` 覆盖导入后 QQ/163/Gmail provider、account_type 和 IMAP host/port 归一化。
 - `providers::tests::normalizes_gmail_message_payload`、`maps_gmail_labels_to_cached_folders` 和 `maps_gmail_folder_targets_to_app_folders` 覆盖 Gmail 正文、附件、label 到本地文件夹映射。

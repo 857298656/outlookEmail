@@ -44,6 +44,7 @@ import {
   accountProviderLabel,
   accountProviderRegistry,
   normalizeAccountProviderId,
+  providerCapabilitySummary,
   providerAccountType,
   providerDefaultImap
 } from "./lib/providerRegistry";
@@ -4288,7 +4289,7 @@ function ProviderBadge({ provider, compact = false }: { provider: string; compac
   return (
     <span
       className={`providerBadge provider-${providerId}${compact ? " compact" : ""}`}
-      title={`${definition.label} · ${definition.credentialLabel}`}
+      title={`${definition.label} · ${definition.credentialLabel} · ${providerCapabilitySummary(providerId)}`}
     >
       <span className="providerBadgeMark">{providerBadgeCode(providerId)}</span>
       <span className="providerBadgeText">{definition.label}</span>

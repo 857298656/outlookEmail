@@ -323,7 +323,7 @@ Outlook/Graph 接入已基本可用，下一批服务商接入记录在 [`docs/p
 - P9.3 QQ Mail IMAP Provider：QQ provider 选项、`imap.qq.com:993` preset、导入识别、账号设置授权码提示和导入提示已接入；仍需要真实 QQ 邮箱账号验证 IMAP 开启、授权码、文件夹映射和远端 UID 操作。
 - P9.4 163 Mail IMAP Provider：163 provider 选项、`imap.163.com:993` preset、导入识别、账号设置授权密码提示和常见中文文件夹映射已接入；仍需要真实 163 邮箱账号验证 IMAP 开启、授权密码、实际文件夹命名和远端 UID 操作。
 - P9.5 Provider UX and Batch Operations：服务商筛选、统一服务商徽标、批量导入账号级服务商/凭据类型预览，以及刷新失败按服务商分组已接入；仍需真实多服务商批量操作验收。
-- P9.6 Hardening and Documentation：已新增服务商故障排查与验收清单，README/架构文档已链接；自动化回归覆盖记录已整理，仍需真实 Gmail/QQ/163 账号人工验收。
+- P9.6 Hardening and Documentation：已新增服务商故障排查与验收清单，README/架构文档已链接；provider 能力元数据和自动化回归覆盖记录已整理，仍需真实 Gmail/QQ/163 账号人工验收。
 
 ## 当前推荐下一步
 

@@ -1493,7 +1493,7 @@ function MailWorkspace({
       )}
       <aside className="pane mailTreePane">
         <div className="paneHeader">
-          <h2>邮箱账号</h2>
+          <h2>账号</h2>
           <div className="paneHeaderActions">
             <button className="iconMini" title="导入账号" onClick={() => setImportDialogOpen(true)} disabled={busy}>
               <Upload size={16} />
@@ -1508,17 +1508,8 @@ function MailWorkspace({
           <span>账号搜索即将支持</span>
         </div>
         <div className="mailTree">
-          <button
-            className={selectedGroupId === "all" ? "mailTreeRow mailTreeGroup active" : "mailTreeRow mailTreeGroup"}
-            style={treeDepthStyle(0)}
-            onClick={() => onGroupChange("all")}
-          >
-            <Archive size={16} />
-            <span className="mailTreeLabel">全部账号</span>
-            <small>{accounts.length}</small>
-          </button>
-          {(childGroupsByParent.get(null) ?? []).map((group) => renderTreeGroup(group, 1))}
-          {(accountsByGroup.get(null) ?? []).map((account) => renderTreeAccount(account, 1))}
+          {(childGroupsByParent.get(null) ?? []).map((group) => renderTreeGroup(group, 0))}
+          {(accountsByGroup.get(null) ?? []).map((account) => renderTreeAccount(account, 0))}
         </div>
         {accounts.length === 0 && <EmptyState icon={<Mail size={24} />} text="导入账号后开始使用。" />}
       </aside>
@@ -1992,14 +1983,6 @@ function AccountsView({
           </button>
         </div>
         <div className="groupTree accountGroupTree" aria-label="分组列表">
-          <button
-            className={selectedManageGroupId === "all" ? "groupTreeButton active" : "groupTreeButton"}
-            onClick={() => setSelectedManageGroupId("all")}
-          >
-            <Archive size={15} />
-            <span>全部账号</span>
-            <small>{accounts.length}</small>
-          </button>
           {groups.map((group) => (
             <button
               className={selectedManageGroupId === group.id ? "groupTreeButton active" : "groupTreeButton"}
@@ -2017,9 +2000,9 @@ function AccountsView({
 
       <section className="panel accountInventoryPanel">
         <div className="panelHeader">
-          <h2>邮箱库存</h2>
+          <h2>账号</h2>
           <div className="rowActions">
-            <button className="iconMini" title="导出全部账号" disabled={accounts.length === 0 || busy} onClick={() => onExportAccounts()}>
+            <button className="iconMini" title="导出账号" disabled={accounts.length === 0 || busy} onClick={() => onExportAccounts()}>
               <Download size={15} />
             </button>
           </div>

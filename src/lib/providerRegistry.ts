@@ -159,3 +159,66 @@ export function providerCapabilitySummary(value?: string | null): string {
     .capabilities.map((capability) => labels[capability])
     .join(" / ");
 }
+
+export function providerFailureHint(value?: string | null, error?: string | null): string {
+  const provider = accountProviderDefinition(value);
+  const lower = (error ?? "").toLowerCase();
+  const isAuthError =
+    lower.includes("auth") ||
+    lower.includes("unauthorized") ||
+    lower.includes("forbidden") ||
+    lower.includes("http 401") ||
+    lower.includes("http 403") ||
+    lower.includes("invalid_grant") ||
+    lower.includes("insufficientpermissions") ||
+    lower.includes("scope") ||
+    lower.includes("credential") ||
+    lower.includes("password") ||
+    lower.includes("token") ||
+    lower.includes("login") ||
+    lower.includes("授权码") ||
+    lower.includes("授权密码") ||
+    lower.includes("客户端授权") ||
+    lower.includes("网页登录密码") ||
+    lower.includes("未授权") ||
+    lower.includes("权限不足") ||
+    lower.includes("认证") ||
+    lower.includes("鉴权") ||
+    lower.includes("令牌");
+  const isNetworkError =
+    lower.includes("timeout") ||
+    lower.includes("timed out") ||
+    lower.includes("connection") ||
+    lower.includes("connect") ||
+    lower.includes("dns") ||
+    lower.includes("network") ||
+    lower.includes("proxy") ||
+    lower.includes("tls") ||
+    lower.includes("refused");
+
+  if (provider.id === "gmail" && lower.includes("history") && lower.includes("404")) {
+    return "Gmail historyId 可能过期；应用会回退全量同步，连续失败时重新授权。";
+  }
+  if (provider.id === "gmail" && isAuthError) {
+    return "重新授权 Gmail，确认使用当前 Google Client ID 和 gmail.modify scope。";
+  }
+  if (provider.id === "graph" && isAuthError) {
+    return "重新授权 Outlook，确认 Microsoft Client ID 和回调地址与设置一致。";
+  }
+  if (provider.id === "qq" && isAuthError) {
+    return "检查 QQ 邮箱已开启 IMAP/SMTP，并填写网页端生成的授权码。";
+  }
+  if (provider.id === "netease_163" && isAuthError) {
+    return "检查 163 已开启客户端授权，并填写授权密码或应用密码。";
+  }
+  if ((provider.id === "imap" || provider.id === "imap_custom") && isAuthError) {
+    return "检查 IMAP host、端口、TLS 和该服务商提供的应用密码。";
+  }
+  if (isNetworkError) {
+    return "检查账号代理链、网络连通性和服务商访问限制。";
+  }
+  if (provider.id === "qq" || provider.id === "netease_163") {
+    return "优先确认 IMAP 已开启、授权码有效，再检查文件夹映射和远端 UID 操作。";
+  }
+  return provider.setupHint || "查看错误详情并按服务商要求修复配置后重试。";
+}

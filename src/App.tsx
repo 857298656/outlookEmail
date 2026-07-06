@@ -45,6 +45,7 @@ import {
   accountProviderRegistry,
   normalizeAccountProviderId,
   providerCapabilitySummary,
+  providerFailureHint,
   providerAccountType,
   providerDefaultImap
 } from "./lib/providerRegistry";
@@ -3340,6 +3341,7 @@ function RefreshManagementView({
                 <ProviderBadge provider={summary.providerId} />
                 <strong>{summary.count} 个失败</strong>
                 <small title={summary.topError}>{summary.topError}</small>
+                <small className="providerFailureHint" title={summary.hint}>{summary.hint}</small>
               </button>
             ))}
           </div>
@@ -3442,7 +3444,7 @@ function RefreshManagementView({
               <StatusPill status={account.last_refresh_status} />
               <span>{account.last_refresh_at ? formatDate(account.last_refresh_at) : "从未"}</span>
               <span>{account.message_count}</span>
-              <span>{account.last_refresh_error ?? ""}</span>
+              <RefreshErrorCell account={account} />
               <span className="rowActions">
                 <button className="iconMini" title="刷新账号" disabled={busy || batchRunning} onClick={() => onRefreshAccount(account.id)}>
                   <RefreshCw size={14} />
@@ -4344,6 +4346,17 @@ function refreshCredentialLabel(account: Account) {
   return `${accountProviderLabel(account.provider)} ${refreshCredentialDetail(account)}`;
 }
 
+function RefreshErrorCell({ account }: { account: Account }) {
+  if (!account.last_refresh_error) return <span />;
+  const hint = providerFailureHint(account.provider, account.last_refresh_error);
+  return (
+    <span className="refreshErrorCell">
+      <span title={account.last_refresh_error}>{account.last_refresh_error}</span>
+      <small title={hint}>{hint}</small>
+    </span>
+  );
+}
+
 function summarizeProviderFailures(accounts: Account[]) {
   const grouped = new Map<string, { count: number; errors: Map<string, number> }>();
   for (const account of accounts) {
@@ -4367,7 +4380,8 @@ function summarizeProviderFailures(accounts: Account[]) {
         providerId,
         label: accountProviderLabel(providerId),
         count: summary.count,
-        topError
+        topError,
+        hint: providerFailureHint(providerId, topError)
       };
     })
     .sort((left, right) => {

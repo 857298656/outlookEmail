@@ -38,6 +38,7 @@ person@gmail.com----optional-password----google-client-id----refresh-token----re
 | 代理/网络错误 | 账号代理链、全局网络、服务商访问限制 | 先用单账号刷新验证；失败会进入重试队列并按退避时间重试。 |
 
 Gmail `HTTP 401/403`、`invalid_grant`、`insufficientPermissions`、scope 缺失，QQ 授权码错误，以及 163 客户端授权密码/网页登录密码错误都会归类为 `auth`，刷新失败汇总和重试退避会按凭据问题处理。
+刷新管理页会在失败服务商汇总和失败账号错误列中显示对应处理建议，优先提示重新授权、授权码/授权密码、IMAP 开启或代理网络检查。
 
 ## 手工验收前置条件
 
@@ -104,6 +105,7 @@ $env:RUSTUP_HOME='E:\RustCache\.rustup'; $env:CARGO_HOME='E:\RustCache\.cargo'; 
 
 - `src/lib/importParser.test.ts` 覆盖批量导入 provider 字段、域名识别和 legacy 行格式。
 - `src/lib/providerRegistry.test.ts` 覆盖前端 provider capability metadata、Gmail history/trash 能力和 QQ/163 IMAP 文件夹能力。
+- `src/lib/providerRegistry.test.ts` 同时覆盖 Gmail、QQ、163 和 Custom IMAP 刷新失败处理建议。
 - `providers::tests::detects_mail_provider_registry_defaults` 覆盖后端 provider registry、别名和默认 IMAP preset。
 - `db::project_tests::import_accounts_detects_mail_provider_presets` 覆盖导入后 QQ/163/Gmail provider、account_type 和 IMAP host/port 归一化。
 - `providers::tests::normalizes_gmail_message_payload`、`maps_gmail_labels_to_cached_folders` 和 `maps_gmail_folder_targets_to_app_folders` 覆盖 Gmail 正文、附件、label 到本地文件夹映射。

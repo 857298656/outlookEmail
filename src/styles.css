@@ -487,6 +487,28 @@ button:disabled {
   font-size: 12px;
 }
 
+.refreshErrorCell {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: #7f1d1d;
+  font-size: 12px;
+}
+
+.refreshErrorCell > span,
+.refreshErrorCell > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.refreshErrorCell > small,
+.providerFailureHint {
+  color: #b45309;
+  font-size: 11px;
+}
+
 .accountText strong,
 .accountText small,
 .messageTop strong,

@@ -262,13 +262,15 @@ Mock 网络集成测试：
 - 已补充 PKCE、Gmail OAuth URL、OAuth provider 归一化测试；`pnpm test`、`pnpm build`、`cargo test` 通过。
 - 已完成 Gmail API 首次只读同步：Gmail adapter 会刷新 access token，按 `INBOX`/`SPAM`/`TRASH` 映射现有 inbox/junkemail/deleteditems 文件夹，使用 `messages.list` 获取 id，再用 `messages.get(format=full)` 归一化 subject/from/to/cc、`internalDate`、`labelIds` 未读状态、snippet、HTML/文本正文和附件元数据。
 - 已接入 Gmail 附件下载：缓存中的 Gmail attachment id 会通过 `users.messages.attachments.get` 下载内容，并回查 message payload 取得文件名和 MIME 类型。
-- P9.1 尚未通过真实 Gmail 测试账号人工验收；P9.2 继续处理 `historyId` 增量同步。
+- P9.1 尚未通过真实 Gmail 测试账号人工验收。
 
 P9.2 进展（2026-07-06）：
 
 - 已接入 Gmail 远端已读/未读：通过 `users.messages.modify` 添加或移除 `UNREAD` label，并复用现有远端操作失败重试队列。
 - 已接入 Gmail 删除语义：删除操作调用 `users.messages.trash` 移入垃圾箱，不做永久删除，不请求 `https://mail.google.com/` 全量权限。
-- 已补充 Gmail read-state payload 测试；仍需要真实 Gmail 测试账号验证 scope、标记和 trash 行为。
+- 已接入 Gmail `historyId` 增量同步：账号级 `provider_sync_state` JSON 保存 `gmail_history_id`；刷新 all 文件夹时优先调用 `users.history.list(startHistoryId=...)`，按变更 message id 重新获取详情并刷新本地缓存。
+- `historyId` 过期或 Gmail 返回 HTTP 404 时自动回退全量同步；history label 变化会先删除本地旧 message id 行，再按当前 `INBOX`/`SPAM`/`TRASH` label 重新 upsert，永久删除事件会清理本地缓存。
+- 已补充 Gmail read-state payload、label 文件夹映射、history id 比较和 provider sync state 解析测试；仍需要真实 Gmail 测试账号验证 scope、标记、trash 和 history 行为。
 
 ### P9.2 Gmail Incremental Sync and Remote Actions
 

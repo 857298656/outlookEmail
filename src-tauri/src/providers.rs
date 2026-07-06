@@ -13,6 +13,7 @@ use reqwest::{blocking::Client, Proxy};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -95,6 +96,14 @@ pub struct OAuthTokenResponse {
     pub refresh_token: String,
     pub expires_in: i64,
     pub scope: String,
+}
+
+pub struct GmailFetchResult {
+    pub refresh_token: String,
+    pub history_id: Option<String>,
+    pub replace_message_ids: Vec<String>,
+    pub deleted_message_ids: Vec<String>,
+    pub messages: Vec<ProviderMessage>,
 }
 
 pub fn normalize_mail_provider_id(value: &str) -> Option<&'static str> {
@@ -421,20 +430,30 @@ pub fn download_graph_attachment(
     })
 }
 
-pub fn fetch_gmail_messages(account: &AccountCredentials, folder: &str, top: usize) -> AppResult<(String, Vec<ProviderMessage>)> {
+pub fn fetch_gmail_messages(account: &AccountCredentials, folder: &str, top: usize, start_history_id: Option<&str>) -> AppResult<GmailFetchResult> {
     with_account_http_client(account, |client| {
         let token = refresh_gmail_access_token_with_client(account, client)?;
-        let targets = gmail_folder_targets(folder);
-        let mut all = Vec::new();
-        for target in targets {
-            let page = list_gmail_messages(client, &token.access_token, target.label_id, top.clamp(1, 50))?;
-            for item in page.messages.unwrap_or_default() {
-                let detail = fetch_gmail_message_detail(client, &token.access_token, &item.id)?;
-                all.push(detail.into_provider_message(target.app_folder)?);
+        if gmail_can_use_history(folder) {
+            if let Some(start_history_id) = start_history_id.filter(|value| !value.trim().is_empty()) {
+                if let Some(delta) = fetch_gmail_history_delta(client, &token.access_token, start_history_id.trim())? {
+                    return Ok(GmailFetchResult {
+                        refresh_token: token.refresh_token,
+                        history_id: delta.history_id,
+                        replace_message_ids: delta.replace_message_ids,
+                        deleted_message_ids: delta.deleted_message_ids,
+                        messages: delta.messages,
+                    });
+                }
             }
         }
-        all.sort_by(|a, b| b.received_at_sort.total_cmp(&a.received_at_sort));
-        Ok((token.refresh_token, all))
+        let full = fetch_gmail_full_messages(client, &token.access_token, folder, top)?;
+        Ok(GmailFetchResult {
+            refresh_token: token.refresh_token,
+            history_id: if gmail_can_use_history(folder) { full.history_id } else { None },
+            replace_message_ids: Vec::new(),
+            deleted_message_ids: Vec::new(),
+            messages: full.messages,
+        })
     })
 }
 
@@ -1210,6 +1229,79 @@ fn fetch_graph_attachments_metadata(client: &Client, access_token: &str, message
         .collect())
 }
 
+struct GmailFullMessages {
+    history_id: Option<String>,
+    messages: Vec<ProviderMessage>,
+}
+
+struct GmailHistoryDelta {
+    history_id: Option<String>,
+    replace_message_ids: Vec<String>,
+    deleted_message_ids: Vec<String>,
+    messages: Vec<ProviderMessage>,
+}
+
+fn fetch_gmail_full_messages(client: &Client, access_token: &str, folder: &str, top: usize) -> AppResult<GmailFullMessages> {
+    let targets = gmail_folder_targets(folder);
+    let mut all = Vec::new();
+    let mut history_id: Option<String> = None;
+    for target in targets {
+        let page = list_gmail_messages(client, access_token, target.label_id, top.clamp(1, 50))?;
+        for item in page.messages.unwrap_or_default() {
+            let detail = fetch_gmail_message_detail(client, access_token, &item.id)?;
+            history_id = max_gmail_history_id(history_id, detail.history_id.as_deref());
+            all.push(detail.into_provider_message(target.app_folder)?);
+        }
+    }
+    all.sort_by(|a, b| b.received_at_sort.total_cmp(&a.received_at_sort));
+    Ok(GmailFullMessages {
+        history_id,
+        messages: all,
+    })
+}
+
+fn fetch_gmail_history_delta(client: &Client, access_token: &str, start_history_id: &str) -> AppResult<Option<GmailHistoryDelta>> {
+    let mut page_token: Option<String> = None;
+    let mut current_history_id: Option<String> = None;
+    let mut replace_ids = HashSet::new();
+    let mut deleted_ids = HashSet::new();
+    loop {
+        let Some(page) = list_gmail_history_page(client, access_token, start_history_id, page_token.as_deref())? else {
+            return Ok(None);
+        };
+        current_history_id = max_gmail_history_id(current_history_id, page.history_id.as_deref());
+        for history in page.history.unwrap_or_default() {
+            collect_gmail_history_message_ids(history.messages_added, &mut replace_ids);
+            collect_gmail_history_message_ids(history.labels_added, &mut replace_ids);
+            collect_gmail_history_message_ids(history.labels_removed, &mut replace_ids);
+            collect_gmail_history_message_ids(history.messages_deleted, &mut deleted_ids);
+        }
+        page_token = page.next_page_token;
+        if page_token.is_none() {
+            break;
+        }
+    }
+
+    for id in &deleted_ids {
+        replace_ids.remove(id);
+    }
+
+    let mut messages = Vec::new();
+    for id in sorted_gmail_ids(&replace_ids) {
+        let detail = fetch_gmail_message_detail(client, access_token, &id)?;
+        for message in detail.into_provider_messages_for_labels()? {
+            messages.push(message);
+        }
+    }
+    messages.sort_by(|a, b| b.received_at_sort.total_cmp(&a.received_at_sort));
+    Ok(Some(GmailHistoryDelta {
+        history_id: current_history_id,
+        replace_message_ids: sorted_gmail_ids(&replace_ids),
+        deleted_message_ids: sorted_gmail_ids(&deleted_ids),
+        messages,
+    }))
+}
+
 fn list_gmail_messages(
     client: &Client,
     access_token: &str,
@@ -1234,6 +1326,38 @@ fn list_gmail_messages(
         )));
     }
     response.json().map_err(network_error)
+}
+
+fn list_gmail_history_page(
+    client: &Client,
+    access_token: &str,
+    start_history_id: &str,
+    page_token: Option<&str>,
+) -> AppResult<Option<GmailHistoryList>> {
+    let mut query = vec![
+        ("startHistoryId", start_history_id.to_string()),
+        ("maxResults", "500".to_string()),
+    ];
+    if let Some(page_token) = page_token {
+        query.push(("pageToken", page_token.to_string()));
+    }
+    let response = client
+        .get("https://gmail.googleapis.com/gmail/v1/users/me/history")
+        .bearer_auth(access_token)
+        .query(&query)
+        .send()
+        .map_err(network_error)?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Err(AppError::Internal(format!(
+            "Gmail history list failed: HTTP {} {}",
+            response.status(),
+            response.text().unwrap_or_default()
+        )));
+    }
+    response.json().map(Some).map_err(network_error)
 }
 
 fn fetch_gmail_message_detail(client: &Client, access_token: &str, message_id: &str) -> AppResult<GmailMessage> {
@@ -1326,6 +1450,43 @@ fn gmail_folder_targets(folder: &str) -> Vec<GmailFolderTarget> {
                 label_id: "TRASH",
             },
         ],
+    }
+}
+
+fn gmail_can_use_history(folder: &str) -> bool {
+    matches!(folder.trim().to_ascii_lowercase().as_str(), "" | "all")
+}
+
+fn collect_gmail_history_message_ids(changes: Vec<GmailHistoryMessageChange>, ids: &mut HashSet<String>) {
+    for change in changes {
+        if !change.message.id.trim().is_empty() {
+            ids.insert(change.message.id);
+        }
+    }
+}
+
+fn sorted_gmail_ids(ids: &HashSet<String>) -> Vec<String> {
+    let mut values = ids.iter().cloned().collect::<Vec<_>>();
+    values.sort();
+    values
+}
+
+fn max_gmail_history_id(current: Option<String>, candidate: Option<&str>) -> Option<String> {
+    let candidate = candidate?.trim();
+    if candidate.is_empty() {
+        return current;
+    }
+    match current {
+        Some(current) => {
+            let current_number = current.parse::<u128>().ok();
+            let candidate_number = candidate.parse::<u128>().ok();
+            if candidate_number > current_number {
+                Some(candidate.to_string())
+            } else {
+                Some(current)
+            }
+        }
+        None => Some(candidate.to_string()),
     }
 }
 
@@ -1911,13 +2072,42 @@ struct GmailMessageList {
 }
 
 #[derive(Debug, Deserialize)]
+struct GmailHistoryList {
+    #[serde(default)]
+    history: Option<Vec<GmailHistory>>,
+    #[serde(default, rename = "nextPageToken")]
+    next_page_token: Option<String>,
+    #[serde(default, rename = "historyId")]
+    history_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GmailHistory {
+    #[serde(default, rename = "messagesAdded")]
+    messages_added: Vec<GmailHistoryMessageChange>,
+    #[serde(default, rename = "messagesDeleted")]
+    messages_deleted: Vec<GmailHistoryMessageChange>,
+    #[serde(default, rename = "labelsAdded")]
+    labels_added: Vec<GmailHistoryMessageChange>,
+    #[serde(default, rename = "labelsRemoved")]
+    labels_removed: Vec<GmailHistoryMessageChange>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GmailHistoryMessageChange {
+    message: GmailMessageRef,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct GmailMessageRef {
     id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct GmailMessage {
     id: String,
+    #[serde(default, rename = "historyId")]
+    history_id: Option<String>,
     #[serde(default, rename = "labelIds")]
     label_ids: Vec<String>,
     #[serde(default, rename = "internalDate")]
@@ -1929,6 +2119,15 @@ struct GmailMessage {
 }
 
 impl GmailMessage {
+    fn into_provider_messages_for_labels(self) -> AppResult<Vec<ProviderMessage>> {
+        let folders = gmail_app_folders_for_labels(&self.label_ids);
+        let mut messages = Vec::new();
+        for folder in folders {
+            messages.push(self.clone().into_provider_message(folder)?);
+        }
+        Ok(messages)
+    }
+
     fn into_provider_message(self, folder: &str) -> AppResult<ProviderMessage> {
         let subject = self
             .payload
@@ -1999,7 +2198,21 @@ impl GmailMessage {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+fn gmail_app_folders_for_labels(label_ids: &[String]) -> Vec<&'static str> {
+    let mut folders = Vec::new();
+    if label_ids.iter().any(|label| label.eq_ignore_ascii_case("INBOX")) {
+        folders.push("inbox");
+    }
+    if label_ids.iter().any(|label| label.eq_ignore_ascii_case("SPAM")) {
+        folders.push("junkemail");
+    }
+    if label_ids.iter().any(|label| label.eq_ignore_ascii_case("TRASH")) {
+        folders.push("deleteditems");
+    }
+    folders
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
 struct GmailMessagePart {
     #[serde(default, rename = "mimeType")]
     mime_type: String,
@@ -2013,13 +2226,13 @@ struct GmailMessagePart {
     parts: Vec<GmailMessagePart>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 struct GmailHeader {
     name: String,
     value: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 struct GmailMessagePartBody {
     #[serde(default, rename = "attachmentId")]
     attachment_id: Option<String>,
@@ -2219,6 +2432,21 @@ mod tests {
     }
 
     #[test]
+    fn maps_gmail_labels_to_cached_folders() {
+        let labels = vec!["INBOX".to_string(), "TRASH".to_string()];
+        assert_eq!(gmail_app_folders_for_labels(&labels), vec!["inbox", "deleteditems"]);
+        let archived = vec!["CATEGORY_UPDATES".to_string()];
+        assert!(gmail_app_folders_for_labels(&archived).is_empty());
+    }
+
+    #[test]
+    fn compares_gmail_history_ids_numerically() {
+        assert_eq!(max_gmail_history_id(Some("99".to_string()), Some("100")), Some("100".to_string()));
+        assert_eq!(max_gmail_history_id(Some("101".to_string()), Some("100")), Some("101".to_string()));
+        assert_eq!(max_gmail_history_id(None, Some("42")), Some("42".to_string()));
+    }
+
+    #[test]
     fn builds_gmail_read_state_payloads() {
         assert_eq!(gmail_read_state_payload(true), json!({ "removeLabelIds": ["UNREAD"] }));
         assert_eq!(gmail_read_state_payload(false), json!({ "addLabelIds": ["UNREAD"] }));
@@ -2228,6 +2456,7 @@ mod tests {
     fn normalizes_gmail_message_payload() {
         let message = GmailMessage {
             id: "gmail-1".to_string(),
+            history_id: Some("777".to_string()),
             label_ids: vec!["INBOX".to_string(), "UNREAD".to_string()],
             internal_date: Some("1700000000000".to_string()),
             snippet: "Preview from Gmail".to_string(),

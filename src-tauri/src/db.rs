@@ -3369,6 +3369,7 @@ impl Database {
                 fallback_proxy_url_1 TEXT DEFAULT '',
                 fallback_proxy_url_2 TEXT DEFAULT '',
                 mail_retention_days INTEGER NOT NULL DEFAULT 30,
+                provider_sync_state TEXT NOT NULL DEFAULT '',
                 last_refresh_at TEXT,
                 last_refresh_status TEXT NOT NULL DEFAULT 'never',
                 last_refresh_error TEXT,
@@ -3691,6 +3692,10 @@ impl Database {
             (
                 "mail_retention_days",
                 "ALTER TABLE accounts ADD COLUMN mail_retention_days INTEGER NOT NULL DEFAULT 30",
+            ),
+            (
+                "provider_sync_state",
+                "ALTER TABLE accounts ADD COLUMN provider_sync_state TEXT NOT NULL DEFAULT ''",
             ),
         ] {
             if !columns.iter().any(|column| column == name) {
@@ -4350,7 +4355,8 @@ impl Database {
                    a.refresh_token_enc, COALESCE(a.imap_host, ''), a.imap_port, a.imap_password_enc,
                    COALESCE(a.proxy_url, ''), COALESCE(a.fallback_proxy_url_1, ''),
                    COALESCE(a.fallback_proxy_url_2, ''), COALESCE(g.proxy_url, ''),
-                   COALESCE(g.fallback_proxy_url_1, ''), COALESCE(g.fallback_proxy_url_2, '')
+                   COALESCE(g.fallback_proxy_url_1, ''), COALESCE(g.fallback_proxy_url_2, ''),
+                   COALESCE(a.provider_sync_state, '')
             FROM accounts a
             LEFT JOIN groups g ON g.id = a.group_id
             WHERE a.status = 'active' AND (?1 IS NULL OR a.id = ?1)
@@ -4375,6 +4381,7 @@ impl Database {
                 row.get::<_, String>(13)?,
                 row.get::<_, String>(14)?,
                 row.get::<_, String>(15)?,
+                row.get::<_, String>(16)?,
             ))
         })?;
 
@@ -4397,6 +4404,7 @@ impl Database {
                 group_proxy,
                 group_proxy_1,
                 group_proxy_2,
+                provider_sync_state,
             ) = row?;
             let mut proxy_chain = proxy_chain_from_values(&[&account_proxy, &account_proxy_1, &account_proxy_2])?;
             if proxy_chain.is_empty() {
@@ -4413,6 +4421,7 @@ impl Database {
                 imap_host,
                 imap_port,
                 imap_password: crypto::decrypt_text(&imap_password, key)?,
+                provider_sync_state,
                 proxy_chain,
             });
         }
@@ -4514,6 +4523,38 @@ impl Database {
                 ],
             )?;
         }
+        Ok(())
+    }
+
+    fn delete_cached_provider_messages(&self, account_id: i64, provider_message_ids: &[String]) -> AppResult<()> {
+        for message_id in provider_message_ids {
+            self.conn.execute(
+                "DELETE FROM retained_mail_messages WHERE account_id = ? AND provider_message_id = ?",
+                params![account_id, message_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn save_gmail_history_id(&self, account_id: i64, history_id: &str) -> AppResult<()> {
+        let current = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(provider_sync_state, '') FROM accounts WHERE id = ?",
+                [account_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .unwrap_or_default();
+        let mut state = serde_json::from_str::<serde_json::Value>(&current).unwrap_or_else(|_| serde_json::json!({}));
+        if !state.is_object() {
+            state = serde_json::json!({});
+        }
+        state["gmail_history_id"] = serde_json::json!(history_id.trim());
+        self.conn.execute(
+            "UPDATE accounts SET provider_sync_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            params![state.to_string(), account_id],
+        )?;
         Ok(())
     }
 
@@ -5538,12 +5579,23 @@ impl Database {
                 self.upsert_provider_messages(account.id, &messages)?;
                 Ok(messages.len())
             }),
-            MailProviderAdapter::Gmail => providers::fetch_gmail_messages(account, folder, top).and_then(|(next_refresh_token, messages)| {
-                if !next_refresh_token.is_empty() && next_refresh_token != account.refresh_token {
-                    self.save_refresh_token(account.id, &next_refresh_token)?;
+            MailProviderAdapter::Gmail => providers::fetch_gmail_messages(
+                account,
+                folder,
+                top,
+                gmail_history_id_from_state(&account.provider_sync_state).as_deref(),
+            )
+            .and_then(|result| {
+                if !result.refresh_token.is_empty() && result.refresh_token != account.refresh_token {
+                    self.save_refresh_token(account.id, &result.refresh_token)?;
                 }
-                self.upsert_provider_messages(account.id, &messages)?;
-                Ok(messages.len())
+                self.delete_cached_provider_messages(account.id, &result.replace_message_ids)?;
+                self.delete_cached_provider_messages(account.id, &result.deleted_message_ids)?;
+                self.upsert_provider_messages(account.id, &result.messages)?;
+                if let Some(history_id) = result.history_id.as_deref().filter(|value| !value.trim().is_empty()) {
+                    self.save_gmail_history_id(account.id, history_id)?;
+                }
+                Ok(result.messages.len())
             }),
         }
     }
@@ -5874,6 +5926,13 @@ fn normalize_oauth_provider(value: Option<&str>) -> AppResult<Option<String>> {
         Some("gmail") => Ok(Some("gmail".to_string())),
         _ => Err(AppError::InvalidInput(format!("unsupported OAuth provider: {provider}"))),
     }
+}
+
+fn gmail_history_id_from_state(state: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(state)
+        .ok()
+        .and_then(|value| value.get("gmail_history_id").and_then(serde_json::Value::as_str).map(str::to_string))
+        .filter(|value| !value.trim().is_empty())
 }
 
 fn oauth_account_type(provider: &str) -> String {
@@ -7177,7 +7236,10 @@ fn remote_sync_failure_from_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Re
 
 #[cfg(test)]
 mod project_tests {
-    use super::{attachment_dir, backup_dir, exports_dir, normalize_oauth_provider, normalize_project_key, Database, MailMessageRef};
+    use super::{
+        attachment_dir, backup_dir, exports_dir, gmail_history_id_from_state, normalize_oauth_provider,
+        normalize_project_key, Database, MailMessageRef,
+    };
     use crate::error::AppError;
     use crate::import::ImportedAccount;
     use crate::models::{
@@ -7399,6 +7461,16 @@ mod project_tests {
         assert_eq!(normalize_oauth_provider(Some("outlook")).expect("outlook"), Some("graph".to_string()));
         assert_eq!(normalize_oauth_provider(Some("imap")).expect("imap"), Some("imap".to_string()));
         assert!(normalize_oauth_provider(Some("qq")).is_err());
+    }
+
+    #[test]
+    fn extracts_gmail_history_id_from_provider_sync_state() {
+        assert_eq!(
+            gmail_history_id_from_state(r#"{"gmail_history_id":"12345"}"#),
+            Some("12345".to_string())
+        );
+        assert_eq!(gmail_history_id_from_state("{}"), None);
+        assert_eq!(gmail_history_id_from_state("not-json"), None);
     }
 
     #[test]

@@ -927,6 +927,7 @@ pub struct AccountCredentials {
     pub imap_host: String,
     pub imap_port: i64,
     pub imap_password: String,
+    pub provider_sync_state: String,
     pub proxy_chain: Vec<String>,
 }
 

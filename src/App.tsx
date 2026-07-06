@@ -117,6 +117,50 @@ function normalizeAccent(value?: string) {
   return /^#[0-9a-fA-F]{6}$/.test(value ?? "") ? value! : "#2563eb";
 }
 
+function searchTokens(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function matchesSearchTokens(parts: Array<string | number | null | undefined>, tokens: string[]) {
+  if (tokens.length === 0) return true;
+  const haystack = parts
+    .filter((part) => part !== null && part !== undefined)
+    .join(" ")
+    .toLowerCase();
+  return tokens.every((token) => haystack.includes(token));
+}
+
+function accountMatchesSearch(account: Account, tokens: string[]) {
+  return matchesSearchTokens(
+    [
+      account.email,
+      account.remark,
+      account.group_name,
+      account.provider,
+      account.account_type,
+      account.status,
+      formatStatus(account.status),
+      account.last_refresh_status,
+      formatStatus(account.last_refresh_status),
+      account.last_refresh_error,
+      account.forward_enabled ? "转发 已启用 enabled forwarding" : "未转发 disabled",
+      account.has_refresh_token ? "Outlook Graph OAuth" : "",
+      account.has_imap_password ? "IMAP" : "",
+      ...account.aliases,
+      ...account.tags.map((tag) => tag.name)
+    ],
+    tokens
+  );
+}
+
+function groupMatchesSearch(group: Group, tokens: string[]) {
+  return matchesSearchTokens([group.name, group.description, group.proxy_url], tokens);
+}
+
 function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -1316,6 +1360,7 @@ function MailWorkspace({
   const [rawError, setRawError] = useState<string | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [oauthSaveOpen, setOauthSaveOpen] = useState(false);
+  const [accountSearch, setAccountSearch] = useState("");
   const searchApplyTimerRef = useRef<number | null>(null);
   const selectedCount = selectedMessageIds.length;
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
@@ -1348,6 +1393,72 @@ function MailWorkspace({
     });
     return map;
   }, [accounts, groupIds]);
+  const accountSearchTokens = useMemo(() => searchTokens(accountSearch), [accountSearch]);
+  const accountSearchActive = accountSearchTokens.length > 0;
+  const accountTree = useMemo(() => {
+    if (!accountSearchActive) {
+      return { childGroupsByParent, accountsByGroup };
+    }
+
+    const groupById = new Map(groups.map((group) => [group.id, group]));
+    const visibleGroupIds = new Set<number>();
+    const visibleAccountIds = new Set<number>();
+
+    const normalizeGroupId = (groupId: number | null) => (groupId !== null && groupById.has(groupId) ? groupId : null);
+
+    const markGroupAncestors = (groupId: number | null) => {
+      const visited = new Set<number>();
+      let currentId = normalizeGroupId(groupId);
+      while (currentId !== null && !visited.has(currentId)) {
+        visited.add(currentId);
+        visibleGroupIds.add(currentId);
+        currentId = normalizeGroupId(groupById.get(currentId)?.parent_id ?? null);
+      }
+    };
+
+    const markGroupAndDescendants = (groupId: number, visited = new Set<number>()) => {
+      if (!groupById.has(groupId) || visited.has(groupId)) return;
+      visited.add(groupId);
+      visibleGroupIds.add(groupId);
+      (accountsByGroup.get(groupId) ?? []).forEach((account) => visibleAccountIds.add(account.id));
+      (childGroupsByParent.get(groupId) ?? []).forEach((child) => markGroupAndDescendants(child.id, visited));
+    };
+
+    accounts.forEach((account) => {
+      if (!accountMatchesSearch(account, accountSearchTokens)) return;
+      visibleAccountIds.add(account.id);
+      markGroupAncestors(account.group_id);
+    });
+
+    groups.forEach((group) => {
+      if (!groupMatchesSearch(group, accountSearchTokens)) return;
+      markGroupAncestors(group.id);
+      markGroupAndDescendants(group.id);
+    });
+
+    const nextChildGroupsByParent = new Map<number | null, Group[]>();
+    groups.forEach((group) => {
+      if (!visibleGroupIds.has(group.id)) return;
+      const key = group.parent_id !== null && visibleGroupIds.has(group.parent_id) ? group.parent_id : null;
+      const list = nextChildGroupsByParent.get(key) ?? [];
+      list.push(group);
+      nextChildGroupsByParent.set(key, list);
+    });
+
+    const nextAccountsByGroup = new Map<number | null, Account[]>();
+    accounts.forEach((account) => {
+      if (!visibleAccountIds.has(account.id)) return;
+      const key = account.group_id !== null && visibleGroupIds.has(account.group_id) ? account.group_id : null;
+      const list = nextAccountsByGroup.get(key) ?? [];
+      list.push(account);
+      nextAccountsByGroup.set(key, list);
+    });
+
+    return { childGroupsByParent: nextChildGroupsByParent, accountsByGroup: nextAccountsByGroup };
+  }, [accountSearchActive, accountSearchTokens, accounts, accountsByGroup, childGroupsByParent, groups]);
+  const treeChildGroupsByParent = accountTree.childGroupsByParent;
+  const treeAccountsByGroup = accountTree.accountsByGroup;
+  const hasAccountTreeItems = (treeChildGroupsByParent.get(null)?.length ?? 0) > 0 || (treeAccountsByGroup.get(null)?.length ?? 0) > 0;
 
   useEffect(() => {
     setDraftFilters(filters);
@@ -1430,6 +1541,16 @@ function MailWorkspace({
     return { "--tree-indent": `${depth * 16}px` } as CSSProperties;
   }
 
+  function visibleTreeGroupAccountCount(group: Group): number {
+    if (!accountSearchActive) return group.account_count;
+    const directCount = treeAccountsByGroup.get(group.id)?.length ?? 0;
+    const childCount = (treeChildGroupsByParent.get(group.id) ?? []).reduce(
+      (total, child) => total + visibleTreeGroupAccountCount(child),
+      0
+    );
+    return directCount + childCount;
+  }
+
   function renderTreeAccount(account: Account, depth: number) {
     return (
       <button
@@ -1448,8 +1569,8 @@ function MailWorkspace({
   }
 
   function renderTreeGroup(group: Group, depth: number): ReactNode {
-    const childGroups = childGroupsByParent.get(group.id) ?? [];
-    const groupAccounts = accountsByGroup.get(group.id) ?? [];
+    const childGroups = treeChildGroupsByParent.get(group.id) ?? [];
+    const groupAccounts = treeAccountsByGroup.get(group.id) ?? [];
 
     return (
       <div className="mailTreeNode" key={`group-${group.id}`}>
@@ -1460,7 +1581,7 @@ function MailWorkspace({
         >
           <span className="dot" style={{ backgroundColor: group.color }} />
           <span className="mailTreeLabel">{group.name}</span>
-          <small>{group.account_count}</small>
+          <small>{visibleTreeGroupAccountCount(group)}</small>
         </button>
         {childGroups.map((child) => renderTreeGroup(child, depth + 1))}
         {groupAccounts.map((account) => renderTreeAccount(account, depth + 1))}
@@ -1503,26 +1624,32 @@ function MailWorkspace({
             </button>
           </div>
         </div>
-        <div className="searchBox">
+        <label className="searchBox">
           <Search size={15} />
-          <span>账号搜索即将支持</span>
-        </div>
-        <div className="mailTree">
-          {(childGroupsByParent.get(null) ?? []).map((group) => renderTreeGroup(group, 0))}
-          {(accountsByGroup.get(null) ?? []).map((account) => renderTreeAccount(account, 0))}
-        </div>
-        {accounts.length === 0 && <EmptyState icon={<Mail size={24} />} text="导入账号后开始使用。" />}
+          <input
+            value={accountSearch}
+            placeholder="搜索邮箱、分组、别名、备注或标签"
+            onChange={(event) => setAccountSearch(event.target.value)}
+          />
+          {accountSearch && (
+            <button className="searchClear" type="button" title="清空搜索" onClick={() => setAccountSearch("")}>
+              <X size={14} />
+            </button>
+          )}
+        </label>
+        {hasAccountTreeItems ? (
+          <div className="mailTree">
+            {(treeChildGroupsByParent.get(null) ?? []).map((group) => renderTreeGroup(group, 0))}
+            {(treeAccountsByGroup.get(null) ?? []).map((account) => renderTreeAccount(account, 0))}
+          </div>
+        ) : (
+          <EmptyState icon={<Mail size={24} />} text={accountSearchActive ? "没有匹配的账号或分组。" : "导入账号后开始使用。"} />
+        )}
       </aside>
 
       <section className="pane messagePane">
         <div className="paneHeader">
           <h2>邮件</h2>
-          <select className="select" value={folder} onChange={(event) => onFolderChange(event.target.value)}>
-            <option value="all">全部</option>
-            <option value="inbox">收件箱</option>
-            <option value="junkemail">垃圾邮件</option>
-            <option value="deleteditems">已删除</option>
-          </select>
         </div>
         <div className="messageTools">
           <label className="searchBox messageSearch">
@@ -1537,6 +1664,12 @@ function MailWorkspace({
             />
           </label>
           <div className="filterRow">
+            <select className="select" value={folder} onChange={(event) => onFolderChange(event.target.value)}>
+              <option value="all">全部</option>
+              <option value="inbox">收件箱</option>
+              <option value="junkemail">垃圾邮件</option>
+              <option value="deleteditems">已删除</option>
+            </select>
             <select
               className="select"
               value={draftFilters.readState}
@@ -1893,23 +2026,13 @@ function AccountsView({
   const [batchTagId, setBatchTagId] = useState<number | "">(tags[0]?.id ?? "");
   const [secretExportPassword, setSecretExportPassword] = useState("");
   const [secretExportConfirm, setSecretExportConfirm] = useState("");
+  const accountSearchTokens = useMemo(() => searchTokens(accountSearch), [accountSearch]);
   const visibleAccounts = useMemo(() => {
-    const keyword = accountSearch.trim().toLowerCase();
     return accounts.filter((account) => {
       if (selectedManageGroupId !== "all" && account.group_id !== selectedManageGroupId) return false;
-      if (!keyword) return true;
-      const haystack = [
-        account.email,
-        account.remark,
-        account.group_name ?? "",
-        ...account.aliases,
-        ...account.tags.map((tag) => tag.name)
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(keyword);
+      return accountMatchesSearch(account, accountSearchTokens);
     });
-  }, [accounts, accountSearch, selectedManageGroupId]);
+  }, [accounts, accountSearchTokens, selectedManageGroupId]);
   const authAccount = accounts.find((account) => account.id === authAccountId);
   const selectedAccountIdSet = useMemo(() => new Set(selectedAccountIds), [selectedAccountIds]);
   const visibleAccountIds = useMemo(() => visibleAccounts.map((account) => account.id), [visibleAccounts]);
@@ -3029,21 +3152,17 @@ function RefreshManagementView({
   const successCount = accounts.filter((account) => account.last_refresh_status === "success").length;
   const neverCount = accounts.filter((account) => account.last_refresh_status === "never").length;
   const selectedSet = useMemo(() => new Set(selectedAccountIds), [selectedAccountIds]);
+  const accountSearchTokens = useMemo(() => searchTokens(accountSearch), [accountSearch]);
   const visibleAccounts = useMemo(() => {
-    const keyword = accountSearch.trim().toLowerCase();
     return accounts.filter((account) => {
       if (accountFilter === "failed" && account.last_refresh_status !== "failed") return false;
       if (accountFilter === "success" && account.last_refresh_status !== "success") return false;
       if (accountFilter === "never" && account.last_refresh_status !== "never") return false;
       if (accountFilter === "ready" && !isRefreshReady(account)) return false;
       if (accountFilter === "missing" && isRefreshReady(account)) return false;
-      if (!keyword) return true;
-      return [account.email, account.group_name ?? "", account.remark, account.last_refresh_error ?? "", ...account.aliases]
-        .join(" ")
-        .toLowerCase()
-        .includes(keyword);
+      return accountMatchesSearch(account, accountSearchTokens);
     });
-  }, [accounts, accountFilter, accountSearch]);
+  }, [accounts, accountFilter, accountSearchTokens]);
   const visibleAccountIds = useMemo(() => visibleAccounts.map((account) => account.id), [visibleAccounts]);
   const allVisibleSelected = visibleAccountIds.length > 0 && visibleAccountIds.every((accountId) => selectedSet.has(accountId));
   const filteredRefreshLogs = useMemo(

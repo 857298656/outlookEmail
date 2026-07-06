@@ -388,7 +388,7 @@ button:disabled {
 
 .paneHeader .select,
 .filterRow .select,
-.accountTagFilter {
+.accountCredentialFilter {
   appearance: none;
   padding-right: 38px;
   background-color: #fff;
@@ -600,8 +600,8 @@ button:disabled {
   margin: 0;
 }
 
-.accountTagFilter {
-  flex: 0 0 112px;
+.accountCredentialFilter {
+  flex: 0 0 116px;
   min-width: 0;
   height: 36px;
 }

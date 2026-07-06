@@ -80,6 +80,7 @@ type MailFilters = {
   sortBy: "date" | "subject" | "sender" | "read" | "attachments" | "folder";
   sortOrder: "asc" | "desc";
 };
+type AccountCredentialFilter = "all" | "outlook" | "imap" | "password" | "missing";
 
 const colors = ["#111827", "#374151", "#4b5563", "#64748b", "#0f172a", "#52525b"];
 const mailPageSize = 100;
@@ -159,6 +160,14 @@ function accountMatchesSearch(account: Account, tokens: string[]) {
 
 function groupMatchesSearch(group: Group, tokens: string[]) {
   return matchesSearchTokens([group.name, group.description, group.proxy_url], tokens);
+}
+
+function accountMatchesCredentialFilter(account: Account, filter: AccountCredentialFilter) {
+  if (filter === "all") return true;
+  if (filter === "outlook") return account.has_refresh_token;
+  if (filter === "imap") return account.has_imap_password;
+  if (filter === "password") return account.has_password;
+  return !account.has_refresh_token && !account.has_imap_password && !account.has_password;
 }
 
 function App() {
@@ -629,7 +638,6 @@ function App() {
             groups={groups}
             settings={settings}
             accounts={accounts}
-            tags={tags}
             messages={messages}
             selectedGroupId={selectedGroupId}
             selectedAccountId={selectedAccountId}
@@ -1275,7 +1283,6 @@ function MailWorkspace({
   groups,
   settings,
   accounts,
-  tags,
   messages,
   selectedGroupId,
   selectedAccountId,
@@ -1316,7 +1323,6 @@ function MailWorkspace({
   groups: Group[];
   settings: Settings | null;
   accounts: Account[];
-  tags: Tag[];
   messages: MailMessage[];
   selectedGroupId: number | "all";
   selectedAccountId?: number;
@@ -1364,7 +1370,7 @@ function MailWorkspace({
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [oauthSaveOpen, setOauthSaveOpen] = useState(false);
   const [accountSearch, setAccountSearch] = useState("");
-  const [accountTagFilter, setAccountTagFilter] = useState<number | "all">("all");
+  const [accountCredentialFilter, setAccountCredentialFilter] = useState<AccountCredentialFilter>("all");
   const searchApplyTimerRef = useRef<number | null>(null);
   const selectedCount = selectedMessageIds.length;
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
@@ -1399,8 +1405,8 @@ function MailWorkspace({
   }, [accounts, groupIds]);
   const accountSearchTokens = useMemo(() => searchTokens(accountSearch), [accountSearch]);
   const accountSearchActive = accountSearchTokens.length > 0;
-  const accountTagFilterActive = accountTagFilter !== "all";
-  const accountFilterActive = accountSearchActive || accountTagFilterActive;
+  const accountCredentialFilterActive = accountCredentialFilter !== "all";
+  const accountFilterActive = accountSearchActive || accountCredentialFilterActive;
   const accountTree = useMemo(() => {
     if (!accountFilterActive) {
       return { childGroupsByParent, accountsByGroup };
@@ -1411,9 +1417,6 @@ function MailWorkspace({
     const visibleAccountIds = new Set<number>();
 
     const normalizeGroupId = (groupId: number | null) => (groupId !== null && groupById.has(groupId) ? groupId : null);
-    const matchesTagFilter = (account: Account) =>
-      accountTagFilter === "all" || account.tags.some((tag) => tag.id === accountTagFilter);
-
     const markGroupAncestors = (groupId: number | null) => {
       const visited = new Set<number>();
       let currentId = normalizeGroupId(groupId);
@@ -1429,13 +1432,13 @@ function MailWorkspace({
       visited.add(groupId);
       visibleGroupIds.add(groupId);
       (accountsByGroup.get(groupId) ?? []).forEach((account) => {
-        if (matchesTagFilter(account)) visibleAccountIds.add(account.id);
+        if (accountMatchesCredentialFilter(account, accountCredentialFilter)) visibleAccountIds.add(account.id);
       });
       (childGroupsByParent.get(groupId) ?? []).forEach((child) => markGroupAndDescendants(child.id, visited));
     };
 
     accounts.forEach((account) => {
-      if (!matchesTagFilter(account) || !accountMatchesSearch(account, accountSearchTokens)) return;
+      if (!accountMatchesCredentialFilter(account, accountCredentialFilter) || !accountMatchesSearch(account, accountSearchTokens)) return;
       visibleAccountIds.add(account.id);
       markGroupAncestors(account.group_id);
     });
@@ -1465,7 +1468,7 @@ function MailWorkspace({
     });
 
     return { childGroupsByParent: nextChildGroupsByParent, accountsByGroup: nextAccountsByGroup };
-  }, [accountFilterActive, accountSearchActive, accountSearchTokens, accountTagFilter, accounts, accountsByGroup, childGroupsByParent, groups]);
+  }, [accountCredentialFilter, accountFilterActive, accountSearchActive, accountSearchTokens, accounts, accountsByGroup, childGroupsByParent, groups]);
   const treeChildGroupsByParent = accountTree.childGroupsByParent;
   const treeAccountsByGroup = accountTree.accountsByGroup;
   const hasAccountTreeItems = (treeChildGroupsByParent.get(null)?.length ?? 0) > 0 || (treeAccountsByGroup.get(null)?.length ?? 0) > 0;
@@ -1473,12 +1476,6 @@ function MailWorkspace({
   useEffect(() => {
     setDraftFilters(filters);
   }, [filters]);
-
-  useEffect(() => {
-    if (accountTagFilter !== "all" && !tags.some((tag) => tag.id === accountTagFilter)) {
-      setAccountTagFilter("all");
-    }
-  }, [accountTagFilter, tags]);
 
   useEffect(() => {
     return () => {
@@ -1655,20 +1652,16 @@ function MailWorkspace({
             )}
           </label>
           <select
-            className="select accountTagFilter"
-            value={accountTagFilter}
-            title="按标签筛选账号"
-            onChange={(event) => {
-              const value = event.target.value;
-              setAccountTagFilter(value === "all" ? "all" : Number(value));
-            }}
+            className="select accountCredentialFilter"
+            value={accountCredentialFilter}
+            title="按凭据筛选账号"
+            onChange={(event) => setAccountCredentialFilter(event.target.value as AccountCredentialFilter)}
           >
-            <option value="all">全部标签</option>
-            {tags.map((tag) => (
-              <option value={tag.id} key={tag.id}>
-                {tag.name}
-              </option>
-            ))}
+            <option value="all">全部凭据</option>
+            <option value="outlook">Outlook</option>
+            <option value="imap">IMAP</option>
+            <option value="password">账号密码</option>
+            <option value="missing">缺少凭据</option>
           </select>
         </div>
         {hasAccountTreeItems ? (
@@ -1677,7 +1670,7 @@ function MailWorkspace({
             {(treeAccountsByGroup.get(null) ?? []).map((account) => renderTreeAccount(account, 0))}
           </div>
         ) : (
-          <EmptyState icon={<Mail size={24} />} text={accountFilterActive ? "没有匹配的账号、标签或分组。" : "导入账号后开始使用。"} />
+          <EmptyState icon={<Mail size={24} />} text={accountFilterActive ? "没有匹配的账号、凭据或分组。" : "导入账号后开始使用。"} />
         )}
       </aside>
 

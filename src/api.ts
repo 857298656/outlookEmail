@@ -46,6 +46,14 @@ const defaultGraphOAuthScope =
   "offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read";
 const encodeOAuthQueryValue = (value: string) => encodeURIComponent(value).replace(/%20/g, "+");
 
+async function mockPkceS256Challenge(codeVerifier: string | undefined): Promise<string> {
+  const verifier = codeVerifier?.trim();
+  if (!verifier || !globalThis.crypto?.subtle) return "";
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  const binary = Array.from(new Uint8Array(digest), (byte) => String.fromCharCode(byte)).join("");
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
 const defaultSettings: Settings = {
   graph_client_id: defaultGraphClientId,
   oauth_redirect_uri: defaultOAuthRedirectUri,
@@ -651,7 +659,12 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     case "test_cloudflare_channel":
       return { success: true, message: "Cloudflare channel connected", refreshed: 1, failed: 0 } as T;
     case "generate_oauth_auth_url": {
-      const input = args?.input as { client_id: string; redirect_uri: string; login_hint?: string; provider?: string };
+      const input = args?.input as { client_id: string; redirect_uri: string; login_hint?: string; provider?: string; code_verifier?: string };
+      if (input.provider === "gmail") {
+        const codeChallenge = await mockPkceS256Challenge(input.code_verifier);
+        const pkceQuery = codeChallenge ? `&code_challenge=${encodeOAuthQueryValue(codeChallenge)}&code_challenge_method=S256` : "";
+        return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeOAuthQueryValue(input.client_id)}&response_type=code&redirect_uri=${encodeOAuthQueryValue(input.redirect_uri)}&scope=${encodeOAuthQueryValue("https://www.googleapis.com/auth/gmail.readonly")}&state=12345&access_type=offline&prompt=consent${pkceQuery}${input.login_hint ? `&login_hint=${encodeOAuthQueryValue(input.login_hint)}` : ""}` as T;
+      }
       const scope =
         input.provider === "imap"
           ? "offline_access https://outlook.office.com/IMAP.AccessAsUser.All"
@@ -661,7 +674,9 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     case "exchange_oauth_token": {
       const input = args?.input as { account_id?: number; provider?: string };
       const scope =
-        input.provider === "imap"
+        input.provider === "gmail"
+          ? "https://www.googleapis.com/auth/gmail.readonly"
+          : input.provider === "imap"
           ? "offline_access https://outlook.office.com/IMAP.AccessAsUser.All"
           : defaultGraphOAuthScope;
       return {
@@ -674,7 +689,8 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       } as T;
     }
     case "save_oauth_account": {
-      const input = args?.input as { email: string; group_id?: number | null; client_id: string; refresh_token?: string };
+      const input = args?.input as { email: string; group_id?: number | null; client_id: string; refresh_token?: string; provider?: string };
+      const provider = input.provider ?? "graph";
       const account: Account = {
         id: Date.now(),
         email: input.email,
@@ -682,8 +698,8 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         group_name: mockGroups.find((group) => group.id === input.group_id)?.name ?? null,
         remark: "",
         status: "active",
-        provider: "graph",
-        account_type: "graph",
+        provider,
+        account_type: providerAccountType(provider),
         forward_enabled: false,
         last_refresh_status: "authorized",
         last_refresh_error: null,
@@ -704,7 +720,13 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         mail_retention_days: 30
       };
       mockAccounts = [account, ...mockAccounts.filter((item) => item.email !== account.email)];
-      return { success: true, account, scope: defaultGraphOAuthScope, expires_in: 3600, refresh_token_preview: "mock...oken" } as T;
+      return {
+        success: true,
+        account,
+        scope: provider === "gmail" ? "https://www.googleapis.com/auth/gmail.readonly" : defaultGraphOAuthScope,
+        expires_in: 3600,
+        refresh_token_preview: "mock...oken"
+      } as T;
     }
     case "open_external_url": {
       const url = (args?.url as string | undefined)?.trim();
@@ -1423,10 +1445,10 @@ export const api = {
   }) => call<CloudflareChannel>("upsert_cloudflare_channel", { input }),
   deleteCloudflareChannel: (channelId: number) => call<void>("delete_cloudflare_channel", { channelId }),
   testCloudflareChannel: (channelId: number) => call<JobResult>("test_cloudflare_channel", { channelId }),
-  generateOAuthAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) =>
+  generateOAuthAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string; code_verifier?: string }) =>
     call<string>("generate_oauth_auth_url", { input }),
   openExternalUrl: (url: string) => call<void>("open_external_url", { url }),
-  exchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) =>
+  exchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string; code_verifier?: string }) =>
     call<OAuthTokenResult>("exchange_oauth_token", { input }),
   saveOAuthAccount: (input: OAuthSaveAccountInput) =>
     call<OAuthSaveAccountResult>("save_oauth_account", { input }),

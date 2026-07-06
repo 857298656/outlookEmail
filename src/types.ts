@@ -82,6 +82,7 @@ export type OAuthSaveAccountInput = {
   code_or_url?: string;
   refresh_token?: string;
   provider?: string;
+  code_verifier?: string;
 };
 
 export type OAuthSaveAccountResult = {

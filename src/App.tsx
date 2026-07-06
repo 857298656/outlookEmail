@@ -89,6 +89,8 @@ type MailFilters = {
   sortOrder: "asc" | "desc";
 };
 type AccountCredentialFilter = "all" | "outlook" | "gmail" | "qq" | "netease_163" | "imap";
+type OAuthAuthUrlRequest = { client_id: string; redirect_uri: string; login_hint?: string; provider?: string; code_verifier?: string };
+type OAuthTokenExchangeRequest = { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string; code_verifier?: string };
 
 const colors = ["#111827", "#374151", "#4b5563", "#64748b", "#0f172a", "#52525b"];
 const mailPageSize = 100;
@@ -1357,8 +1359,8 @@ function MailWorkspace({
   onCreateMailShare: (messageIds: number[], expiresInDays: number) => void;
   onRevokeMailShare: (shareId: number) => void;
   onImportAccounts: (raw: string, groupId: number | null) => Promise<void> | void;
-  onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => Promise<string>;
-  onPreviewOAuthToken: (input: { client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => Promise<OAuthTokenResult>;
+  onGenerateOAuthUrl: (input: OAuthAuthUrlRequest) => Promise<string>;
+  onPreviewOAuthToken: (input: OAuthTokenExchangeRequest) => Promise<OAuthTokenResult>;
   onSaveOAuthAccount: (input: OAuthSaveAccountInput) => Promise<OAuthSaveAccountResult>;
   onDownloadAttachment: (message: MailMessage, attachmentId: string) => void | Promise<void>;
   onDownloadAllAttachments: (message: MailMessage) => Promise<void>;
@@ -1638,7 +1640,7 @@ function MailWorkspace({
             <button className="iconMini" title="导入账号" onClick={() => setImportDialogOpen(true)} disabled={busy}>
               <Upload size={16} />
             </button>
-            <button className="iconMini" title="授权保存 Outlook 账号" onClick={() => setOauthSaveOpen(true)} disabled={busy}>
+            <button className="iconMini" title="授权保存 OAuth 账号" onClick={() => setOauthSaveOpen(true)} disabled={busy}>
               <KeyRound size={16} />
             </button>
           </div>
@@ -2056,8 +2058,8 @@ function AccountsView({
   onExportAccountSecrets: (accountIds: number[], password: string, confirm: string) => void;
   onUpdateAccount: (input: Parameters<typeof api.updateAccount>[0]) => void;
   onRevealAccountSecrets: (input: Parameters<typeof api.revealAccountSecrets>[0]) => Promise<Awaited<ReturnType<typeof api.revealAccountSecrets>>>;
-  onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => Promise<string>;
-  onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => void;
+  onGenerateOAuthUrl: (input: OAuthAuthUrlRequest) => Promise<string>;
+  onExchangeOAuthToken: (input: OAuthTokenExchangeRequest) => void;
 }) {
   const [selectedManageGroupId, setSelectedManageGroupId] = useState<number | "all">("all");
   const [groupSettingsOpen, setGroupSettingsOpen] = useState(false);
@@ -2676,6 +2678,7 @@ function GroupSettingsDialog({
 }
 
 type OAuthAccountSaveDraft = {
+  provider: string;
   email: string;
   password: string;
   client_id: string;
@@ -2815,8 +2818,8 @@ function OAuthAccountSaveDialog({
   selectedGroupId?: number | "all";
   busy: boolean;
   onClose: () => void;
-  onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => Promise<string>;
-  onPreviewOAuthToken: (input: { client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => Promise<OAuthTokenResult>;
+  onGenerateOAuthUrl: (input: OAuthAuthUrlRequest) => Promise<string>;
+  onPreviewOAuthToken: (input: OAuthTokenExchangeRequest) => Promise<OAuthTokenResult>;
   onSaveOAuthAccount: (input: OAuthSaveAccountInput) => Promise<OAuthSaveAccountResult>;
 }) {
   const initialGroupId =
@@ -2824,6 +2827,7 @@ function OAuthAccountSaveDialog({
       ? selectedGroupId
       : groups[0]?.id ?? null;
   const [draft, setDraft] = useState<OAuthAccountSaveDraft>({
+    provider: "graph",
     email: "",
     password: "",
     client_id: "",
@@ -2832,7 +2836,9 @@ function OAuthAccountSaveDialog({
     callback_url: ""
   });
   const [authUrl, setAuthUrl] = useState("");
+  const [oauthCodeVerifier, setOauthCodeVerifier] = useState("");
   const [preview, setPreview] = useState<{
+    provider: string;
     email: string;
     password: string;
     client_id: string;
@@ -2848,7 +2854,9 @@ function OAuthAccountSaveDialog({
   const [localError, setLocalError] = useState<string | null>(null);
   const [localNotice, setLocalNotice] = useState<string | null>(null);
   const redirectUri = settings?.oauth_redirect_uri || defaultOAuthRedirectUri;
-  const defaultClientId = settings?.graph_client_id || defaultGraphClientId;
+  const selectedProvider = accountProviderDefinition(draft.provider);
+  const defaultClientId = draft.provider === "graph" ? settings?.graph_client_id || defaultGraphClientId : "";
+  const activeClientId = draft.client_id.trim() || defaultClientId;
   const loading = busy || localBusy !== null;
 
   useEffect(() => {
@@ -2860,14 +2868,25 @@ function OAuthAccountSaveDialog({
 
   useEffect(() => {
     let cancelled = false;
-    const clientId = draft.client_id.trim() || defaultClientId;
+    const clientId = activeClientId;
+    const codeVerifier = draft.provider === "gmail" ? createPkceVerifier() : "";
+
+    if (!clientId) {
+      setAuthUrl("");
+      setOauthCodeVerifier("");
+      return () => {
+        cancelled = true;
+      };
+    }
 
     setLocalBusy("url");
+    setOauthCodeVerifier(codeVerifier);
     onGenerateOAuthUrl({
       client_id: clientId,
       redirect_uri: redirectUri,
       login_hint: draft.email.trim() || undefined,
-      provider: "graph"
+      provider: draft.provider,
+      code_verifier: codeVerifier || undefined
     })
       .then((url) => {
         if (!cancelled) setAuthUrl(url);
@@ -2882,10 +2901,10 @@ function OAuthAccountSaveDialog({
     return () => {
       cancelled = true;
     };
-  }, [defaultClientId, draft.client_id, draft.email, redirectUri, onGenerateOAuthUrl]);
+  }, [activeClientId, draft.email, draft.provider, redirectUri, onGenerateOAuthUrl]);
 
   function updateDraft(next: Partial<OAuthAccountSaveDraft>) {
-    const shouldResetPreview = "client_id" in next || "callback_url" in next;
+    const shouldResetPreview = "provider" in next || "client_id" in next || "callback_url" in next;
     setDraft((current) => ({ ...current, ...next }));
     if (shouldResetPreview) {
       setPreview(null);
@@ -2895,6 +2914,8 @@ function OAuthAccountSaveDialog({
   }
 
   function validateBase(requireCallback: boolean) {
+    if (!activeClientId.trim()) return `请填写 ${selectedProvider.label} Client ID`;
+    if (draft.provider === "gmail" && !oauthCodeVerifier) return "请先生成 Gmail 授权链接";
     if (requireCallback && !draft.callback_url.trim()) return "请粘贴授权后的完整回调 URL";
     return null;
   }
@@ -2939,17 +2960,19 @@ function OAuthAccountSaveDialog({
     setLocalNotice(null);
     try {
       const result = await onPreviewOAuthToken({
-        client_id: draft.client_id.trim() || defaultClientId,
+        client_id: activeClientId,
         redirect_uri: redirectUri,
         code_or_url: draft.callback_url.trim(),
-        provider: "graph"
+        provider: draft.provider,
+        code_verifier: oauthCodeVerifier || undefined
       });
       if (!result.refresh_token) {
         throw new Error("OAuth 响应没有返回 refresh token");
       }
       const group = groups.find((item) => item.id === draft.group_id);
-      const clientId = draft.client_id.trim() || defaultClientId;
+      const clientId = activeClientId;
       setPreview({
+        provider: draft.provider,
         email: draft.email.trim(),
         password: draft.password,
         client_id: clientId,
@@ -2989,11 +3012,12 @@ function OAuthAccountSaveDialog({
         password: draft.password || undefined,
         group_id: draft.group_id ?? undefined,
         forward_enabled: draft.forward_enabled,
-        client_id: preview?.client_id ?? (draft.client_id.trim() || defaultClientId),
+        client_id: preview?.client_id ?? activeClientId,
         redirect_uri: redirectUri,
         code_or_url: preview ? undefined : draft.callback_url.trim(),
         refresh_token: preview?.refresh_token,
-        provider: "graph"
+        provider: draft.provider,
+        code_verifier: oauthCodeVerifier || undefined
       });
       onClose();
     } catch (err) {
@@ -3016,7 +3040,7 @@ function OAuthAccountSaveDialog({
             <span className="oauthDialogIcon">
               <KeyRound size={18} />
             </span>
-            <h2 id="oauthSaveTitle">授权并保存 Outlook 账号</h2>
+            <h2 id="oauthSaveTitle">授权并保存 OAuth 账号</h2>
           </div>
           <button className="iconMini" title="关闭" disabled={loading} onClick={onClose}>
             <X size={18} />
@@ -3029,11 +3053,18 @@ function OAuthAccountSaveDialog({
             <p>预览只需要回调 URL；保存账号时需要邮箱，密码和目标分组可稍后补充。</p>
             <div className="oauthFieldGrid">
               <label className="field grow">
+                服务商
+                <select className="select" value={draft.provider} onChange={(event) => updateDraft({ provider: event.target.value })}>
+                  <option value="graph">Outlook</option>
+                  <option value="gmail">Gmail</option>
+                </select>
+              </label>
+              <label className="field grow">
                 邮箱账号
                 <input
                   className="input"
                   value={draft.email}
-                  placeholder="your@outlook.com"
+                  placeholder={draft.provider === "gmail" ? "your@gmail.com" : "your@outlook.com"}
                   onChange={(event) => updateDraft({ email: event.target.value })}
                 />
               </label>
@@ -3048,11 +3079,11 @@ function OAuthAccountSaveDialog({
                 />
               </label>
               <label className="field grow">
-                Microsoft Client ID
+                {selectedProvider.label} Client ID
                 <input
                   className="input"
                   value={draft.client_id}
-                  placeholder="留空使用默认 Client ID"
+                  placeholder={draft.provider === "graph" ? "留空使用默认 Client ID" : "Google OAuth Client ID"}
                   onChange={(event) => updateDraft({ client_id: event.target.value })}
                 />
               </label>
@@ -3084,7 +3115,7 @@ function OAuthAccountSaveDialog({
           <section className="oauthStep">
             <h3>步骤 1: 打开授权页面</h3>
             <div className="oauthUrlLine">
-              <input className="input grow monoInput" readOnly value={authUrl} placeholder="正在准备 Microsoft 授权链接" />
+              <input className="input grow monoInput" readOnly value={authUrl} placeholder={`正在准备 ${selectedProvider.label} 授权链接`} />
               <button className="button secondary" disabled={loading || !authUrl} onClick={handleCopyUrl}>
                 <Copy size={16} />
                 复制
@@ -3115,6 +3146,10 @@ function OAuthAccountSaveDialog({
                 保存预览
               </div>
               <div className="oauthFieldGrid">
+                <label className="field grow">
+                  服务商
+                  <input className="input" readOnly value={accountProviderLabel(preview.provider)} />
+                </label>
                 <label className="field grow">
                   邮箱
                   <input className="input" readOnly value={draft.email.trim() || "未填写"} />
@@ -4226,15 +4261,17 @@ function AccountAuthDialog({
   onClose: () => void;
   onSave: (input: Parameters<typeof api.updateAccount>[0]) => void;
   onRevealAccountSecrets: (input: Parameters<typeof api.revealAccountSecrets>[0]) => Promise<Awaited<ReturnType<typeof api.revealAccountSecrets>>>;
-  onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => Promise<string>;
-  onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => void;
+  onGenerateOAuthUrl: (input: OAuthAuthUrlRequest) => Promise<string>;
+  onExchangeOAuthToken: (input: OAuthTokenExchangeRequest) => void;
 }) {
   const [oauthUrl, setOauthUrl] = useState("");
   const [oauthCallback, setOauthCallback] = useState("");
+  const [oauthCodeVerifier, setOauthCodeVerifier] = useState("");
 
   useEffect(() => {
     setOauthUrl("");
     setOauthCallback("");
+    setOauthCodeVerifier("");
   }, [account.id]);
 
   return (
@@ -4266,7 +4303,10 @@ function AccountAuthDialog({
             hideHeader
             oauthUrl={oauthUrl}
             oauthCallback={oauthCallback}
+            oauthCodeVerifier={oauthCodeVerifier}
+            onOauthUrlChange={setOauthUrl}
             onOauthCallbackChange={setOauthCallback}
+            onOauthCodeVerifierChange={setOauthCodeVerifier}
             onSave={onSave}
             onRevealAccountSecrets={onRevealAccountSecrets}
             onGenerateOAuthUrl={async (input) => {
@@ -4288,7 +4328,10 @@ function AccountEditor({
   busy,
   oauthUrl,
   oauthCallback,
+  oauthCodeVerifier,
+  onOauthUrlChange,
   onOauthCallbackChange,
+  onOauthCodeVerifierChange,
   onSave,
   onRevealAccountSecrets,
   onGenerateOAuthUrl,
@@ -4303,11 +4346,14 @@ function AccountEditor({
   hideHeader?: boolean;
   oauthUrl: string;
   oauthCallback: string;
+  oauthCodeVerifier: string;
+  onOauthUrlChange: (value: string) => void;
   onOauthCallbackChange: (value: string) => void;
+  onOauthCodeVerifierChange: (value: string) => void;
   onSave: (input: Parameters<typeof api.updateAccount>[0]) => void;
   onRevealAccountSecrets: (input: Parameters<typeof api.revealAccountSecrets>[0]) => Promise<Awaited<ReturnType<typeof api.revealAccountSecrets>>>;
-  onGenerateOAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string }) => void;
-  onExchangeOAuthToken: (input: { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string }) => void;
+  onGenerateOAuthUrl: (input: OAuthAuthUrlRequest) => void;
+  onExchangeOAuthToken: (input: OAuthTokenExchangeRequest) => void;
 }) {
   const [draft, setDraft] = useState({
     email: "",
@@ -4351,13 +4397,15 @@ function AccountEditor({
       fallback_proxy_url_2: account.fallback_proxy_url_2,
       mail_retention_days: account.mail_retention_days ?? 30,
       password: "",
-      client_id: settings?.graph_client_id || defaultGraphClientId,
+      client_id: provider === "graph" || provider === "imap" ? settings?.graph_client_id || defaultGraphClientId : "",
       refresh_token: "",
       imap_password: "",
       tag_ids: account.tags.map((tag) => tag.id),
       aliasesText: account.aliases.join("\n")
     });
+    onOauthUrlChange("");
     onOauthCallbackChange("");
+    onOauthCodeVerifierChange("");
     setRevealPassword("");
     setRevealedSecrets(null);
     setRevealError(null);
@@ -4372,16 +4420,22 @@ function AccountEditor({
   }
 
   const redirectUri = settings?.oauth_redirect_uri || defaultOAuthRedirectUri;
-  const oauthLinkSupported = draft.provider === "graph" || draft.provider === "imap";
+  const selectedProvider = accountProviderDefinition(draft.provider);
+  const oauthLinkSupported = draft.provider === "graph" || draft.provider === "imap" || draft.provider === "gmail";
 
   function updateProvider(provider: string) {
     const normalizedProvider = normalizeAccountProviderId(provider);
     const defaults = providerDefaultImap(normalizedProvider);
     const accountType = providerAccountType(normalizedProvider);
+    const defaultClientId = normalizedProvider === "graph" || normalizedProvider === "imap" ? settings?.graph_client_id || defaultGraphClientId : "";
+    onOauthUrlChange("");
+    onOauthCallbackChange("");
+    onOauthCodeVerifierChange("");
     setDraft({
       ...draft,
       provider: normalizedProvider,
       account_type: accountType,
+      client_id: defaultClientId,
       imap_host: defaults.host || (accountType === "imap" ? draft.imap_host : ""),
       imap_port: defaults.port
     });
@@ -4480,13 +4534,23 @@ function AccountEditor({
         <input
           className="input grow"
           value={draft.client_id}
-          placeholder="Microsoft 客户端 ID"
+          placeholder={`${selectedProvider.label} Client ID`}
           onChange={(event) => setDraft({ ...draft, client_id: event.target.value })}
         />
         <button
           className="button secondary"
           disabled={!oauthLinkSupported || !draft.client_id.trim()}
-          onClick={() => onGenerateOAuthUrl({ client_id: draft.client_id, redirect_uri: redirectUri, login_hint: draft.email, provider: draft.provider })}
+          onClick={() => {
+            const codeVerifier = draft.provider === "gmail" ? createPkceVerifier() : "";
+            onOauthCodeVerifierChange(codeVerifier);
+            onGenerateOAuthUrl({
+              client_id: draft.client_id,
+              redirect_uri: redirectUri,
+              login_hint: draft.email,
+              provider: draft.provider,
+              code_verifier: codeVerifier || undefined
+            });
+          }}
         >
           <KeyRound size={16} />
           OAuth 链接
@@ -4502,14 +4566,15 @@ function AccountEditor({
         />
         <button
           className="button secondary"
-          disabled={!oauthLinkSupported || !draft.client_id.trim() || !oauthCallback.trim()}
+          disabled={!oauthLinkSupported || !draft.client_id.trim() || !oauthCallback.trim() || (draft.provider === "gmail" && !oauthCodeVerifier)}
           onClick={() =>
             onExchangeOAuthToken({
               account_id: account.id,
               client_id: draft.client_id,
               redirect_uri: redirectUri,
               code_or_url: oauthCallback,
-              provider: draft.provider
+              provider: draft.provider,
+              code_verifier: oauthCodeVerifier || undefined
             })
           }
         >
@@ -5776,6 +5841,13 @@ function formatProviderPreview(rows: Array<{ provider: string }>) {
   return Array.from(counts.entries())
     .map(([provider, count]) => `${accountProviderLabel(provider)} ${count}`)
     .join(" / ");
+}
+
+function createPkceVerifier() {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+  const bytes = new Uint8Array(64);
+  window.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
 }
 
 function parseTagText(value: string) {

@@ -762,6 +762,7 @@ pub struct OAuthAuthUrlInput {
     pub redirect_uri: String,
     pub login_hint: Option<String>,
     pub provider: Option<String>,
+    pub code_verifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -771,6 +772,7 @@ pub struct OAuthExchangeInput {
     pub redirect_uri: String,
     pub code_or_url: String,
     pub provider: Option<String>,
+    pub code_verifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -795,6 +797,7 @@ pub struct OAuthSaveAccountInput {
     pub code_or_url: Option<String>,
     pub refresh_token: Option<String>,
     pub provider: Option<String>,
+    pub code_verifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

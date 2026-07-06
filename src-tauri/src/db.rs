@@ -1464,11 +1464,18 @@ impl Database {
                 None => "graph".to_string(),
             },
         };
-        let token = providers::exchange_microsoft_code(&input.client_id, &input.redirect_uri, &input.code_or_url, Some(&provider))?;
+        let token = exchange_oauth_code_for_provider(
+            &provider,
+            &input.client_id,
+            &input.redirect_uri,
+            &input.code_or_url,
+            input.code_verifier.as_deref(),
+        )?;
         if let Some(account_id) = input.account_id {
             let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
             let refresh_token = crypto::encrypt_text(&token.refresh_token, key)?;
             let client_id = crypto::encrypt_text(&input.client_id, key)?;
+            let account_type = oauth_account_type(&provider);
             self.conn.execute(
                 "
                 UPDATE accounts
@@ -1482,7 +1489,7 @@ impl Database {
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 ",
-                params![client_id, refresh_token, provider, provider, account_id],
+                params![client_id, refresh_token, provider.as_str(), account_type.as_str(), account_id],
             )?;
             self.audit(&format!("oauth.{provider}.exchanged"), "account", Some(account_id), "")?;
         }
@@ -1508,7 +1515,7 @@ impl Database {
         }
         let client_id = input.client_id.trim();
         if client_id.is_empty() {
-            return Err(AppError::InvalidInput("Microsoft client id is required".to_string()));
+            return Err(AppError::InvalidInput("OAuth client id is required".to_string()));
         }
 
         let provider = normalize_oauth_provider(input.provider.as_deref())?.unwrap_or_else(|| "graph".to_string());
@@ -1525,7 +1532,13 @@ impl Database {
                 .as_ref()
                 .filter(|value| !value.trim().is_empty())
                 .ok_or_else(|| AppError::InvalidInput("OAuth callback URL is required".to_string()))?;
-            providers::exchange_microsoft_code(client_id, &input.redirect_uri, code_or_url, Some(&provider))?
+            exchange_oauth_code_for_provider(
+                &provider,
+                client_id,
+                &input.redirect_uri,
+                code_or_url,
+                input.code_verifier.as_deref(),
+            )?
         };
         if token.refresh_token.trim().is_empty() {
             return Err(AppError::InvalidInput("OAuth response did not include a refresh token".to_string()));
@@ -1537,6 +1550,7 @@ impl Database {
         let refresh_token_enc = crypto::encrypt_text(&token.refresh_token, key)?;
         let remark = input.remark.unwrap_or_default();
         let forward_enabled = if input.forward_enabled.unwrap_or(false) { 1 } else { 0 };
+        let account_type = oauth_account_type(&provider);
 
         self.conn.execute(
             "
@@ -1572,7 +1586,7 @@ impl Database {
                 input.group_id,
                 remark,
                 provider.as_str(),
-                provider.as_str(),
+                account_type.as_str(),
                 forward_enabled
             ],
         )?;
@@ -5848,8 +5862,30 @@ fn normalize_oauth_provider(value: Option<&str>) -> AppResult<Option<String>> {
     if provider.is_empty() {
         return Ok(None);
     }
-    match provider.as_str() {
-        "graph" | "outlook" | "imap" => Ok(Some(provider)),
+    match providers::normalize_mail_provider_id(&provider) {
+        Some("graph") => Ok(Some("graph".to_string())),
+        Some("imap") => Ok(Some("imap".to_string())),
+        Some("gmail") => Ok(Some("gmail".to_string())),
+        _ => Err(AppError::InvalidInput(format!("unsupported OAuth provider: {provider}"))),
+    }
+}
+
+fn oauth_account_type(provider: &str) -> String {
+    providers::mail_provider_definition(provider)
+        .map(|definition| definition.account_type.to_string())
+        .unwrap_or_else(|| provider.to_string())
+}
+
+fn exchange_oauth_code_for_provider(
+    provider: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    code_or_url: &str,
+    code_verifier: Option<&str>,
+) -> AppResult<providers::OAuthTokenResponse> {
+    match provider {
+        "gmail" => providers::exchange_google_code(client_id, redirect_uri, code_or_url, code_verifier),
+        "graph" | "imap" => providers::exchange_microsoft_code(client_id, redirect_uri, code_or_url, Some(provider)),
         value => Err(AppError::InvalidInput(format!("unsupported OAuth provider: {value}"))),
     }
 }
@@ -7142,7 +7178,7 @@ fn remote_sync_failure_from_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Re
 
 #[cfg(test)]
 mod project_tests {
-    use super::{attachment_dir, backup_dir, exports_dir, normalize_project_key, Database, MailMessageRef};
+    use super::{attachment_dir, backup_dir, exports_dir, normalize_oauth_provider, normalize_project_key, Database, MailMessageRef};
     use crate::error::AppError;
     use crate::import::ImportedAccount;
     use crate::models::{
@@ -7356,6 +7392,14 @@ mod project_tests {
         assert_eq!(gmail.provider, "gmail");
         assert_eq!(gmail.account_type, "gmail");
         assert_eq!(gmail.imap_host, "");
+    }
+
+    #[test]
+    fn normalize_oauth_provider_accepts_google_aliases() {
+        assert_eq!(normalize_oauth_provider(Some("google")).expect("google"), Some("gmail".to_string()));
+        assert_eq!(normalize_oauth_provider(Some("outlook")).expect("outlook"), Some("graph".to_string()));
+        assert_eq!(normalize_oauth_provider(Some("imap")).expect("imap"), Some("imap".to_string()));
+        assert!(normalize_oauth_provider(Some("qq")).is_err());
     }
 
     #[test]

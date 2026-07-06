@@ -254,6 +254,14 @@ Mock 网络集成测试：
 - 邮件预览和附件下载可用。
 - 本地搜索、排序、筛选、分页、导出和验证码复制可用于 Gmail 邮件。
 
+进展（2026-07-06）：
+
+- 已完成 Google OAuth 授权 URL 生成，桌面端使用 PKCE S256，首版 scope 为 `https://www.googleapis.com/auth/gmail.readonly`，并保留当前“打开授权页 -> 粘贴回调 URL”的流程。
+- 后端已接入 Google token endpoint，OAuth token exchange / save account 会按 provider 分发到 Microsoft 或 Google；Gmail refresh token 复用现有加密字段保存，provider/account_type 归一为 `gmail`。
+- 前端“授权并保存 OAuth 账号”和账号编辑弹窗已支持 Outlook/Gmail 切换、Gmail Client ID、PKCE verifier 传递、Gmail token 预览与保存；mock API 也返回 Gmail readonly scope。
+- 已补充 PKCE、Gmail OAuth URL、OAuth provider 归一化测试；`pnpm test`、`pnpm build`、`cargo test` 通过。
+- 尚未完成 Gmail API `messages.list`/`messages.get` 同步、正文/附件归一化和 Gmail adapter refresh，这是 P9.1 的下一功能点。
+
 ### P9.2 Gmail Incremental Sync and Remote Actions
 
 目标：让 Gmail 接近 Outlook/Graph 的同步效率和操作能力。

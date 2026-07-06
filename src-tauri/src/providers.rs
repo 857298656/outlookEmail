@@ -4,7 +4,7 @@ use crate::models::{
     GenerateTempEmailInput, OAuthAuthUrlInput, ProviderMessage, Settings, TempEmailCredential,
     TempEmailMessage,
 };
-use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use imap::types::NameAttribute;
@@ -12,6 +12,7 @@ use mailparse::MailHeaderMap;
 use reqwest::{blocking::Client, Proxy};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -19,6 +20,7 @@ use std::time::Duration;
 const GRAPH_SCOPE: &str =
     "offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read";
 const IMAP_OAUTH_SCOPE: &str = "offline_access https://outlook.office.com/IMAP.AccessAsUser.All";
+const GMAIL_READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
 
 #[derive(Clone, Copy)]
 pub struct MailProviderDefinition {
@@ -149,6 +151,11 @@ fn microsoft_oauth_scope(provider: Option<&str>) -> &'static str {
 }
 
 pub fn build_graph_auth_url(input: &OAuthAuthUrlInput) -> AppResult<String> {
+    let provider = normalize_oauth_provider(input.provider.as_deref())?;
+    if provider == "gmail" {
+        return build_google_auth_url(input);
+    }
+
     let client_id = input.client_id.trim();
     let redirect_uri = input.redirect_uri.trim();
     if client_id.is_empty() {
@@ -158,13 +165,38 @@ pub fn build_graph_auth_url(input: &OAuthAuthUrlInput) -> AppResult<String> {
         return Err(AppError::InvalidInput("OAuth redirect URI is required".to_string()));
     }
 
-    let scope = urlencoding::encode(microsoft_oauth_scope(input.provider.as_deref()))
-        .replace("%20", "+");
+    let scope = urlencoding::encode(microsoft_oauth_scope(Some(provider))).replace("%20", "+");
     let mut url = format!(
         "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query&scope={}&state=12345",
         urlencoding::encode(client_id),
         urlencoding::encode(redirect_uri),
         scope
+    );
+    if let Some(login_hint) = input.login_hint.as_ref().filter(|value| !value.trim().is_empty()) {
+        url.push_str("&login_hint=");
+        url.push_str(&urlencoding::encode(login_hint.trim()));
+    }
+    Ok(url)
+}
+
+fn build_google_auth_url(input: &OAuthAuthUrlInput) -> AppResult<String> {
+    let client_id = input.client_id.trim();
+    let redirect_uri = input.redirect_uri.trim();
+    if client_id.is_empty() {
+        return Err(AppError::InvalidInput("Google client id is required".to_string()));
+    }
+    if redirect_uri.is_empty() {
+        return Err(AppError::InvalidInput("OAuth redirect URI is required".to_string()));
+    }
+
+    let code_verifier = input.code_verifier.as_deref().unwrap_or_default();
+    let code_challenge = pkce_s256_challenge(code_verifier)?;
+    let mut url = format!(
+        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&response_type=code&redirect_uri={}&scope={}&state=12345&access_type=offline&prompt=consent&code_challenge={}&code_challenge_method=S256",
+        urlencoding::encode(client_id),
+        urlencoding::encode(redirect_uri),
+        urlencoding::encode(GMAIL_READONLY_SCOPE),
+        urlencoding::encode(&code_challenge)
     );
     if let Some(login_hint) = input.login_hint.as_ref().filter(|value| !value.trim().is_empty()) {
         url.push_str("&login_hint=");
@@ -193,6 +225,79 @@ pub fn exchange_microsoft_code(
         .send()
         .map_err(network_error)?;
     parse_token_response(response)
+}
+
+pub fn exchange_google_code(
+    client_id: &str,
+    redirect_uri: &str,
+    code_or_url: &str,
+    code_verifier: Option<&str>,
+) -> AppResult<OAuthTokenResponse> {
+    let client_id = client_id.trim();
+    let redirect_uri = redirect_uri.trim();
+    if client_id.is_empty() {
+        return Err(AppError::InvalidInput("Google client id is required".to_string()));
+    }
+    if redirect_uri.is_empty() {
+        return Err(AppError::InvalidInput("OAuth redirect URI is required".to_string()));
+    }
+    let code = extract_code(code_or_url)?;
+    let code_verifier = validate_pkce_verifier(code_verifier.unwrap_or_default())?;
+    let client = http_client()?;
+    let response = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("client_id", client_id),
+            ("redirect_uri", redirect_uri),
+            ("grant_type", "authorization_code"),
+            ("code", code.as_str()),
+            ("code_verifier", code_verifier),
+        ])
+        .send()
+        .map_err(network_error)?;
+    parse_token_response(response)
+}
+
+fn normalize_oauth_provider(provider: Option<&str>) -> AppResult<&'static str> {
+    let value = provider.unwrap_or_default().trim();
+    if value.is_empty() {
+        return Ok("graph");
+    }
+    match normalize_mail_provider_id(value) {
+        Some("graph") => Ok("graph"),
+        Some("imap") => Ok("imap"),
+        Some("gmail") => Ok("gmail"),
+        _ => Err(AppError::InvalidInput(format!("unsupported OAuth provider: {value}"))),
+    }
+}
+
+fn validate_pkce_verifier(code_verifier: &str) -> AppResult<&str> {
+    let value = code_verifier.trim();
+    if value.is_empty() {
+        return Err(AppError::InvalidInput(
+            "Google OAuth PKCE code verifier is required".to_string(),
+        ));
+    }
+    if !(43..=128).contains(&value.len()) {
+        return Err(AppError::InvalidInput(
+            "Google OAuth PKCE code verifier must be 43-128 characters".to_string(),
+        ));
+    }
+    if !value
+        .bytes()
+        .all(|byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~'))
+    {
+        return Err(AppError::InvalidInput(
+            "Google OAuth PKCE code verifier contains invalid characters".to_string(),
+        ));
+    }
+    Ok(value)
+}
+
+fn pkce_s256_challenge(code_verifier: &str) -> AppResult<String> {
+    let value = validate_pkce_verifier(code_verifier)?;
+    let digest = Sha256::digest(value.as_bytes());
+    Ok(URL_SAFE_NO_PAD.encode(&digest[..]))
 }
 
 fn refresh_graph_access_token_with_client(account: &AccountCredentials, client: &Client) -> AppResult<OAuthTokenResponse> {
@@ -1630,5 +1735,33 @@ mod tests {
 
         let graph = detect_mail_provider("user@example.com", None, true).expect("graph");
         assert_eq!(graph.id, "graph");
+    }
+
+    #[test]
+    fn derives_pkce_s256_challenge() {
+        let challenge = pkce_s256_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk").expect("challenge");
+        assert_eq!(challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+    }
+
+    #[test]
+    fn builds_google_auth_url_with_pkce() {
+        let verifier = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~".to_string();
+        let url = build_graph_auth_url(&OAuthAuthUrlInput {
+            client_id: "google-client".to_string(),
+            redirect_uri: "http://127.0.0.1:53682/callback".to_string(),
+            login_hint: Some("person@gmail.com".to_string()),
+            provider: Some("gmail".to_string()),
+            code_verifier: Some(verifier.clone()),
+        })
+        .expect("google auth url");
+
+        assert!(url.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"));
+        assert!(url.contains("client_id=google-client"));
+        assert!(url.contains("scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.readonly"));
+        assert!(url.contains("code_challenge="));
+        assert!(url.contains("code_challenge_method=S256"));
+        assert!(url.contains("access_type=offline"));
+        assert!(url.contains("login_hint=person%40gmail.com"));
+        assert!(!url.contains(&verifier));
     }
 }

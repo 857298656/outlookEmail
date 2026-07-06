@@ -1447,6 +1447,83 @@ button:disabled {
   white-space: nowrap;
 }
 
+.importPreviewTable {
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.importPreviewHeader,
+.importPreviewRow {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.7fr) minmax(76px, 0.7fr) minmax(118px, 1fr) minmax(80px, 0.8fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.importPreviewHeader {
+  background: #f1f5f9;
+  color: #475569;
+  font-weight: 700;
+}
+
+.importPreviewRow + .importPreviewRow,
+.importPreviewMore {
+  border-top: 1px solid #eef2f7;
+}
+
+.importPreviewEmail,
+.importPreviewRemark {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.importPreviewEmail {
+  color: #0f172a;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+.providerBadge,
+.credentialBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 3px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.providerBadge {
+  background: #ecfeff;
+  color: #0e7490;
+}
+
+.credentialBadge {
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+
+.importPreviewMore {
+  padding: 9px 10px;
+  color: #64748b;
+  font-size: 12px;
+}
+
 .modalChipCloud {
   margin-bottom: 0;
 }
@@ -2726,6 +2803,34 @@ code {
 
   .secretPreviewGrid {
     grid-template-columns: 1fr;
+  }
+
+  .importDialog {
+    width: calc(100vw - 28px);
+  }
+
+  .importDialogControls {
+    align-items: stretch;
+  }
+
+  .dialogMeta {
+    white-space: normal;
+  }
+
+  .importPreviewHeader {
+    display: none;
+  }
+
+  .importPreviewRow {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    min-height: 0;
+    padding: 10px;
+  }
+
+  .providerBadge,
+  .credentialBadge {
+    justify-content: flex-start;
   }
 }
 

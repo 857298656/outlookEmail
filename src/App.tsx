@@ -2708,6 +2708,8 @@ function AccountImportDialog({
   const [localError, setLocalError] = useState<string | null>(null);
   const parsedRows = useMemo(() => parseAccountRows(raw), [raw]);
   const providerPreview = useMemo(() => formatProviderPreview(parsedRows), [parsedRows]);
+  const previewRows = useMemo(() => parsedRows.slice(0, 8), [parsedRows]);
+  const hiddenPreviewCount = parsedRows.length - previewRows.length;
   const loading = busy || localBusy;
 
   useEffect(() => {
@@ -2786,6 +2788,34 @@ function AccountImportDialog({
               </label>
               <span className="dialogMeta">已识别 {parsedRows.length} 个账号{providerPreview ? ` · ${providerPreview}` : ""}</span>
             </div>
+            {previewRows.length > 0 && (
+              <div className="importPreviewTable" aria-label="账号导入预览">
+                <div className="importPreviewHeader">
+                  <span>邮箱</span>
+                  <span>服务商</span>
+                  <span>凭据类型</span>
+                  <span>备注</span>
+                </div>
+                {previewRows.map((row, index) => {
+                  const provider = accountProviderDefinition(row.provider);
+                  return (
+                    <div className="importPreviewRow" key={`${row.email}-${index}`}>
+                      <span className="importPreviewEmail" title={row.email}>
+                        {row.email}
+                      </span>
+                      <span className="providerBadge">{provider.label}</span>
+                      <span className="credentialBadge" title={provider.setupHint || provider.credentialLabel}>
+                        {provider.credentialLabel}
+                      </span>
+                      <span className="importPreviewRemark" title={row.remark || "未填写"}>
+                        {row.remark || "未填写"}
+                      </span>
+                    </div>
+                  );
+                })}
+                {hiddenPreviewCount > 0 && <div className="importPreviewMore">另有 {hiddenPreviewCount} 个账号将按识别结果导入</div>}
+              </div>
+            )}
           </section>
           {localError && <div className="formError">{localError}</div>}
         </div>

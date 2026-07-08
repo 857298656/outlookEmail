@@ -100,7 +100,7 @@ button:disabled {
   min-height: 0;
   padding: 18px 12px;
   position: relative;
-  background: var(--skin-rail);
+  background: #ffffff;
   color: var(--skin-rail-text);
 }
 
@@ -355,8 +355,9 @@ button:disabled {
   justify-content: space-between;
   gap: 20px;
   padding: 16px 24px;
-  border-bottom: 1px solid var(--skin-border);
-  background: var(--skin-subtle);
+  border: 1px solid var(--skin-border);
+  background: #ffffff;
+  box-shadow: none;
 }
 
 .topBar > div:first-child {

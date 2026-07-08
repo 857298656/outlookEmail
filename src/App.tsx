@@ -113,7 +113,7 @@ const workspaceWindowSize = { width: 1360, height: 860, minWidth: 1100, minHeigh
 const themePresets = [
   { id: "default", label: "默认", rail: "#111111", railText: "#f8f6f1", surface: "#ffffff", subtle: "#faf9f5" },
   { id: "graphite", label: "石墨", rail: "#1f1f1d", railText: "#f8f6f1", surface: "#ffffff", subtle: "#f7f6f2" },
-  { id: "ocean", label: "纸张", rail: "#2d2926", railText: "#f6f7f9", surface: "#ffffff", subtle: "#f6f7f9" },
+  { id: "ocean", label: "纸张", rail: "#2d2926", railText: "#f8f8f6", surface: "#ffffff", subtle: "#f8f8f6" },
   { id: "forest", label: "晨雾", rail: "#26231f", railText: "#faf7f2", surface: "#ffffff", subtle: "#f6f4ee" },
   { id: "rose", label: "暖灰", rail: "#181716", railText: "#faf8f3", surface: "#ffffff", subtle: "#f8f7f3" }
 ];

@@ -715,7 +715,7 @@ button:disabled {
 }
 
 .searchClear:hover {
-  background: #eef2f7;
+  background: var(--skin-hover);
   color: #475569;
 }
 
@@ -1864,10 +1864,14 @@ button:disabled {
   color: #17202a;
 }
 
-.tempEmailRow:hover,
+.tempEmailRow:hover {
+  border-color: #9ca3af;
+  background: var(--skin-hover);
+}
+
 .tempEmailRow.active {
   border-color: #9ca3af;
-  background: #f3f4f6;
+  background: var(--skin-selected);
 }
 
 .tempEmailRow strong,
@@ -2009,10 +2013,14 @@ button:disabled {
   color: #17202a;
 }
 
-.projectRow:hover,
+.projectRow:hover {
+  border-color: #9ca3af;
+  background: var(--skin-hover);
+}
+
 .projectRow.active {
   border-color: #9ca3af;
-  background: #f3f4f6;
+  background: var(--skin-selected);
 }
 
 .projectRow strong,
@@ -2417,8 +2425,8 @@ button:disabled {
 
 .button.secondary:hover:not(:disabled),
 .button.ghost:hover:not(:disabled) {
-  border-color: var(--skin-accent-border);
-  background: var(--skin-accent-soft);
+  border-color: var(--skin-border);
+  background: var(--skin-hover);
   color: #111827;
 }
 
@@ -2451,7 +2459,7 @@ button:disabled {
 }
 
 .iconMini:hover {
-  background: #eef2f7;
+  background: var(--skin-hover);
 }
 
 .danger {
@@ -2514,10 +2522,14 @@ button:disabled {
   text-align: left;
 }
 
-.groupTreeButton:hover,
+.groupTreeButton:hover {
+  border-color: #cfd8e3;
+  background: var(--skin-hover);
+}
+
 .groupTreeButton.active {
   border-color: #cfd8e3;
-  background: #f8fafc;
+  background: var(--skin-selected);
 }
 
 .groupTreeButton > span:not(.dot) {
@@ -2626,7 +2638,7 @@ button:disabled {
 }
 
 .tableRow.active {
-  background: #f3f4f6;
+  background: var(--skin-selected);
 }
 
 .tableEmptyRow {

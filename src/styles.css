@@ -12,6 +12,8 @@
   --skin-accent: #b5725f;
   --skin-accent-soft: #b5725f1c;
   --skin-accent-border: #b5725f40;
+  --skin-selected: #e6e6e6;
+  --skin-hover: #f3f3f3;
   --skin-border: #e6e2dd;
   --skin-ink: #111111;
   --skin-muted: #75726e;
@@ -163,7 +165,7 @@ button:disabled {
 }
 
 .railHeaderToggle:hover {
-  background: var(--skin-accent-soft);
+  background: var(--skin-hover);
   opacity: 1;
   color: var(--skin-rail-text);
 }
@@ -217,9 +219,12 @@ button:disabled {
   transform: translateX(0);
 }
 
-.railButton:hover,
+.railButton:hover {
+  background: var(--skin-hover);
+}
+
 .railButton.active {
-  background: var(--skin-accent-soft);
+  background: var(--skin-selected);
 }
 
 .railSpacer {
@@ -244,9 +249,12 @@ button:disabled {
   color: inherit;
 }
 
-.railAccountButton:hover,
+.railAccountButton:hover {
+  background: var(--skin-hover);
+}
+
 .railAccountButton.active {
-  background: var(--skin-accent-soft);
+  background: var(--skin-selected);
 }
 
 .railAvatar {
@@ -332,7 +340,7 @@ button:disabled {
 }
 
 .railMenuItem:hover {
-  background: var(--skin-accent-soft);
+  background: var(--skin-hover);
 }
 
 .railMenuDivider {
@@ -469,12 +477,15 @@ button:disabled {
 }
 
 .listRow:hover,
-.listRow.active,
 .accountRow:hover,
+.messageRow:hover {
+  background: var(--skin-hover);
+}
+
+.listRow.active,
 .accountRow.active,
-.messageRow:hover,
 .messageRow.active {
-  background: var(--skin-accent-soft);
+  background: var(--skin-selected);
 }
 
 .dot {
@@ -591,10 +602,14 @@ button:disabled {
   text-align: left;
 }
 
-.mailTreeRow:hover,
+.mailTreeRow:hover {
+  border-color: var(--skin-accent-border);
+  background: var(--skin-hover);
+}
+
 .mailTreeRow.active {
   border-color: var(--skin-accent-border);
-  background: var(--skin-accent-soft);
+  background: var(--skin-selected);
 }
 
 .mailTreeGroup {
@@ -840,15 +855,15 @@ button:disabled {
 .messageRow:hover,
 .messageRow:focus-within {
   z-index: 1;
-  background: #f3f7fd;
+  background: var(--skin-hover);
   box-shadow:
-    inset 0 1px 0 #d7dee8,
-    inset 0 -1px 0 #d7dee8,
-    0 1px 3px rgba(15, 23, 42, 0.14);
+    inset 0 1px 0 var(--skin-hover),
+    inset 0 -1px 0 var(--skin-hover),
+    0 1px 3px rgba(15, 23, 42, 0.08);
 }
 
 .messageRow.active {
-  background: var(--skin-accent-soft);
+  background: var(--skin-selected);
 }
 
 .messageSelect {
@@ -1483,18 +1498,6 @@ button:disabled {
   place-items: center;
   padding: 28px;
   background: rgba(15, 23, 42, 0.46);
-}
-
-@media (max-width: 1440px) {
-  .oauthDialogBackdrop.mailPreviewBackdrop {
-    left: 72px;
-  }
-}
-
-@media (max-width: 1680px) {
-  .appShell.railExpanded .oauthDialogBackdrop.mailPreviewBackdrop {
-    left: 208px;
-  }
 }
 
 .oauthDialog {

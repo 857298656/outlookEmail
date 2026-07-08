@@ -6566,42 +6566,16 @@ function RemoteFailurePanel({
 }
 
 function MailSharePanel({
-  records,
-  busy,
-  onRevoke
+  records: _records,
+  busy: _busy,
+  onRevoke: _onRevoke
 }: {
   records: MailShareRecord[];
   busy: boolean;
   onRevoke: (shareId: number) => void;
 }) {
-  if (records.length === 0) return null;
-  return (
-    <div className="mailSharePanel">
-      <div className="mailShareHeader">
-        <strong>本地分享记录</strong>
-        <span>{records.length} 条</span>
-      </div>
-      {records.slice(0, 6).map((record) => (
-        <div className="mailShareRow" key={record.id}>
-          <div>
-            <strong>{record.title || record.file_name}</strong>
-            <small>
-              {record.item_count} 封 · {formatBytes(record.size) || "0 B"} · {record.expires_at ? formatDate(record.expires_at) : "不过期"}
-            </small>
-            <code>{record.exported_path}</code>
-          </div>
-          <div className="mailShareActions">
-            <StatusPill status={record.status} />
-            {record.status === "active" && (
-              <button className="iconMini danger" title="撤销本地分享" disabled={busy} onClick={() => onRevoke(record.id)}>
-                <Trash2 size={14} />
-              </button>
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+  // 邮件预览页不展示“本地分享记录”
+  return null;
 }
 
 function IconButton({

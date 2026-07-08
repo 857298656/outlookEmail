@@ -6,15 +6,15 @@
   background: #f8f8f6;
   color: #111111;
   --skin-rail: #111111;
-  --skin-rail-text: #f8f6f1;
+  --skin-rail-text: #faf9f8;
   --skin-surface: #ffffff;
-  --skin-subtle: #faf9f5;
-  --skin-accent: #d97757;
-  --skin-accent-soft: #d977571c;
-  --skin-accent-border: #d9775740;
-  --skin-border: #e6ded3;
+  --skin-subtle: #faf9f8;
+  --skin-accent: #b5725f;
+  --skin-accent-soft: #b5725f1c;
+  --skin-accent-border: #b5725f40;
+  --skin-border: #e6e2dd;
   --skin-ink: #111111;
-  --skin-muted: #77746e;
+  --skin-muted: #75726e;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -50,9 +50,9 @@ button:disabled {
 .appShell {
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-width: 1100px;
-  min-height: 720px;
-  height: 100vh;
+  min-height: 0;
   background: var(--skin-subtle);
   transition: grid-template-columns 160ms ease;
 }
@@ -96,7 +96,8 @@ button:disabled {
   flex-direction: column;
   align-items: stretch;
   gap: 12px;
-  overflow: visible;
+  overflow: auto;
+  min-height: 0;
   padding: 18px 12px;
   position: relative;
   background: var(--skin-rail);
@@ -153,7 +154,8 @@ button:disabled {
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: rgba(248, 246, 241, 0.72);
+  color: inherit;
+  opacity: 0.8;
 }
 
 .rail:not(.expanded) .railHeaderToggle {
@@ -161,7 +163,8 @@ button:disabled {
 }
 
 .railHeaderToggle:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--skin-accent-soft);
+  opacity: 1;
   color: var(--skin-rail-text);
 }
 
@@ -216,7 +219,7 @@ button:disabled {
 
 .railButton:hover,
 .railButton.active {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--skin-accent-soft);
 }
 
 .railSpacer {
@@ -243,7 +246,7 @@ button:disabled {
 
 .railAccountButton:hover,
 .railAccountButton.active {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--skin-accent-soft);
 }
 
 .railAvatar {
@@ -253,8 +256,8 @@ button:disabled {
   width: 36px;
   height: 36px;
   border-radius: 999px;
-  background: rgba(217, 119, 87, 0.18);
-  color: #f2a07f;
+  background: var(--skin-accent-soft);
+  color: var(--skin-accent);
   font-weight: 800;
 }
 
@@ -293,22 +296,20 @@ button:disabled {
 }
 
 .railAccountMenu {
-  position: absolute;
-  bottom: 64px;
-  left: 0;
-  z-index: 20;
+  position: fixed;
+  z-index: 2500;
   width: 260px;
   padding: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--skin-border);
   border-radius: 14px;
-  background: #201f1d;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
+  background: var(--skin-surface);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.08);
 }
 
 .railMenuHeader {
   overflow: hidden;
   padding: 6px 10px 10px;
-  color: #a7b0be;
+  color: var(--skin-muted);
   font-size: 13px;
   font-weight: 700;
   text-overflow: ellipsis;
@@ -325,19 +326,19 @@ button:disabled {
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #f8fafc;
+  color: var(--skin-ink);
   font-weight: 700;
   text-align: left;
 }
 
 .railMenuItem:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--skin-accent-soft);
 }
 
 .railMenuDivider {
   height: 1px;
   margin: 8px 10px;
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--skin-border);
 }
 
 .mainSurface {
@@ -345,7 +346,7 @@ button:disabled {
   display: grid;
   grid-template-rows: 76px 1fr;
   min-width: 0;
-  height: 100vh;
+  min-height: 0;
 }
 
 .topBar {
@@ -355,7 +356,7 @@ button:disabled {
   gap: 20px;
   padding: 16px 24px;
   border-bottom: 1px solid var(--skin-border);
-  background: var(--skin-surface);
+  background: var(--skin-subtle);
 }
 
 .topBar > div:first-child {
@@ -3082,7 +3083,7 @@ code {
   grid-template-rows: auto 1fr;
   height: 100vh;
   overflow: hidden;
-  background: #f8f8f6;
+  background: var(--skin-subtle);
 }
 
 .loginChrome {
@@ -3091,7 +3092,7 @@ code {
   align-items: center;
   height: 40px;
   padding: 0 4px 0 10px;
-  background: #f8f8f6;
+  background: var(--skin-subtle);
 }
 
 .loginChromeDrag {
@@ -3111,16 +3112,80 @@ code {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #4a4a45;
+  color: var(--skin-ink);
 }
 
 .loginChromeButton:hover {
-  background: #efe9df;
+  background: var(--skin-accent-soft);
 }
 
 .loginChromeClose:hover {
   background: #e81123;
   color: #fff;
+}
+
+.appContainer {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--skin-subtle);
+}
+
+.appContainer .appShell {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.appChrome {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  height: 40px;
+  padding: 0 4px 0 16px;
+  background: var(--skin-subtle);
+  border-bottom: 1px solid var(--skin-border);
+  color: var(--skin-ink);
+  user-select: none;
+}
+
+.appChromeDrag {
+  height: 100%;
+}
+
+.appChromeTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--skin-muted);
+}
+
+.appChromeControls {
+  display: flex;
+  align-items: center;
+}
+
+.appChromeButton {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 40px;
+  border: 0;
+  background: transparent;
+  color: var(--skin-ink);
+  opacity: 0.8;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.appChromeButton:hover {
+  background: var(--skin-accent-soft);
+  opacity: 1;
+}
+
+.appChromeClose:hover {
+  background: #e81123 !important;
+  color: #fff !important;
+  opacity: 1;
 }
 
 .lockPanel {
@@ -3192,7 +3257,7 @@ code {
   gap: 6px;
   width: min(340px, 100%);
   margin-bottom: 10px;
-  color: #77746e;
+  color: #75726e;
   font-size: 12px;
   font-weight: 650;
 }
@@ -3221,7 +3286,7 @@ code {
 
 .lockPanel p {
   margin: 0;
-  color: #77746e;
+  color: #75726e;
   font-size: 14px;
   line-height: 1.4;
   max-width: 300px;

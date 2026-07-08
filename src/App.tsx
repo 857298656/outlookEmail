@@ -102,8 +102,8 @@ type AccountCredentialFilter = "all" | "outlook" | "gmail" | "qq" | "netease_163
 type OAuthAuthUrlRequest = { client_id: string; redirect_uri: string; login_hint?: string; provider?: string; code_verifier?: string };
 type OAuthTokenExchangeRequest = { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string; code_verifier?: string };
 
-const claudeAccent = "#d97757";
-const colors = ["#111111", "#d97757", "#8a7a70", "#4a4a45", "#c05f42", "#e0a17f"];
+const claudeAccent = "#b5725f";
+const colors = ["#111111", "#b5725f", "#8a7a70", "#4a4a45", "#c05f42", "#e0a17f"];
 const mailPageSize = 25;
 const mailSearchDebounceMs = 450;
 const defaultGraphClientId = "6daa9f56-5e67-4cb6-ae52-ef89ef912d36";
@@ -111,11 +111,11 @@ const defaultOAuthRedirectUri = "http://localhost:8080";
 const loginWindowSize = { width: 600, height: 600, minWidth: 600, minHeight: 600 };
 const workspaceWindowSize = { width: 1360, height: 860, minWidth: 1100, minHeight: 720 };
 const themePresets = [
-  { id: "default", label: "默认", rail: "#111111", railText: "#f8f6f1", surface: "#ffffff", subtle: "#faf9f5" },
-  { id: "graphite", label: "石墨", rail: "#1f1f1d", railText: "#f8f6f1", surface: "#ffffff", subtle: "#f7f6f2" },
-  { id: "ocean", label: "纸张", rail: "#2d2926", railText: "#f8f8f6", surface: "#ffffff", subtle: "#f8f8f6" },
-  { id: "forest", label: "晨雾", rail: "#26231f", railText: "#faf7f2", surface: "#ffffff", subtle: "#f6f4ee" },
-  { id: "rose", label: "暖灰", rail: "#181716", railText: "#faf8f3", surface: "#ffffff", subtle: "#f8f7f3" }
+  { id: "default", label: "默认", rail: "#f3f0ea", railText: "#46413a", surface: "#ffffff", subtle: "#faf9f8" },
+  { id: "graphite", label: "石墨", rail: "#ecebea", railText: "#3a3a38", surface: "#ffffff", subtle: "#f3f2f0" },
+  { id: "ocean", label: "纸张", rail: "#eaeae8", railText: "#2d2926", surface: "#ffffff", subtle: "#f8f8f6" },
+  { id: "forest", label: "晨雾", rail: "#e5e3da", railText: "#383630", surface: "#ffffff", subtle: "#eeede6" },
+  { id: "rose", label: "暖灰", rail: "#ebe5e0", railText: "#423c38", surface: "#ffffff", subtle: "#f1ece8" }
 ];
 
 type SkinStyle = CSSProperties & Record<`--${string}`, string>;
@@ -157,7 +157,7 @@ async function applyAuthWindowMode(unlocked: boolean) {
     await appWindow.unmaximize().catch(() => undefined);
   }
 
-  await appWindow.setDecorations(unlocked).catch(() => undefined);
+  await appWindow.setDecorations(false).catch(() => undefined);
   await appWindow.setResizable(true).catch(() => undefined);
   await appWindow.setMaxSize(null).catch(() => undefined);
 
@@ -264,7 +264,10 @@ function App() {
   const [view, setView] = useState<View>("mail");
   const [railExpanded, setRailExpanded] = useState(false);
   const [railMenuOpen, setRailMenuOpen] = useState(false);
+  const railRef = useRef<HTMLElement | null>(null);
   const railMenuRef = useRef<HTMLDivElement | null>(null);
+  const railMenuPopupRef = useRef<HTMLDivElement | null>(null);
+  const [railMenuStyle, setRailMenuStyle] = useState<CSSProperties>({});
   const [busy, setBusy] = useState(false);
   const [busyMessage, setBusyMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -295,6 +298,52 @@ function App() {
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [railMenuOpen]);
+
+  useEffect(() => {
+    if (!railMenuOpen) return;
+
+    let raf = 0;
+    const updatePosition = () => {
+      const anchor = railMenuRef.current;
+      const menu = railMenuPopupRef.current;
+      if (!anchor || !menu) return;
+
+      const anchorRect = anchor.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
+      const viewportW = window.innerWidth;
+      const viewportH = window.innerHeight;
+
+      const gap = 10;
+      const preferredTop = anchorRect.top - menuRect.height - gap;
+      const canPlaceAbove = preferredTop >= 8;
+      const topCandidate = canPlaceAbove ? preferredTop : anchorRect.bottom + gap;
+      const top = Math.min(Math.max(8, topCandidate), Math.max(8, viewportH - menuRect.height - 8));
+
+      const left = Math.min(
+        Math.max(8, anchorRect.left),
+        Math.max(8, viewportW - menuRect.width - 8)
+      );
+
+      setRailMenuStyle({ top, left });
+    };
+
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(updatePosition);
+    };
+
+    schedule();
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
+    railRef.current?.addEventListener("scroll", schedule, { passive: true });
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("scroll", schedule, true);
+      railRef.current?.removeEventListener("scroll", schedule);
     };
   }, [railMenuOpen]);
 
@@ -598,9 +647,11 @@ function App() {
   }
 
   return (
-    <div className={`${railExpanded ? "appShell railExpanded" : "appShell"} ${skin.className}`} style={skin.style}>
-      {busy && <GlobalLoadingOverlay message={busyMessage || "处理中..."} />}
-      <aside className={railExpanded ? "rail expanded" : "rail"}>
+    <div className={`appContainer ${skin.className}`} style={skin.style}>
+      <AppWindowChrome />
+      <div className={railExpanded ? "appShell railExpanded" : "appShell"}>
+        {busy && <GlobalLoadingOverlay message={busyMessage || "处理中..."} />}
+      <aside className={railExpanded ? "rail expanded" : "rail"} ref={railRef}>
         <div className="railHeader">
           <span className="brandName">OutlookEmail</span>
           <button
@@ -675,7 +726,7 @@ function App() {
         <div className="railSpacer" />
         <div className="railAccountArea" ref={railMenuRef}>
           {railMenuOpen && (
-            <div className="railAccountMenu">
+            <div className="railAccountMenu" ref={railMenuPopupRef} style={railMenuStyle}>
               <div className="railMenuHeader">{railIdentity}</div>
               <button
                 className="railMenuItem"
@@ -1373,7 +1424,72 @@ function App() {
           />
         )}
       </main>
+      </div>
     </div>
+  );
+}
+
+function AppWindowChrome() {
+  const appWindow = isTauriRuntime() ? getCurrentWindow() : null;
+  const [maximized, setMaximized] = useState(false);
+
+  useEffect(() => {
+    if (!appWindow) return;
+    let disposed = false;
+
+    appWindow.isMaximized().then((value) => {
+      if (!disposed) setMaximized(value);
+    });
+
+    const unlistenPromise = appWindow.onResized(() => {
+      appWindow.isMaximized().then((value) => {
+        if (!disposed) setMaximized(value);
+      });
+    });
+
+    return () => {
+      disposed = true;
+      unlistenPromise.then((unlisten) => unlisten()).catch(() => undefined);
+    };
+  }, [appWindow]);
+
+  if (!appWindow) return null;
+
+  return (
+    <header className="appChrome">
+      <div className="appChromeTitle">OutlookEmail Desktop</div>
+      <div
+        className="appChromeDrag"
+        data-tauri-drag-region
+        onDoubleClick={() => appWindow.toggleMaximize()}
+      />
+      <div className="appChromeControls">
+        <button
+          type="button"
+          className="appChromeButton"
+          aria-label="最小化"
+          onClick={() => appWindow.minimize()}
+        >
+          <Minus size={14} strokeWidth={2.1} />
+        </button>
+        <button
+          type="button"
+          className="appChromeButton"
+          aria-label={maximized ? "向下还原" : "最大化"}
+          onClick={() => appWindow.toggleMaximize()}
+        >
+          {maximized ? <Copy size={13} strokeWidth={2.1} /> : <Square size={12} strokeWidth={2.1} />}
+        </button>
+        <button
+          type="button"
+          className="appChromeButton appChromeClose"
+          aria-label="关闭"
+          onClick={() => appWindow.close()}
+        >
+          <X size={14} strokeWidth={2.1} />
+        </button>
+      </div>
+    </header>
   );
 }
 
@@ -5810,7 +5926,7 @@ function SettingsView({
             />
           </label>
           <div className="accentSwatches">
-            {["#d97757", "#111111", "#8a7a70", "#c05f42", "#e0a17f", "#4a4a45"].map((accent) => (
+            {["#b5725f", "#111111", "#8a7a70", "#4a4a45", "#c05f42", "#e0a17f"].map((accent) => (
               <button
                 key={accent}
                 className={normalizeAccent(draft.accent_color).toLowerCase() === accent ? "accentSwatch active" : "accentSwatch"}

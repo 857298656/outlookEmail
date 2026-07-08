@@ -77,7 +77,7 @@ const defaultSettings: Settings = {
   forward_telegram_chat_id: "",
   forward_wecom_webhook: "",
   appearance_theme: "default",
-  accent_color: "#d97757"
+  accent_color: "#b5725f"
 };
 
 let mockInitialized = false;

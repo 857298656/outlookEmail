@@ -4,16 +4,14 @@ use crate::models::{
     GenerateTempEmailInput, OAuthAuthUrlInput, ProviderMessage, Settings, TempEmailCredential,
     TempEmailMessage,
 };
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
-use imap::types::NameAttribute;
+use imap::types::{Flag, NameAttribute};
 use mailparse::MailHeaderMap;
 use reqwest::{blocking::Client, Proxy};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -21,7 +19,14 @@ use std::time::Duration;
 const GRAPH_SCOPE: &str =
     "offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read";
 const IMAP_OAUTH_SCOPE: &str = "offline_access https://outlook.office.com/IMAP.AccessAsUser.All";
-const GMAIL_MODIFY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
+const IMAP_MESSAGE_FETCH_QUERY: &str = "(FLAGS INTERNALDATE BODY.PEEK[])";
+pub const MAIL_REFRESH_MAX_TOP: usize = 1000;
+
+#[derive(Debug, Clone, Default)]
+struct ImapFetchMeta {
+    is_read: bool,
+    internal_date: Option<chrono::DateTime<chrono::FixedOffset>>,
+}
 
 #[derive(Clone, Copy)]
 pub struct MailProviderDefinition {
@@ -42,17 +47,28 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
         account_type: "outlook",
         default_imap_host: "",
         default_imap_port: 993,
-        capabilities: &["read_mail", "download_attachments", "mark_read", "remote_delete"],
+        capabilities: &[
+            "read_mail",
+            "download_attachments",
+            "mark_read",
+            "remote_delete",
+        ],
         aliases: &["outlook", "microsoft", "msgraph"],
         domains: &["outlook.com", "hotmail.com", "live.com", "msn.com"],
     },
     MailProviderDefinition {
         id: "gmail",
-        credential_kind: "oauth",
-        account_type: "gmail",
-        default_imap_host: "",
+        credential_kind: "imap_app_password",
+        account_type: "imap",
+        default_imap_host: "imap.gmail.com",
         default_imap_port: 993,
-        capabilities: &["read_mail", "download_attachments", "mark_read", "trash", "history_sync"],
+        capabilities: &[
+            "read_mail",
+            "download_attachments",
+            "mark_read",
+            "remote_delete",
+            "imap_folders",
+        ],
         aliases: &["google", "googlemail"],
         domains: &["gmail.com", "googlemail.com"],
     },
@@ -62,7 +78,13 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
         account_type: "imap",
         default_imap_host: "imap.qq.com",
         default_imap_port: 993,
-        capabilities: &["read_mail", "download_attachments", "mark_read", "remote_delete", "imap_folders"],
+        capabilities: &[
+            "read_mail",
+            "download_attachments",
+            "mark_read",
+            "remote_delete",
+            "imap_folders",
+        ],
         aliases: &["qqmail"],
         domains: &["qq.com", "foxmail.com"],
     },
@@ -72,7 +94,13 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
         account_type: "imap",
         default_imap_host: "",
         default_imap_port: 993,
-        capabilities: &["read_mail", "download_attachments", "mark_read", "remote_delete", "imap_folders"],
+        capabilities: &[
+            "read_mail",
+            "download_attachments",
+            "mark_read",
+            "remote_delete",
+            "imap_folders",
+        ],
         aliases: &["outlook_imap"],
         domains: &[],
     },
@@ -82,7 +110,13 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
         account_type: "imap",
         default_imap_host: "imap.163.com",
         default_imap_port: 993,
-        capabilities: &["read_mail", "download_attachments", "mark_read", "remote_delete", "imap_folders"],
+        capabilities: &[
+            "read_mail",
+            "download_attachments",
+            "mark_read",
+            "remote_delete",
+            "imap_folders",
+        ],
         aliases: &["163", "netease", "163mail"],
         domains: &["163.com"],
     },
@@ -92,7 +126,13 @@ pub const MAIL_PROVIDER_REGISTRY: &[MailProviderDefinition] = &[
         account_type: "imap",
         default_imap_host: "",
         default_imap_port: 993,
-        capabilities: &["read_mail", "download_attachments", "mark_read", "remote_delete", "imap_folders"],
+        capabilities: &[
+            "read_mail",
+            "download_attachments",
+            "mark_read",
+            "remote_delete",
+            "imap_folders",
+        ],
         aliases: &["custom_imap", "custom"],
         domains: &[],
     },
@@ -103,14 +143,6 @@ pub struct OAuthTokenResponse {
     pub refresh_token: String,
     pub expires_in: i64,
     pub scope: String,
-}
-
-pub struct GmailFetchResult {
-    pub refresh_token: String,
-    pub history_id: Option<String>,
-    pub replace_message_ids: Vec<String>,
-    pub deleted_message_ids: Vec<String>,
-    pub messages: Vec<ProviderMessage>,
 }
 
 pub fn normalize_mail_provider_id(value: &str) -> Option<&'static str> {
@@ -126,7 +158,9 @@ pub fn normalize_mail_provider_id(value: &str) -> Option<&'static str> {
 
 pub fn mail_provider_definition(value: &str) -> Option<&'static MailProviderDefinition> {
     let provider_id = normalize_mail_provider_id(value)?;
-    MAIL_PROVIDER_REGISTRY.iter().find(|item| item.id == provider_id)
+    MAIL_PROVIDER_REGISTRY
+        .iter()
+        .find(|item| item.id == provider_id)
 }
 
 pub fn mail_provider_capabilities(value: &str) -> Option<&'static [&'static str]> {
@@ -137,10 +171,15 @@ pub fn mail_provider_supports_capability(value: &str, capability: &str) -> bool 
     mail_provider_capabilities(value).is_some_and(|capabilities| capabilities.contains(&capability))
 }
 
-pub fn detect_mail_provider(email: &str, explicit_provider: Option<&str>, has_refresh_token: bool) -> AppResult<&'static MailProviderDefinition> {
+pub fn detect_mail_provider(
+    email: &str,
+    explicit_provider: Option<&str>,
+    has_refresh_token: bool,
+) -> AppResult<&'static MailProviderDefinition> {
     if let Some(provider) = explicit_provider.and_then(normalize_mail_provider_id) {
-        return mail_provider_definition(provider)
-            .ok_or_else(|| AppError::InvalidInput(format!("unsupported mail provider: {provider}")));
+        return mail_provider_definition(provider).ok_or_else(|| {
+            AppError::InvalidInput(format!("unsupported mail provider: {provider}"))
+        });
     }
     if has_refresh_token {
         return mail_provider_definition("graph")
@@ -161,7 +200,12 @@ pub fn detect_mail_provider(email: &str, explicit_provider: Option<&str>, has_re
 }
 
 fn microsoft_oauth_scope(provider: Option<&str>) -> &'static str {
-    match provider.unwrap_or_default().trim().to_ascii_lowercase().as_str() {
+    match provider
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "imap" => IMAP_OAUTH_SCOPE,
         _ => GRAPH_SCOPE,
     }
@@ -169,17 +213,18 @@ fn microsoft_oauth_scope(provider: Option<&str>) -> &'static str {
 
 pub fn build_graph_auth_url(input: &OAuthAuthUrlInput) -> AppResult<String> {
     let provider = normalize_oauth_provider(input.provider.as_deref())?;
-    if provider == "gmail" {
-        return build_google_auth_url(input);
-    }
 
     let client_id = input.client_id.trim();
     let redirect_uri = input.redirect_uri.trim();
     if client_id.is_empty() {
-        return Err(AppError::InvalidInput("Microsoft client id is required".to_string()));
+        return Err(AppError::InvalidInput(
+            "Microsoft client id is required".to_string(),
+        ));
     }
     if redirect_uri.is_empty() {
-        return Err(AppError::InvalidInput("OAuth redirect URI is required".to_string()));
+        return Err(AppError::InvalidInput(
+            "OAuth redirect URI is required".to_string(),
+        ));
     }
 
     let scope = urlencoding::encode(microsoft_oauth_scope(Some(provider))).replace("%20", "+");
@@ -189,33 +234,11 @@ pub fn build_graph_auth_url(input: &OAuthAuthUrlInput) -> AppResult<String> {
         urlencoding::encode(redirect_uri),
         scope
     );
-    if let Some(login_hint) = input.login_hint.as_ref().filter(|value| !value.trim().is_empty()) {
-        url.push_str("&login_hint=");
-        url.push_str(&urlencoding::encode(login_hint.trim()));
-    }
-    Ok(url)
-}
-
-fn build_google_auth_url(input: &OAuthAuthUrlInput) -> AppResult<String> {
-    let client_id = input.client_id.trim();
-    let redirect_uri = input.redirect_uri.trim();
-    if client_id.is_empty() {
-        return Err(AppError::InvalidInput("Google client id is required".to_string()));
-    }
-    if redirect_uri.is_empty() {
-        return Err(AppError::InvalidInput("OAuth redirect URI is required".to_string()));
-    }
-
-    let code_verifier = input.code_verifier.as_deref().unwrap_or_default();
-    let code_challenge = pkce_s256_challenge(code_verifier)?;
-    let mut url = format!(
-        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&response_type=code&redirect_uri={}&scope={}&state=12345&access_type=offline&prompt=consent&code_challenge={}&code_challenge_method=S256",
-        urlencoding::encode(client_id),
-        urlencoding::encode(redirect_uri),
-        urlencoding::encode(GMAIL_MODIFY_SCOPE),
-        urlencoding::encode(&code_challenge)
-    );
-    if let Some(login_hint) = input.login_hint.as_ref().filter(|value| !value.trim().is_empty()) {
+    if let Some(login_hint) = input
+        .login_hint
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         url.push_str("&login_hint=");
         url.push_str(&urlencoding::encode(login_hint.trim()));
     }
@@ -244,37 +267,6 @@ pub fn exchange_microsoft_code(
     parse_token_response(response)
 }
 
-pub fn exchange_google_code(
-    client_id: &str,
-    redirect_uri: &str,
-    code_or_url: &str,
-    code_verifier: Option<&str>,
-) -> AppResult<OAuthTokenResponse> {
-    let client_id = client_id.trim();
-    let redirect_uri = redirect_uri.trim();
-    if client_id.is_empty() {
-        return Err(AppError::InvalidInput("Google client id is required".to_string()));
-    }
-    if redirect_uri.is_empty() {
-        return Err(AppError::InvalidInput("OAuth redirect URI is required".to_string()));
-    }
-    let code = extract_code(code_or_url)?;
-    let code_verifier = validate_pkce_verifier(code_verifier.unwrap_or_default())?;
-    let client = http_client()?;
-    let response = client
-        .post("https://oauth2.googleapis.com/token")
-        .form(&[
-            ("client_id", client_id),
-            ("redirect_uri", redirect_uri),
-            ("grant_type", "authorization_code"),
-            ("code", code.as_str()),
-            ("code_verifier", code_verifier),
-        ])
-        .send()
-        .map_err(network_error)?;
-    parse_token_response(response)
-}
-
 fn normalize_oauth_provider(provider: Option<&str>) -> AppResult<&'static str> {
     let value = provider.unwrap_or_default().trim();
     if value.is_empty() {
@@ -283,65 +275,26 @@ fn normalize_oauth_provider(provider: Option<&str>) -> AppResult<&'static str> {
     match normalize_mail_provider_id(value) {
         Some("graph") => Ok("graph"),
         Some("imap") => Ok("imap"),
-        Some("gmail") => Ok("gmail"),
-        _ => Err(AppError::InvalidInput(format!("unsupported OAuth provider: {value}"))),
+        Some("gmail") => Err(AppError::InvalidInput(
+            "Gmail OAuth is disabled; use IMAP app password".to_string(),
+        )),
+        _ => Err(AppError::InvalidInput(format!(
+            "unsupported OAuth provider: {value}"
+        ))),
     }
 }
 
-fn validate_pkce_verifier(code_verifier: &str) -> AppResult<&str> {
-    let value = code_verifier.trim();
-    if value.is_empty() {
-        return Err(AppError::InvalidInput(
-            "Google OAuth PKCE code verifier is required".to_string(),
-        ));
-    }
-    if !(43..=128).contains(&value.len()) {
-        return Err(AppError::InvalidInput(
-            "Google OAuth PKCE code verifier must be 43-128 characters".to_string(),
-        ));
-    }
-    if !value
-        .bytes()
-        .all(|byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~'))
-    {
-        return Err(AppError::InvalidInput(
-            "Google OAuth PKCE code verifier contains invalid characters".to_string(),
-        ));
-    }
-    Ok(value)
-}
-
-fn pkce_s256_challenge(code_verifier: &str) -> AppResult<String> {
-    let value = validate_pkce_verifier(code_verifier)?;
-    let digest = Sha256::digest(value.as_bytes());
-    Ok(URL_SAFE_NO_PAD.encode(&digest[..]))
-}
-
-fn refresh_graph_access_token_with_client(account: &AccountCredentials, client: &Client) -> AppResult<OAuthTokenResponse> {
+fn refresh_graph_access_token_with_client(
+    account: &AccountCredentials,
+    client: &Client,
+) -> AppResult<OAuthTokenResponse> {
     refresh_microsoft_access_token_with_scope(account, client, GRAPH_SCOPE, "Graph")
-}
-
-fn refresh_gmail_access_token_with_client(account: &AccountCredentials, client: &Client) -> AppResult<OAuthTokenResponse> {
-    if account.client_id.trim().is_empty() || account.refresh_token.trim().is_empty() {
-        return Err(AppError::InvalidInput(
-            "Gmail account is missing client id or refresh token".to_string(),
-        ));
-    }
-    let response = client
-        .post("https://oauth2.googleapis.com/token")
-        .form(&[
-            ("client_id", account.client_id.as_str()),
-            ("grant_type", "refresh_token"),
-            ("refresh_token", account.refresh_token.as_str()),
-        ])
-        .send()
-        .map_err(network_error)?;
-    parse_token_response(response)
 }
 
 fn refresh_imap_oauth_access_token(account: &AccountCredentials) -> AppResult<String> {
     with_account_http_client(account, |client| {
-        refresh_microsoft_access_token_with_scope(account, client, IMAP_OAUTH_SCOPE, "IMAP").map(|token| token.access_token)
+        refresh_microsoft_access_token_with_scope(account, client, IMAP_OAUTH_SCOPE, "IMAP")
+            .map(|token| token.access_token)
     })
 }
 
@@ -369,7 +322,11 @@ fn refresh_microsoft_access_token_with_scope(
     parse_token_response(response)
 }
 
-pub fn fetch_graph_messages(account: &AccountCredentials, folder: &str, top: usize) -> AppResult<(String, Vec<ProviderMessage>)> {
+pub fn fetch_graph_messages(
+    account: &AccountCredentials,
+    folder: &str,
+    top: usize,
+) -> AppResult<(String, Vec<ProviderMessage>)> {
     with_account_http_client(account, |client| {
         let token = refresh_graph_access_token_with_client(account, client)?;
         let folders = folders_for(folder);
@@ -378,7 +335,7 @@ pub fn fetch_graph_messages(account: &AccountCredentials, folder: &str, top: usi
             let url = format!(
                 "https://graph.microsoft.com/v1.0/me/mailFolders/{}/messages?$top={}&$orderby=receivedDateTime%20desc&$select=id,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,hasAttachments,bodyPreview,body",
                 folder_name,
-                top.clamp(1, 50)
+                    top.clamp(1, MAIL_REFRESH_MAX_TOP)
             );
             let response = client
                 .get(url)
@@ -396,7 +353,11 @@ pub fn fetch_graph_messages(account: &AccountCredentials, folder: &str, top: usi
             for item in page.value {
                 let mut message = item.into_provider_message(folder_name);
                 if message.has_attachments {
-                    message.attachments = fetch_graph_attachments_metadata(client, &token.access_token, &message.provider_message_id)?;
+                    message.attachments = fetch_graph_attachments_metadata(
+                        client,
+                        &token.access_token,
+                        &message.provider_message_id,
+                    )?;
                 }
                 all.push(message);
             }
@@ -431,156 +392,35 @@ pub fn download_graph_attachment(
             )));
         }
         let attachment: GraphAttachment = response.json().map_err(network_error)?;
-        let content = attachment
-            .content_bytes
-            .ok_or_else(|| AppError::InvalidInput("Graph attachment has no inline content bytes".to_string()))?;
+        let content = attachment.content_bytes.ok_or_else(|| {
+            AppError::InvalidInput("Graph attachment has no inline content bytes".to_string())
+        })?;
         let bytes = STANDARD
             .decode(content)
             .map_err(|err| AppError::Internal(format!("attachment base64 decode failed: {err}")))?;
         Ok(DownloadedAttachment {
-            name: attachment.name.unwrap_or_else(|| "attachment.bin".to_string()),
+            name: attachment
+                .name
+                .unwrap_or_else(|| "attachment.bin".to_string()),
             content_type: attachment.content_type.unwrap_or_default(),
             bytes,
         })
     })
 }
 
-pub fn fetch_gmail_messages(account: &AccountCredentials, folder: &str, top: usize, start_history_id: Option<&str>) -> AppResult<GmailFetchResult> {
-    with_account_http_client(account, |client| {
-        let token = refresh_gmail_access_token_with_client(account, client)?;
-        if gmail_can_use_history(folder) {
-            if let Some(start_history_id) = start_history_id.filter(|value| !value.trim().is_empty()) {
-                if let Some(delta) = fetch_gmail_history_delta(client, &token.access_token, start_history_id.trim())? {
-                    return Ok(GmailFetchResult {
-                        refresh_token: token.refresh_token,
-                        history_id: delta.history_id,
-                        replace_message_ids: delta.replace_message_ids,
-                        deleted_message_ids: delta.deleted_message_ids,
-                        messages: delta.messages,
-                    });
-                }
-            }
-        }
-        let full = fetch_gmail_full_messages(client, &token.access_token, folder, top)?;
-        Ok(GmailFetchResult {
-            refresh_token: token.refresh_token,
-            history_id: if gmail_can_use_history(folder) { full.history_id } else { None },
-            replace_message_ids: Vec::new(),
-            deleted_message_ids: Vec::new(),
-            messages: full.messages,
-        })
-    })
-}
-
-pub fn download_gmail_attachment(
-    account: &AccountCredentials,
-    message_id: &str,
+pub fn download_imap_attachment_from_raw(
+    raw_mime: &[u8],
     attachment_id: &str,
 ) -> AppResult<DownloadedAttachment> {
-    let message_id = message_id.trim();
-    let attachment_id = attachment_id.trim();
-    if message_id.is_empty() || attachment_id.is_empty() {
-        return Err(AppError::InvalidInput(
-            "Gmail message id and attachment id are required".to_string(),
-        ));
-    }
-    with_account_http_client(account, |client| {
-        let token = refresh_gmail_access_token_with_client(account, client)?;
-        let url = format!(
-            "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}/attachments/{}",
-            urlencoding::encode(message_id),
-            urlencoding::encode(attachment_id)
-        );
-        let response = client
-            .get(url)
-            .bearer_auth(&token.access_token)
-            .send()
-            .map_err(network_error)?;
-        if !response.status().is_success() {
-            return Err(AppError::Internal(format!(
-                "Gmail attachment download failed: HTTP {} {}",
-                response.status(),
-                response.text().unwrap_or_default()
-            )));
-        }
-        let body: GmailMessagePartBody = response.json().map_err(network_error)?;
-        let bytes = decode_gmail_base64(body.data.as_deref().unwrap_or_default())?;
-        let detail = fetch_gmail_message_detail(client, &token.access_token, message_id)?;
-        let (name, content_type) = detail
-            .payload
-            .as_ref()
-            .and_then(|payload| find_gmail_attachment_metadata(payload, attachment_id))
-            .unwrap_or_else(|| ("attachment.bin".to_string(), String::new()));
-        Ok(DownloadedAttachment {
-            name,
-            content_type,
-            bytes,
-        })
-    })
-}
-
-pub fn mark_gmail_message_read(account: &AccountCredentials, message_id: &str, is_read: bool) -> AppResult<()> {
-    let message_id = message_id.trim();
-    if message_id.is_empty() {
-        return Err(AppError::InvalidInput("Gmail message id is required".to_string()));
-    }
-    with_account_http_client(account, |client| {
-        let token = refresh_gmail_access_token_with_client(account, client)?;
-        let url = format!(
-            "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}/modify",
-            urlencoding::encode(message_id)
-        );
-        let response = client
-            .post(url)
-            .bearer_auth(&token.access_token)
-            .json(&gmail_read_state_payload(is_read))
-            .send()
-            .map_err(network_error)?;
-        if !response.status().is_success() {
-            return Err(AppError::Internal(format!(
-                "Gmail mark message failed: HTTP {} {}",
-                response.status(),
-                response.text().unwrap_or_default()
-            )));
-        }
-        Ok(())
-    })
-}
-
-pub fn delete_gmail_message(account: &AccountCredentials, message_id: &str) -> AppResult<()> {
-    let message_id = message_id.trim();
-    if message_id.is_empty() {
-        return Err(AppError::InvalidInput("Gmail message id is required".to_string()));
-    }
-    with_account_http_client(account, |client| {
-        let token = refresh_gmail_access_token_with_client(account, client)?;
-        let url = format!(
-            "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}/trash",
-            urlencoding::encode(message_id)
-        );
-        let response = client
-            .post(url)
-            .bearer_auth(&token.access_token)
-            .send()
-            .map_err(network_error)?;
-        if !response.status().is_success() {
-            return Err(AppError::Internal(format!(
-                "Gmail trash message failed: HTTP {} {}",
-                response.status(),
-                response.text().unwrap_or_default()
-            )));
-        }
-        Ok(())
-    })
-}
-
-pub fn download_imap_attachment_from_raw(raw_mime: &[u8], attachment_id: &str) -> AppResult<DownloadedAttachment> {
     let requested_id = attachment_id.trim();
     if requested_id.is_empty() {
-        return Err(AppError::InvalidInput("attachment id is required".to_string()));
+        return Err(AppError::InvalidInput(
+            "attachment id is required".to_string(),
+        ));
     }
-    let parsed = mailparse::parse_mail(raw_mime)
-        .map_err(|err| AppError::InvalidInput(format!("cached IMAP MIME could not be parsed: {err}")))?;
+    let parsed = mailparse::parse_mail(raw_mime).map_err(|err| {
+        AppError::InvalidInput(format!("cached IMAP MIME could not be parsed: {err}"))
+    })?;
     let mut attachments = Vec::new();
     collect_downloadable_parts(&parsed, &mut attachments);
     attachments
@@ -591,10 +431,16 @@ pub fn download_imap_attachment_from_raw(raw_mime: &[u8], attachment_id: &str) -
             content_type: attachment.content_type,
             bytes: attachment.bytes,
         })
-        .ok_or_else(|| AppError::InvalidInput("attachment was not found in cached IMAP MIME".to_string()))
+        .ok_or_else(|| {
+            AppError::InvalidInput("attachment was not found in cached IMAP MIME".to_string())
+        })
 }
 
-pub fn mark_graph_message_read(account: &AccountCredentials, message_id: &str, is_read: bool) -> AppResult<()> {
+pub fn mark_graph_message_read(
+    account: &AccountCredentials,
+    message_id: &str,
+    is_read: bool,
+) -> AppResult<()> {
     with_account_http_client(account, |client| {
         let token = refresh_graph_access_token_with_client(account, client)?;
         let url = format!(
@@ -641,40 +487,25 @@ pub fn delete_graph_message(account: &AccountCredentials, message_id: &str) -> A
     })
 }
 
-pub fn fetch_imap_messages(account: &AccountCredentials, folder: &str, top: usize) -> AppResult<Vec<ProviderMessage>> {
+pub fn fetch_imap_messages(
+    account: &AccountCredentials,
+    folder: &str,
+    top: usize,
+) -> AppResult<Vec<ProviderMessage>> {
     with_imap_session(account, |session| {
         let mut messages = Vec::new();
         for target in imap_mailbox_targets(session, folder) {
-            let mailbox = target.mailbox.as_str();
-            let selected = match session.select(mailbox) {
-                Ok(_) => true,
-                Err(_) if target.app_folder != "inbox" => false,
-                Err(err) => return Err(AppError::Internal(format!("IMAP select {mailbox} failed: {err}"))),
-            };
-            if !selected {
+            if !select_imap_target(session, &target)? {
                 continue;
             }
-            let uids = session
-                .uid_search("ALL")
-                .map_err(|err| AppError::Internal(format!("IMAP search failed: {err}")))?;
-            let mut selected_uids: Vec<u32> = uids.into_iter().collect();
-            selected_uids.sort_unstable();
-            selected_uids.reverse();
-            selected_uids.truncate(top.clamp(1, 50));
+            let selected_uids = search_recent_imap_uids(session, top)?;
             if selected_uids.is_empty() {
                 continue;
             }
-            let sequence = selected_uids
-                .iter()
-                .map(u32::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
-            let fetches = session
-                .uid_fetch(sequence, "(RFC822 FLAGS INTERNALDATE)")
-                .map_err(|err| AppError::Internal(format!("IMAP fetch failed: {err}")))?;
-            for fetch in fetches.iter() {
-                if let Some(body) = fetch.body() {
-                    messages.push(parse_imap_message(target.app_folder, fetch.uid.unwrap_or(fetch.message), body));
+            match fetch_imap_uids(session, &target, &selected_uids) {
+                Ok(mut fetched) => messages.append(&mut fetched),
+                Err(batch_error) => {
+                    return fetch_imap_messages_individually(account, folder, top, batch_error);
                 }
             }
         }
@@ -683,20 +514,203 @@ pub fn fetch_imap_messages(account: &AccountCredentials, folder: &str, top: usiz
     })
 }
 
-pub fn mark_imap_message_read(account: &AccountCredentials, folder: &str, message_id: &str, is_read: bool) -> AppResult<()> {
-    mutate_imap_message(account, folder, message_id, if is_read { "+FLAGS (\\Seen)" } else { "-FLAGS (\\Seen)" }, false)
+fn build_imap_select_variants(folder_name: &str) -> Vec<String> {
+    let raw_name = folder_name.trim();
+    if raw_name.is_empty() {
+        return Vec::new();
+    }
+
+    let unquoted = if raw_name.starts_with('"') && raw_name.ends_with('"') && raw_name.len() >= 2 {
+        raw_name[1..raw_name.len() - 1].to_string()
+    } else {
+        raw_name.to_string()
+    };
+
+    let mut variants = Vec::new();
+    for candidate in [
+        raw_name.to_string(),
+        unquoted.clone(),
+        format!("\"{unquoted}\""),
+    ] {
+        if !candidate.is_empty() && !variants.contains(&candidate) {
+            variants.push(candidate);
+        }
+    }
+    variants
 }
 
-pub fn delete_imap_message(account: &AccountCredentials, folder: &str, message_id: &str) -> AppResult<()> {
+fn try_select_imap_mailbox(
+    session: &mut imap::Session<native_tls::TlsStream<TcpStream>>,
+    folder_name: &str,
+) -> Result<(), imap::Error> {
+    let mut last_error = None;
+    for candidate in build_imap_select_variants(folder_name) {
+        match session.select(&candidate) {
+            Ok(_) => return Ok(()),
+            Err(err) => last_error = Some(err),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| imap::Error::Bad("empty mailbox name".into())))
+}
+
+fn select_imap_target(
+    session: &mut imap::Session<native_tls::TlsStream<TcpStream>>,
+    target: &ImapMailboxTarget,
+) -> AppResult<bool> {
+    let mailbox = target.mailbox.as_str();
+    let mut last_error = None;
+    for candidate in build_imap_select_variants(mailbox) {
+        match session.select(&candidate) {
+            Ok(_) => return Ok(true),
+            Err(err) => last_error = Some(err),
+        }
+    }
+    if target.app_folder != "inbox" {
+        return Ok(false);
+    }
+    Err(format_imap_select_error(
+        mailbox,
+        &last_error.unwrap_or_else(|| imap::Error::Bad("empty mailbox name".into())),
+    ))
+}
+
+fn format_imap_select_error(mailbox: &str, err: &imap::Error) -> AppError {
+    let raw = err.to_string();
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("unsafe login") {
+        return AppError::Internal(format!(
+            "IMAP select {mailbox} failed: 163/网易邮箱拒绝第三方客户端登录（Unsafe Login）。请确认导入时填写的是客户端授权密码，不是网页登录密码，并已在 设置 > POP3/SMTP/IMAP 中开启 IMAP/SMTP；若仍失败，需要按网易提示联系 kefu@188.com 开通第三方客户端访问。原始错误：{raw}"
+        ));
+    }
+    AppError::Internal(format!("IMAP select {mailbox} failed: {raw}"))
+}
+
+fn search_recent_imap_uids(
+    session: &mut imap::Session<native_tls::TlsStream<TcpStream>>,
+    top: usize,
+) -> AppResult<Vec<u32>> {
+    let uids = session
+        .uid_search("ALL")
+        .map_err(|err| AppError::Internal(format!("IMAP search failed: {err}")))?;
+    let mut selected_uids: Vec<u32> = uids.into_iter().collect();
+    selected_uids.sort_unstable();
+    selected_uids.reverse();
+    selected_uids.truncate(top.clamp(1, MAIL_REFRESH_MAX_TOP));
+    Ok(selected_uids)
+}
+
+fn fetch_imap_uids(
+    session: &mut imap::Session<native_tls::TlsStream<TcpStream>>,
+    target: &ImapMailboxTarget,
+    selected_uids: &[u32],
+) -> Result<Vec<ProviderMessage>, String> {
+    let sequence = selected_uids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let fetches = session
+        .uid_fetch(sequence, IMAP_MESSAGE_FETCH_QUERY)
+        .map_err(|err| format!("IMAP fetch failed: {err}"))?;
+    let mut messages = Vec::new();
+    for fetch in fetches.iter() {
+        if let Some(body) = fetch.body() {
+            let meta = extract_imap_fetch_meta(fetch);
+            messages.push(parse_imap_message(
+                target.app_folder,
+                fetch.uid.unwrap_or(fetch.message),
+                body,
+                meta,
+            ));
+        }
+    }
+    Ok(messages)
+}
+
+fn fetch_imap_messages_individually(
+    account: &AccountCredentials,
+    folder: &str,
+    top: usize,
+    batch_error: String,
+) -> AppResult<Vec<ProviderMessage>> {
+    let mut messages = with_imap_session(account, |session| {
+        let mut messages = Vec::new();
+        let mut failures = Vec::new();
+        for target in imap_mailbox_targets(session, folder) {
+            if !select_imap_target(session, &target)? {
+                continue;
+            }
+            for uid in search_recent_imap_uids(session, top)? {
+                match fetch_single_imap_uid(account, &target, uid) {
+                    Ok(mut fetched) => messages.append(&mut fetched),
+                    Err(err) => failures.push(format!("{uid}: {err}")),
+                }
+            }
+        }
+        if messages.is_empty() && !failures.is_empty() {
+            return Err(AppError::Internal(format!(
+                "{batch_error}; IMAP individual fetch fallback failed: {}",
+                failures.join("; ")
+            )));
+        }
+        Ok(messages)
+    })?;
+    messages.sort_by(|a, b| b.received_at_sort.total_cmp(&a.received_at_sort));
+    Ok(messages)
+}
+
+fn fetch_single_imap_uid(
+    account: &AccountCredentials,
+    target: &ImapMailboxTarget,
+    uid: u32,
+) -> Result<Vec<ProviderMessage>, String> {
+    with_imap_session(account, |session| {
+        try_select_imap_mailbox(session, &target.mailbox)
+            .map_err(|err| format_imap_select_error(&target.mailbox, &err))?;
+        fetch_imap_uids(session, target, &[uid]).map_err(AppError::Internal)
+    })
+    .map_err(|err| err.to_string())
+}
+
+pub fn mark_imap_message_read(
+    account: &AccountCredentials,
+    folder: &str,
+    message_id: &str,
+    is_read: bool,
+) -> AppResult<()> {
+    mutate_imap_message(
+        account,
+        folder,
+        message_id,
+        if is_read {
+            "+FLAGS (\\Seen)"
+        } else {
+            "-FLAGS (\\Seen)"
+        },
+        false,
+    )
+}
+
+pub fn delete_imap_message(
+    account: &AccountCredentials,
+    folder: &str,
+    message_id: &str,
+) -> AppResult<()> {
     mutate_imap_message(account, folder, message_id, "+FLAGS (\\Deleted)", true)
 }
 
-pub fn generate_temp_email(settings: &Settings, input: &GenerateTempEmailInput, channel: Option<&CloudflareChannelCredential>) -> AppResult<TempEmailCredential> {
+pub fn generate_temp_email(
+    settings: &Settings,
+    input: &GenerateTempEmailInput,
+    channel: Option<&CloudflareChannelCredential>,
+) -> AppResult<TempEmailCredential> {
     match input.provider.to_ascii_lowercase().as_str() {
         "gptmail" => generate_gptmail_address(settings, input),
         "duckmail" => generate_duckmail_address(settings, input),
         "cloudflare" => generate_cloudflare_address(input, channel),
-        value => Err(AppError::InvalidInput(format!("unsupported temp email provider: {value}"))),
+        value => Err(AppError::InvalidInput(format!(
+            "unsupported temp email provider: {value}"
+        ))),
     }
 }
 
@@ -710,11 +724,16 @@ pub fn fetch_temp_messages(
         "gptmail" => fetch_gptmail_messages(settings, &temp_email.email),
         "duckmail" => fetch_duckmail_messages(settings, temp_email),
         "cloudflare" => fetch_cloudflare_messages(temp_email, channel, limit),
-        value => Err(AppError::InvalidInput(format!("unsupported temp email provider: {value}"))),
+        value => Err(AppError::InvalidInput(format!(
+            "unsupported temp email provider: {value}"
+        ))),
     }
 }
 
-pub fn delete_temp_remote(temp_email: &TempEmailCredential, channel: Option<&CloudflareChannelCredential>) -> AppResult<bool> {
+pub fn delete_temp_remote(
+    temp_email: &TempEmailCredential,
+    channel: Option<&CloudflareChannelCredential>,
+) -> AppResult<bool> {
     match temp_email.provider.to_ascii_lowercase().as_str() {
         "cloudflare" => {
             let Some(channel) = channel else {
@@ -732,11 +751,19 @@ pub fn delete_temp_remote(temp_email: &TempEmailCredential, channel: Option<&Clo
 }
 
 pub fn test_cloudflare_channel(channel: &CloudflareChannelCredential) -> AppResult<String> {
-    let value = cloudflare_request("GET", channel, "/admin/address", Some(&[("limit", "1"), ("offset", "0")]), None)?;
+    let value = cloudflare_request(
+        "GET",
+        channel,
+        "/admin/address",
+        Some(&[("limit", "1"), ("offset", "0")]),
+        None,
+    )?;
     let count = extract_array(&value, &["results", "addresses", "data"])
         .map(|items| items.len())
         .unwrap_or_default();
-    Ok(format!("Cloudflare channel connected, sample addresses: {count}"))
+    Ok(format!(
+        "Cloudflare channel connected, sample addresses: {count}"
+    ))
 }
 
 fn http_client() -> AppResult<Client> {
@@ -748,13 +775,12 @@ fn http_client_for_proxy(proxy_url: Option<&str>) -> AppResult<Client> {
         .timeout(Duration::from_secs(30))
         .user_agent("OutlookEmailDesktop/0.1");
     if let Some(proxy_url) = proxy_url.filter(|value| !value.trim().is_empty()) {
-        let proxy = Proxy::all(proxy_url.trim())
-            .map_err(|err| AppError::InvalidInput(format!("invalid proxy URL {proxy_url}: {err}")))?;
+        let proxy = Proxy::all(proxy_url.trim()).map_err(|err| {
+            AppError::InvalidInput(format!("invalid proxy URL {proxy_url}: {err}"))
+        })?;
         builder = builder.proxy(proxy);
     }
-    builder
-        .build()
-        .map_err(network_error)
+    builder.build().map_err(network_error)
 }
 
 fn with_account_http_client<T>(
@@ -779,7 +805,11 @@ fn with_account_http_client<T>(
     Err(AppError::Internal(format!(
         "all proxy attempts failed for {}: {}",
         account.email,
-        if last_error.is_empty() { "unknown network error" } else { last_error.as_str() }
+        if last_error.is_empty() {
+            "unknown network error"
+        } else {
+            last_error.as_str()
+        }
     )))
 }
 
@@ -787,21 +817,38 @@ fn network_error(err: reqwest::Error) -> AppError {
     AppError::Internal(format!("network request failed: {err}"))
 }
 
-fn generate_gptmail_address(settings: &Settings, input: &GenerateTempEmailInput) -> AppResult<TempEmailCredential> {
+fn generate_gptmail_address(
+    settings: &Settings,
+    input: &GenerateTempEmailInput,
+) -> AppResult<TempEmailCredential> {
     let base_url = settings.gptmail_base_url.trim().trim_end_matches('/');
     if base_url.is_empty() {
-        return Err(AppError::InvalidInput("GPTMail base URL is required".to_string()));
+        return Err(AppError::InvalidInput(
+            "GPTMail base URL is required".to_string(),
+        ));
     }
     let client = http_client()?;
-    let mut request = if input.prefix.as_deref().unwrap_or_default().trim().is_empty()
-        && input.domain.as_deref().unwrap_or_default().trim().is_empty()
+    let mut request = if input
+        .prefix
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+        && input
+            .domain
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
     {
         client.get(format!("{base_url}/api/generate-email"))
     } else {
-        client.post(format!("{base_url}/api/generate-email")).json(&json!({
-            "prefix": input.prefix.as_deref().unwrap_or_default().trim(),
-            "domain": input.domain.as_deref().unwrap_or_default().trim()
-        }))
+        client
+            .post(format!("{base_url}/api/generate-email"))
+            .json(&json!({
+                "prefix": input.prefix.as_deref().unwrap_or_default().trim(),
+                "domain": input.domain.as_deref().unwrap_or_default().trim()
+            }))
     };
     if !settings.gptmail_api_key.trim().is_empty() {
         request = request.header("X-API-Key", settings.gptmail_api_key.trim());
@@ -809,7 +856,9 @@ fn generate_gptmail_address(settings: &Settings, input: &GenerateTempEmailInput)
     let value = send_json(request, "GPTMail generate email")?;
     let email = string_path(&value, &["data", "email"])
         .or_else(|| string_path(&value, &["email"]))
-        .ok_or_else(|| AppError::Internal("GPTMail response did not include an email".to_string()))?;
+        .ok_or_else(|| {
+            AppError::Internal("GPTMail response did not include an email".to_string())
+        })?;
     Ok(TempEmailCredential {
         id: 0,
         email,
@@ -821,10 +870,18 @@ fn generate_gptmail_address(settings: &Settings, input: &GenerateTempEmailInput)
     })
 }
 
-fn generate_duckmail_address(settings: &Settings, input: &GenerateTempEmailInput) -> AppResult<TempEmailCredential> {
+fn generate_duckmail_address(
+    settings: &Settings,
+    input: &GenerateTempEmailInput,
+) -> AppResult<TempEmailCredential> {
     let base_url = settings.duckmail_base_url.trim().trim_end_matches('/');
     let username = input.username.as_deref().unwrap_or_default().trim();
-    let domain = input.domain.as_deref().unwrap_or_default().trim().trim_start_matches('@');
+    let domain = input
+        .domain
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .trim_start_matches('@');
     let password = input.password.as_deref().unwrap_or_default().trim();
     if base_url.is_empty() || username.is_empty() || domain.is_empty() || password.len() < 6 {
         return Err(AppError::InvalidInput(
@@ -853,10 +910,16 @@ fn generate_duckmail_address(settings: &Settings, input: &GenerateTempEmailInput
     })
 }
 
-fn generate_cloudflare_address(input: &GenerateTempEmailInput, channel: Option<&CloudflareChannelCredential>) -> AppResult<TempEmailCredential> {
-    let channel = channel.ok_or_else(|| AppError::InvalidInput("Cloudflare channel is required".to_string()))?;
+fn generate_cloudflare_address(
+    input: &GenerateTempEmailInput,
+    channel: Option<&CloudflareChannelCredential>,
+) -> AppResult<TempEmailCredential> {
+    let channel = channel
+        .ok_or_else(|| AppError::InvalidInput("Cloudflare channel is required".to_string()))?;
     if !channel.enabled {
-        return Err(AppError::InvalidInput("Cloudflare channel is disabled".to_string()));
+        return Err(AppError::InvalidInput(
+            "Cloudflare channel is disabled".to_string(),
+        ));
     }
     let username = input
         .username
@@ -872,7 +935,9 @@ fn generate_cloudflare_address(input: &GenerateTempEmailInput, channel: Option<&
         .filter(|value| !value.is_empty())
         .map(|value| value.trim_start_matches('@').to_ascii_lowercase())
         .or_else(|| channel.email_domains.first().cloned())
-        .ok_or_else(|| AppError::InvalidInput("Cloudflare channel has no email domain".to_string()))?;
+        .ok_or_else(|| {
+            AppError::InvalidInput("Cloudflare channel has no email domain".to_string())
+        })?;
     let value = cloudflare_request(
         "POST",
         channel,
@@ -886,7 +951,9 @@ fn generate_cloudflare_address(input: &GenerateTempEmailInput, channel: Option<&
     )?;
     let email = string_path(&value, &["address"])
         .or_else(|| string_path(&value, &["email"]))
-        .ok_or_else(|| AppError::Internal("Cloudflare response did not include an address".to_string()))?;
+        .ok_or_else(|| {
+            AppError::Internal("Cloudflare response did not include an address".to_string())
+        })?;
     let address_id = string_path(&value, &["id"])
         .or_else(|| string_path(&value, &["address_id"]))
         .unwrap_or_default();
@@ -904,15 +971,20 @@ fn generate_cloudflare_address(input: &GenerateTempEmailInput, channel: Option<&
 fn fetch_gptmail_messages(settings: &Settings, email: &str) -> AppResult<Vec<TempEmailMessage>> {
     let base_url = settings.gptmail_base_url.trim().trim_end_matches('/');
     if base_url.is_empty() {
-        return Err(AppError::InvalidInput("GPTMail base URL is required".to_string()));
+        return Err(AppError::InvalidInput(
+            "GPTMail base URL is required".to_string(),
+        ));
     }
     let client = http_client()?;
-    let mut request = client.get(format!("{base_url}/api/emails")).query(&[("email", email)]);
+    let mut request = client
+        .get(format!("{base_url}/api/emails"))
+        .query(&[("email", email)]);
     if !settings.gptmail_api_key.trim().is_empty() {
         request = request.header("X-API-Key", settings.gptmail_api_key.trim());
     }
     let value = send_json(request, "GPTMail list messages")?;
-    let items = extract_array(&value, &["data.emails", "emails", "data", "results"]).unwrap_or_default();
+    let items =
+        extract_array(&value, &["data.emails", "emails", "data", "results"]).unwrap_or_default();
     Ok(items
         .iter()
         .enumerate()
@@ -920,7 +992,10 @@ fn fetch_gptmail_messages(settings: &Settings, email: &str) -> AppResult<Vec<Tem
         .collect())
 }
 
-fn fetch_duckmail_messages(settings: &Settings, temp_email: &TempEmailCredential) -> AppResult<Vec<TempEmailMessage>> {
+fn fetch_duckmail_messages(
+    settings: &Settings,
+    temp_email: &TempEmailCredential,
+) -> AppResult<Vec<TempEmailMessage>> {
     let token = if temp_email.provider_token.trim().is_empty() {
         duckmail_token(settings, &temp_email.email, &temp_email.provider_password)?
     } else {
@@ -934,7 +1009,8 @@ fn fetch_duckmail_messages(settings: &Settings, temp_email: &TempEmailCredential
             .query(&[("page", "1")]),
         "DuckMail list messages",
     )?;
-    let items = extract_array(&value, &["hydra:member", "messages", "data", "results"]).unwrap_or_default();
+    let items =
+        extract_array(&value, &["hydra:member", "messages", "data", "results"]).unwrap_or_default();
     Ok(items
         .iter()
         .enumerate()
@@ -947,7 +1023,8 @@ fn fetch_cloudflare_messages(
     channel: Option<&CloudflareChannelCredential>,
     limit: usize,
 ) -> AppResult<Vec<TempEmailMessage>> {
-    let channel = channel.ok_or_else(|| AppError::InvalidInput("Cloudflare channel is required".to_string()))?;
+    let channel = channel
+        .ok_or_else(|| AppError::InvalidInput("Cloudflare channel is required".to_string()))?;
     let limit_text = limit.clamp(1, 100).to_string();
     let value = cloudflare_request(
         "GET",
@@ -960,7 +1037,11 @@ fn fetch_cloudflare_messages(
         ]),
         None,
     )?;
-    let items = extract_array(&value, &["results", "mails", "emails", "data.results", "data"]).unwrap_or_default();
+    let items = extract_array(
+        &value,
+        &["results", "mails", "emails", "data.results", "data"],
+    )
+    .unwrap_or_default();
     Ok(items
         .iter()
         .enumerate()
@@ -970,7 +1051,9 @@ fn fetch_cloudflare_messages(
 
 fn duckmail_token(settings: &Settings, email: &str, password: &str) -> AppResult<String> {
     if password.trim().is_empty() {
-        return Err(AppError::InvalidInput("DuckMail password is required".to_string()));
+        return Err(AppError::InvalidInput(
+            "DuckMail password is required".to_string(),
+        ));
     }
     let base_url = settings.duckmail_base_url.trim().trim_end_matches('/');
     let value = send_json(
@@ -979,7 +1062,8 @@ fn duckmail_token(settings: &Settings, email: &str, password: &str) -> AppResult
             .json(&json!({ "address": email, "password": password })),
         "DuckMail token",
     )?;
-    string_path(&value, &["token"]).ok_or_else(|| AppError::Internal("DuckMail token response is missing token".to_string()))
+    string_path(&value, &["token"])
+        .ok_or_else(|| AppError::Internal("DuckMail token response is missing token".to_string()))
 }
 
 fn cloudflare_request(
@@ -1006,7 +1090,11 @@ fn cloudflare_request(
         "GET" => client.get(url),
         "POST" => client.post(url),
         "DELETE" => client.delete(url),
-        _ => return Err(AppError::InvalidInput(format!("unsupported Cloudflare method: {method}"))),
+        _ => {
+            return Err(AppError::InvalidInput(format!(
+                "unsupported Cloudflare method: {method}"
+            )))
+        }
     }
     .header("x-admin-auth", channel.admin_password.trim());
     if let Some(query) = query {
@@ -1023,7 +1111,9 @@ fn send_json(request: reqwest::blocking::RequestBuilder, label: &str) -> AppResu
     let status = response.status();
     let text = response.text().map_err(network_error)?;
     if !status.is_success() {
-        return Err(AppError::Internal(format!("{label} failed: HTTP {status} {text}")));
+        return Err(AppError::Internal(format!(
+            "{label} failed: HTTP {status} {text}"
+        )));
     }
     if text.trim().is_empty() {
         return Ok(json!({ "success": true }));
@@ -1066,13 +1156,22 @@ fn temp_message_from_json(email: &str, item: &Value, index: usize) -> Option<Tem
         html_content: html_content.clone(),
         has_html: !html_content.trim().is_empty(),
         timestamp: timestamp_from_value(item).unwrap_or_else(|| Utc::now().timestamp()),
-        raw_content: string_path(item, &["raw"]).or_else(|| string_path(item, &["raw_content"])).unwrap_or_default(),
+        raw_content: string_path(item, &["raw"])
+            .or_else(|| string_path(item, &["raw_content"]))
+            .unwrap_or_default(),
         created_at: String::new(),
     })
 }
 
-fn cloudflare_message_from_json(email: &str, item: &Value, index: usize) -> Option<TempEmailMessage> {
-    if let Some(raw) = string_path(item, &["raw"]).or_else(|| string_path(item, &["raw_content"])).or_else(|| string_path(item, &["source_raw"])) {
+fn cloudflare_message_from_json(
+    email: &str,
+    item: &Value,
+    index: usize,
+) -> Option<TempEmailMessage> {
+    if let Some(raw) = string_path(item, &["raw"])
+        .or_else(|| string_path(item, &["raw_content"]))
+        .or_else(|| string_path(item, &["source_raw"]))
+    {
         return Some(parse_raw_temp_message(
             email,
             &raw,
@@ -1083,7 +1182,12 @@ fn cloudflare_message_from_json(email: &str, item: &Value, index: usize) -> Opti
     temp_message_from_json(email, item, index)
 }
 
-fn parse_raw_temp_message(email: &str, raw: &str, fallback_id: String, timestamp: i64) -> TempEmailMessage {
+fn parse_raw_temp_message(
+    email: &str,
+    raw: &str,
+    fallback_id: String,
+    timestamp: i64,
+) -> TempEmailMessage {
     let parsed = mailparse::parse_mail(raw.as_bytes()).ok();
     let subject = parsed
         .as_ref()
@@ -1104,7 +1208,11 @@ fn parse_raw_temp_message(email: &str, raw: &str, fallback_id: String, timestamp
         email_address: email.to_string(),
         from_address,
         subject,
-        content: if has_html { String::new() } else { body.clone() },
+        content: if has_html {
+            String::new()
+        } else {
+            body.clone()
+        },
         html_content: if has_html { body } else { String::new() },
         has_html,
         timestamp,
@@ -1168,7 +1276,10 @@ fn timestamp_from_value(value: &Value) -> Option<i64> {
 }
 
 fn random_temp_username() -> String {
-    format!("oe{}", uuid::Uuid::new_v4().simple().to_string()[..12].to_string())
+    format!(
+        "oe{}",
+        uuid::Uuid::new_v4().simple().to_string()[..12].to_string()
+    )
 }
 
 fn parse_token_response(response: reqwest::blocking::Response) -> AppResult<OAuthTokenResponse> {
@@ -1205,7 +1316,8 @@ fn oauth_token_error(status: reqwest::StatusCode, body: &str) -> AppError {
         || lower.contains("provided value for the 'code' parameter is not valid")
     {
         return AppError::InvalidInput(
-            "OAuth 授权码已过期或已被使用，请重新点击“打开”完成授权，然后粘贴新的回调 URL。".to_string(),
+            "OAuth 授权码已过期或已被使用，请重新点击“打开”完成授权，然后粘贴新的回调 URL。"
+                .to_string(),
         );
     }
 
@@ -1215,10 +1327,16 @@ fn oauth_token_error(status: reqwest::StatusCode, body: &str) -> AppError {
         );
     }
 
-    AppError::Internal(format!("OAuth token request failed: HTTP {status} {description}"))
+    AppError::Internal(format!(
+        "OAuth token request failed: HTTP {status} {description}"
+    ))
 }
 
-fn fetch_graph_attachments_metadata(client: &Client, access_token: &str, message_id: &str) -> AppResult<Vec<AttachmentInfo>> {
+fn fetch_graph_attachments_metadata(
+    client: &Client,
+    access_token: &str,
+    message_id: &str,
+) -> AppResult<Vec<AttachmentInfo>> {
     let url = format!(
         "https://graph.microsoft.com/v1.0/me/messages/{}/attachments?$select=id,name,contentType,size",
         urlencoding::encode(message_id)
@@ -1244,171 +1362,13 @@ fn fetch_graph_attachments_metadata(client: &Client, access_token: &str, message
         .collect())
 }
 
-struct GmailFullMessages {
-    history_id: Option<String>,
-    messages: Vec<ProviderMessage>,
-}
-
-struct GmailHistoryDelta {
-    history_id: Option<String>,
-    replace_message_ids: Vec<String>,
-    deleted_message_ids: Vec<String>,
-    messages: Vec<ProviderMessage>,
-}
-
-fn fetch_gmail_full_messages(client: &Client, access_token: &str, folder: &str, top: usize) -> AppResult<GmailFullMessages> {
-    let targets = gmail_folder_targets(folder);
-    let mut all = Vec::new();
-    let mut history_id: Option<String> = None;
-    for target in targets {
-        let page = list_gmail_messages(client, access_token, target.label_id, top.clamp(1, 50))?;
-        for item in page.messages.unwrap_or_default() {
-            let detail = fetch_gmail_message_detail(client, access_token, &item.id)?;
-            history_id = max_gmail_history_id(history_id, detail.history_id.as_deref());
-            all.push(detail.into_provider_message(target.app_folder)?);
-        }
-    }
-    all.sort_by(|a, b| b.received_at_sort.total_cmp(&a.received_at_sort));
-    Ok(GmailFullMessages {
-        history_id,
-        messages: all,
-    })
-}
-
-fn fetch_gmail_history_delta(client: &Client, access_token: &str, start_history_id: &str) -> AppResult<Option<GmailHistoryDelta>> {
-    let mut page_token: Option<String> = None;
-    let mut current_history_id: Option<String> = None;
-    let mut replace_ids = HashSet::new();
-    let mut deleted_ids = HashSet::new();
-    loop {
-        let Some(page) = list_gmail_history_page(client, access_token, start_history_id, page_token.as_deref())? else {
-            return Ok(None);
-        };
-        current_history_id = max_gmail_history_id(current_history_id, page.history_id.as_deref());
-        for history in page.history.unwrap_or_default() {
-            collect_gmail_history_message_ids(history.messages_added, &mut replace_ids);
-            collect_gmail_history_message_ids(history.labels_added, &mut replace_ids);
-            collect_gmail_history_message_ids(history.labels_removed, &mut replace_ids);
-            collect_gmail_history_message_ids(history.messages_deleted, &mut deleted_ids);
-        }
-        page_token = page.next_page_token;
-        if page_token.is_none() {
-            break;
-        }
-    }
-
-    for id in &deleted_ids {
-        replace_ids.remove(id);
-    }
-
-    let mut messages = Vec::new();
-    for id in sorted_gmail_ids(&replace_ids) {
-        let detail = fetch_gmail_message_detail(client, access_token, &id)?;
-        for message in detail.into_provider_messages_for_labels()? {
-            messages.push(message);
-        }
-    }
-    messages.sort_by(|a, b| b.received_at_sort.total_cmp(&a.received_at_sort));
-    Ok(Some(GmailHistoryDelta {
-        history_id: current_history_id,
-        replace_message_ids: sorted_gmail_ids(&replace_ids),
-        deleted_message_ids: sorted_gmail_ids(&deleted_ids),
-        messages,
-    }))
-}
-
-fn list_gmail_messages(
-    client: &Client,
-    access_token: &str,
-    label_id: &str,
-    top: usize,
-) -> AppResult<GmailMessageList> {
-    let response = client
-        .get("https://gmail.googleapis.com/gmail/v1/users/me/messages")
-        .bearer_auth(access_token)
-        .query(&[
-            ("maxResults", top.to_string()),
-            ("labelIds", label_id.to_string()),
-            ("includeSpamTrash", "true".to_string()),
-        ])
-        .send()
-        .map_err(network_error)?;
-    if !response.status().is_success() {
-        return Err(AppError::Internal(format!(
-            "Gmail list messages failed: HTTP {} {}",
-            response.status(),
-            response.text().unwrap_or_default()
-        )));
-    }
-    response.json().map_err(network_error)
-}
-
-fn list_gmail_history_page(
-    client: &Client,
-    access_token: &str,
-    start_history_id: &str,
-    page_token: Option<&str>,
-) -> AppResult<Option<GmailHistoryList>> {
-    let mut query = vec![
-        ("startHistoryId", start_history_id.to_string()),
-        ("maxResults", "500".to_string()),
-    ];
-    if let Some(page_token) = page_token {
-        query.push(("pageToken", page_token.to_string()));
-    }
-    let response = client
-        .get("https://gmail.googleapis.com/gmail/v1/users/me/history")
-        .bearer_auth(access_token)
-        .query(&query)
-        .send()
-        .map_err(network_error)?;
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
-    }
-    if !response.status().is_success() {
-        return Err(AppError::Internal(format!(
-            "Gmail history list failed: HTTP {} {}",
-            response.status(),
-            response.text().unwrap_or_default()
-        )));
-    }
-    response.json().map(Some).map_err(network_error)
-}
-
-fn fetch_gmail_message_detail(client: &Client, access_token: &str, message_id: &str) -> AppResult<GmailMessage> {
-    let url = format!(
-        "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}",
-        urlencoding::encode(message_id)
-    );
-    let response = client
-        .get(url)
-        .bearer_auth(access_token)
-        .query(&[("format", "full")])
-        .send()
-        .map_err(network_error)?;
-    if !response.status().is_success() {
-        return Err(AppError::Internal(format!(
-            "Gmail get message failed: HTTP {} {}",
-            response.status(),
-            response.text().unwrap_or_default()
-        )));
-    }
-    response.json().map_err(network_error)
-}
-
-fn gmail_read_state_payload(is_read: bool) -> Value {
-    if is_read {
-        json!({ "removeLabelIds": ["UNREAD"] })
-    } else {
-        json!({ "addLabelIds": ["UNREAD"] })
-    }
-}
-
 fn extract_code(code_or_url: &str) -> AppResult<String> {
     let compact = code_or_url.split_whitespace().collect::<String>();
     let value = compact.trim();
     if value.is_empty() {
-        return Err(AppError::InvalidInput("OAuth code or callback URL is required".to_string()));
+        return Err(AppError::InvalidInput(
+            "OAuth code or callback URL is required".to_string(),
+        ));
     }
     if !value.starts_with("http://") && !value.starts_with("https://") {
         return Ok(value.to_string());
@@ -1429,79 +1389,6 @@ fn folders_for(folder: &str) -> Vec<&'static str> {
         "junk" | "junkemail" => vec!["junkemail"],
         "deleted" | "deleteditems" => vec!["deleteditems"],
         _ => vec!["inbox", "junkemail", "deleteditems"],
-    }
-}
-
-struct GmailFolderTarget {
-    app_folder: &'static str,
-    label_id: &'static str,
-}
-
-fn gmail_folder_targets(folder: &str) -> Vec<GmailFolderTarget> {
-    match folder.to_ascii_lowercase().as_str() {
-        "inbox" => vec![GmailFolderTarget {
-            app_folder: "inbox",
-            label_id: "INBOX",
-        }],
-        "junk" | "junkemail" => vec![GmailFolderTarget {
-            app_folder: "junkemail",
-            label_id: "SPAM",
-        }],
-        "deleted" | "deleteditems" => vec![GmailFolderTarget {
-            app_folder: "deleteditems",
-            label_id: "TRASH",
-        }],
-        _ => vec![
-            GmailFolderTarget {
-                app_folder: "inbox",
-                label_id: "INBOX",
-            },
-            GmailFolderTarget {
-                app_folder: "junkemail",
-                label_id: "SPAM",
-            },
-            GmailFolderTarget {
-                app_folder: "deleteditems",
-                label_id: "TRASH",
-            },
-        ],
-    }
-}
-
-fn gmail_can_use_history(folder: &str) -> bool {
-    matches!(folder.trim().to_ascii_lowercase().as_str(), "" | "all")
-}
-
-fn collect_gmail_history_message_ids(changes: Vec<GmailHistoryMessageChange>, ids: &mut HashSet<String>) {
-    for change in changes {
-        if !change.message.id.trim().is_empty() {
-            ids.insert(change.message.id);
-        }
-    }
-}
-
-fn sorted_gmail_ids(ids: &HashSet<String>) -> Vec<String> {
-    let mut values = ids.iter().cloned().collect::<Vec<_>>();
-    values.sort();
-    values
-}
-
-fn max_gmail_history_id(current: Option<String>, candidate: Option<&str>) -> Option<String> {
-    let candidate = candidate?.trim();
-    if candidate.is_empty() {
-        return current;
-    }
-    match current {
-        Some(current) => {
-            let current_number = current.parse::<u128>().ok();
-            let candidate_number = candidate.parse::<u128>().ok();
-            if candidate_number > current_number {
-                Some(candidate.to_string())
-            } else {
-                Some(current)
-            }
-        }
-        None => Some(candidate.to_string()),
     }
 }
 
@@ -1533,7 +1420,10 @@ impl ImapMailboxMap {
     fn mailbox_for(&self, app_folder: &str) -> String {
         match app_folder {
             "junk" | "junkemail" => self.junkemail.clone().unwrap_or_else(|| "Junk".to_string()),
-            "deleted" | "deleteditems" => self.deleteditems.clone().unwrap_or_else(|| "Deleted".to_string()),
+            "deleted" | "deleteditems" => self
+                .deleteditems
+                .clone()
+                .unwrap_or_else(|| "Deleted".to_string()),
             _ => self.inbox.clone().unwrap_or_else(|| "INBOX".to_string()),
         }
     }
@@ -1553,7 +1443,9 @@ fn imap_mailbox_targets(
         .collect()
 }
 
-fn imap_mailbox_map(session: &mut imap::Session<native_tls::TlsStream<TcpStream>>) -> ImapMailboxMap {
+fn imap_mailbox_map(
+    session: &mut imap::Session<native_tls::TlsStream<TcpStream>>,
+) -> ImapMailboxMap {
     let mut map = ImapMailboxMap::default();
     let Ok(names) = session.list(Some(""), Some("*")) else {
         return map;
@@ -1585,10 +1477,16 @@ fn imap_attribute_name(attribute: &NameAttribute<'_>) -> String {
 }
 
 fn classify_imap_mailbox(attributes: &[String], mailbox_name: &str) -> Option<&'static str> {
-    if attributes.iter().any(|value| value == "junk" || value == "spam") {
+    if attributes
+        .iter()
+        .any(|value| value == "junk" || value == "spam")
+    {
         return Some("junkemail");
     }
-    if attributes.iter().any(|value| value == "trash" || value == "deleted") {
+    if attributes
+        .iter()
+        .any(|value| value == "trash" || value == "deleted")
+    {
         return Some("deleteditems");
     }
     let normalized = normalize_imap_mailbox_name(mailbox_name);
@@ -1597,8 +1495,11 @@ fn classify_imap_mailbox(attributes: &[String], mailbox_name: &str) -> Option<&'
     }
     let leaf = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
     match leaf {
-        "junk" | "junkemail" | "spam" | "bulkmail" | "垃圾邮件" | "垃圾郵件" | "垃圾信" => Some("junkemail"),
-        "deleted" | "deleteditems" | "deletedmessages" | "trash" | "bin" | "已删除" | "已刪除" | "已删除邮件" | "已刪除郵件" | "垃圾箱" | "回收站" => Some("deleteditems"),
+        "junk" | "junkemail" | "spam" | "bulkmail" | "垃圾邮件" | "垃圾郵件" | "垃圾信" => {
+            Some("junkemail")
+        }
+        "deleted" | "deleteditems" | "deletedmessages" | "trash" | "bin" | "已删除" | "已刪除"
+        | "已删除邮件" | "已刪除郵件" | "垃圾箱" | "回收站" => Some("deleteditems"),
         _ => None,
     }
 }
@@ -1649,7 +1550,11 @@ fn with_imap_session<T>(
     Err(AppError::Internal(format!(
         "all proxy attempts failed for IMAP account {}: {}",
         account.email,
-        if last_error.is_empty() { "unknown network error" } else { last_error.as_str() }
+        if last_error.is_empty() {
+            "unknown network error"
+        } else {
+            last_error.as_str()
+        }
     )))
 }
 
@@ -1667,8 +1572,16 @@ impl imap::Authenticator for XOAuth2Authenticator {
     type Response = String;
 
     fn process(&self, _challenge: &[u8]) -> Self::Response {
-        format!("user={}\x01auth=Bearer {}\x01\x01", self.user, self.access_token)
+        format!(
+            "user={}\x01auth=Bearer {}\x01\x01",
+            self.user, self.access_token
+        )
     }
+}
+
+fn is_gmail_imap_account(account: &AccountCredentials) -> bool {
+    account.provider.eq_ignore_ascii_case("gmail")
+        || account.account_type.eq_ignore_ascii_case("gmail")
 }
 
 fn imap_auth_secret(account: &AccountCredentials) -> AppResult<ImapAuthSecret> {
@@ -1679,6 +1592,12 @@ fn imap_auth_secret(account: &AccountCredentials) -> AppResult<ImapAuthSecret> {
     };
     if !password.is_empty() {
         return Ok(ImapAuthSecret::Password(password.to_string()));
+    }
+    if is_gmail_imap_account(account) {
+        return Err(AppError::InvalidInput(
+            "Gmail IMAP requires an app password; enable IMAP and save it as the IMAP password"
+                .to_string(),
+        ));
     }
     if !account.client_id.trim().is_empty() && !account.refresh_token.trim().is_empty() {
         return refresh_imap_oauth_access_token(account).map(ImapAuthSecret::OAuth2);
@@ -1711,7 +1630,7 @@ fn connect_imap_session(
         imap::connect((host, port), host, &tls)
             .map_err(|err| AppError::Internal(format!("IMAP connect failed: {err}")))?
     };
-    match auth {
+    let mut session = match auth {
         ImapAuthSecret::Password(password) => client
             .login(account.email.as_str(), password)
             .map_err(|err| AppError::Internal(format!("IMAP login failed: {}", err.0))),
@@ -1724,7 +1643,40 @@ fn connect_imap_session(
                 .authenticate("XOAUTH2", &auth)
                 .map_err(|err| AppError::Internal(format!("IMAP XOAUTH2 login failed: {}", err.0)))
         }
+    }?;
+    send_imap_client_id_if_needed(account, &mut session);
+    Ok(session)
+}
+
+fn should_send_imap_client_id(account: &AccountCredentials) -> bool {
+    if is_netease_imap_account(account) {
+        return true;
     }
+    let provider = account.provider.trim().to_ascii_lowercase();
+    matches!(
+        provider.as_str(),
+        "qq" | "netease_163" | "imap_custom" | "gmail"
+    )
+}
+
+fn send_imap_client_id_if_needed(
+    account: &AccountCredentials,
+    session: &mut imap::Session<native_tls::TlsStream<TcpStream>>,
+) {
+    if !should_send_imap_client_id(account) {
+        return;
+    }
+    let _ = session.run_command_and_check_ok(
+        r#"ID ("name" "OutlookEmail Desktop" "version" "0.1.0" "vendor" "OutlookEmail")"#,
+    );
+}
+
+fn is_netease_imap_account(account: &AccountCredentials) -> bool {
+    let host = account.imap_host.trim().to_ascii_lowercase();
+    account.provider.eq_ignore_ascii_case("netease_163")
+        || host == "imap.163.com"
+        || host == "imap.126.com"
+        || host == "imap.yeah.net"
 }
 
 fn connect_http_proxy_tunnel(proxy_url: &str, host: &str, port: u16) -> AppResult<TcpStream> {
@@ -1801,9 +1753,8 @@ fn mutate_imap_message(
 
     with_imap_session(account, |session| {
         let mailbox = imap_mailbox_map(session).mailbox_for(folder);
-        session
-            .select(&mailbox)
-            .map_err(|err| AppError::Internal(format!("IMAP select {mailbox} failed: {err}")))?;
+        try_select_imap_mailbox(session, &mailbox)
+            .map_err(|err| format_imap_select_error(&mailbox, &err))?;
         session
             .uid_store(uid.to_string(), operation)
             .map_err(|err| AppError::Internal(format!("IMAP update flags failed: {err}")))?;
@@ -1816,7 +1767,40 @@ fn mutate_imap_message(
     })
 }
 
-fn parse_imap_message(folder: &str, uid: u32, body: &[u8]) -> ProviderMessage {
+fn imap_flags_include_seen(flags: &[Flag<'_>]) -> bool {
+    flags.iter().any(|flag| matches!(flag, Flag::Seen))
+}
+
+fn extract_imap_fetch_meta(fetch: &imap::types::Fetch) -> ImapFetchMeta {
+    ImapFetchMeta {
+        is_read: imap_flags_include_seen(fetch.flags()),
+        internal_date: fetch.internal_date(),
+    }
+}
+
+fn resolve_imap_received_time(
+    internal_date: Option<chrono::DateTime<chrono::FixedOffset>>,
+    mime_date_header: &str,
+) -> (String, f64) {
+    if let Some(internal_date) = internal_date {
+        let received_at = internal_date.with_timezone(&Utc);
+        return (
+            received_at.to_rfc3339(),
+            received_at.timestamp() as f64,
+        );
+    }
+    if let Ok(timestamp) = mailparse::dateparse(mime_date_header) {
+        let received_at = DateTime::<Utc>::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
+        return (received_at.to_rfc3339(), timestamp as f64);
+    }
+    let received_at = Utc::now();
+    (
+        received_at.to_rfc3339(),
+        received_at.timestamp() as f64,
+    )
+}
+
+fn parse_imap_message(folder: &str, uid: u32, body: &[u8], meta: ImapFetchMeta) -> ProviderMessage {
     let parsed = mailparse::parse_mail(body).ok();
     let subject = parsed
         .as_ref()
@@ -1838,19 +1822,18 @@ fn parse_imap_message(folder: &str, uid: u32, body: &[u8]) -> ProviderMessage {
         .as_ref()
         .and_then(|mail| mail.headers.get_first_value("Date"))
         .unwrap_or_default();
-    let timestamp = mailparse::dateparse(&date_header).unwrap_or_else(|_| Utc::now().timestamp());
-    let received = DateTime::<Utc>::from_timestamp(timestamp, 0)
-        .unwrap_or_else(Utc::now)
-        .to_rfc3339();
+    let (received, timestamp) =
+        resolve_imap_received_time(meta.internal_date, &date_header);
     let (body_text, body_type, attachments) = parsed
         .as_ref()
         .map(extract_body_and_attachments)
         .unwrap_or_else(|| (String::new(), "text".to_string(), Vec::new()));
-    let preview = body_text
-        .split_whitespace()
-        .take(30)
-        .collect::<Vec<_>>()
-        .join(" ");
+    let preview_source = if body_type.eq_ignore_ascii_case("html") {
+        html_to_plain_text(&body_text)
+    } else {
+        body_text.clone()
+    };
+    let preview = text_preview(&preview_source, 30);
 
     ProviderMessage {
         folder: folder.to_string(),
@@ -1860,8 +1843,8 @@ fn parse_imap_message(folder: &str, uid: u32, body: &[u8]) -> ProviderMessage {
         recipients,
         cc,
         received_at: received,
-        received_at_sort: timestamp as f64,
-        is_read: false,
+        received_at_sort: timestamp,
+        is_read: meta.is_read,
         has_attachments: !attachments.is_empty(),
         body_preview: preview,
         body: Some(body_text),
@@ -1871,7 +1854,310 @@ fn parse_imap_message(folder: &str, uid: u32, body: &[u8]) -> ProviderMessage {
     }
 }
 
-fn extract_body_and_attachments(mail: &mailparse::ParsedMail<'_>) -> (String, String, Vec<AttachmentInfo>) {
+fn text_preview(value: &str, words: usize) -> String {
+    value
+        .split_whitespace()
+        .take(words)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn html_to_plain_text(value: &str) -> String {
+    let without_script = remove_html_block(value, "script");
+    let without_style = remove_html_block(&without_script, "style");
+    let mut output = String::new();
+    let mut tag = String::new();
+    let mut in_tag = false;
+
+    for ch in without_style.chars() {
+        if in_tag {
+            if ch == '>' {
+                append_html_tag_boundary(&tag, &mut output);
+                tag.clear();
+                in_tag = false;
+            } else {
+                tag.push(ch);
+            }
+            continue;
+        }
+        if ch == '<' {
+            in_tag = true;
+            tag.clear();
+            continue;
+        }
+        output.push(ch);
+    }
+
+    text_preview(
+        &strip_css_fragments(&decode_html_entities(&output)),
+        usize::MAX,
+    )
+}
+
+fn strip_css_fragments(value: &str) -> String {
+    let mut text = remove_css_comments(value);
+    for _ in 0..16 {
+        let Some((start, end)) = find_css_fragment(&text) else {
+            break;
+        };
+        text.replace_range(start..end, " ");
+    }
+    text
+}
+
+fn remove_css_comments(value: &str) -> String {
+    let mut output = String::new();
+    let mut cursor = 0_usize;
+    while let Some(start_offset) = value[cursor..].find("/*") {
+        let start = cursor + start_offset;
+        output.push_str(&value[cursor..start]);
+        if let Some(end_offset) = value[start + 2..].find("*/") {
+            cursor = start + 2 + end_offset + 2;
+            output.push(' ');
+        } else {
+            cursor = value.len();
+            break;
+        }
+    }
+    output.push_str(&value[cursor..]);
+    output
+}
+
+fn find_css_fragment(value: &str) -> Option<(usize, usize)> {
+    let mut cursor = 0_usize;
+    while let Some(open_offset) = value[cursor..].find('{') {
+        let open = cursor + open_offset;
+        let close = value[open + 1..].find('}').map(|offset| open + 1 + offset);
+        let block_end = close.unwrap_or(value.len());
+        let block = &value[open + 1..block_end];
+        if looks_like_css_declaration_block(block) {
+            if let Some(start) = css_selector_start(value, open) {
+                return Some((start, close.map_or(value.len(), |index| index + 1)));
+            }
+        }
+        let Some(close) = close else {
+            return None;
+        };
+        cursor = close + 1;
+    }
+    None
+}
+
+fn looks_like_css_declaration_block(value: &str) -> bool {
+    if value.contains("!important") || value.to_ascii_lowercase().contains("url(") {
+        return true;
+    }
+    value
+        .char_indices()
+        .filter_map(|(index, ch)| (ch == ':').then_some(index))
+        .any(|index| {
+            let before = value[..index].trim_end();
+            let start = before
+                .char_indices()
+                .rev()
+                .find(|(_, ch)| !(ch.is_ascii_alphabetic() || *ch == '-'))
+                .map(|(position, ch)| position + ch.len_utf8())
+                .unwrap_or(0);
+            is_css_property_name(&before[start..])
+        })
+}
+
+fn is_css_property_name(value: &str) -> bool {
+    let name = value.trim().trim_start_matches('-');
+    (3..=48).contains(&name.len())
+        && name
+            .bytes()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'-'))
+}
+
+fn css_selector_start(value: &str, open: usize) -> Option<usize> {
+    let prefix_start = value[..open]
+        .char_indices()
+        .rev()
+        .nth(240)
+        .map(|(index, _)| index)
+        .unwrap_or(0);
+    let prefix = &value[prefix_start..open];
+    let trimmed = prefix.trim_end();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if let Some(position) = ["@", ".", "#", "*", "["]
+        .iter()
+        .filter_map(|marker| lower.rfind(marker))
+        .max()
+    {
+        let mut start = prefix_start + position;
+        if lower.as_bytes().get(position) == Some(&b'[') {
+            start = selector_token_start(value, start);
+        }
+        return Some(start);
+    }
+
+    let tail_start = trimmed
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| ch.is_whitespace())
+        .map(|(index, ch)| index + ch.len_utf8())
+        .unwrap_or(0);
+    let tail = trimmed[tail_start..].to_ascii_lowercase();
+    if is_css_selector_tail(&tail) {
+        return Some(prefix_start + tail_start);
+    }
+    None
+}
+
+fn selector_token_start(value: &str, index: usize) -> usize {
+    value[..index]
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| ch.is_whitespace())
+        .map(|(position, ch)| position + ch.len_utf8())
+        .unwrap_or(0)
+}
+
+fn is_css_selector_tail(value: &str) -> bool {
+    let tail = value.trim_start();
+    matches!(
+        tail.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'))
+            .next()
+            .unwrap_or_default(),
+        "body"
+            | "html"
+            | "a"
+            | "p"
+            | "div"
+            | "span"
+            | "table"
+            | "td"
+            | "th"
+            | "img"
+            | "font"
+            | "strong"
+            | "em"
+            | "u"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+    )
+}
+
+fn remove_html_block(value: &str, tag: &str) -> String {
+    let lower = value.to_ascii_lowercase();
+    let open = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let mut output = String::new();
+    let mut cursor = 0_usize;
+
+    while let Some(start_offset) = lower[cursor..].find(&open) {
+        let start = cursor + start_offset;
+        output.push_str(&value[cursor..start]);
+        if let Some(end_offset) = lower[start..].find(&close) {
+            cursor = start + end_offset + close.len();
+            output.push(' ');
+        } else {
+            cursor = value.len();
+            break;
+        }
+    }
+    output.push_str(&value[cursor..]);
+    output
+}
+
+fn append_html_tag_boundary(tag: &str, output: &mut String) {
+    let name = tag
+        .trim()
+        .trim_start_matches('/')
+        .trim_start_matches('!')
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('/')
+        .to_ascii_lowercase();
+    if matches!(
+        name.as_str(),
+        "br" | "p"
+            | "div"
+            | "li"
+            | "tr"
+            | "td"
+            | "th"
+            | "table"
+            | "ul"
+            | "ol"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+    ) {
+        output.push(' ');
+    }
+}
+
+fn decode_html_entities(value: &str) -> String {
+    let mut output = String::new();
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '&' {
+            output.push(ch);
+            continue;
+        }
+
+        let mut entity = String::new();
+        let mut terminated = false;
+        while let Some(&next) = chars.peek() {
+            chars.next();
+            if next == ';' {
+                terminated = true;
+                break;
+            }
+            entity.push(next);
+            if entity.len() > 16 {
+                break;
+            }
+        }
+
+        match terminated.then(|| decode_html_entity(&entity)).flatten() {
+            Some(decoded) => output.push(decoded),
+            None => {
+                output.push('&');
+                output.push_str(&entity);
+                if terminated {
+                    output.push(';');
+                }
+            }
+        }
+    }
+    output
+}
+
+fn decode_html_entity(entity: &str) -> Option<char> {
+    match entity {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        "nbsp" => Some(' '),
+        _ if entity.starts_with("#x") || entity.starts_with("#X") => {
+            u32::from_str_radix(&entity[2..], 16)
+                .ok()
+                .and_then(char::from_u32)
+        }
+        _ if entity.starts_with('#') => entity[1..].parse::<u32>().ok().and_then(char::from_u32),
+        _ => None,
+    }
+}
+
+fn extract_body_and_attachments(
+    mail: &mailparse::ParsedMail<'_>,
+) -> (String, String, Vec<AttachmentInfo>) {
     let mut text_body = String::new();
     let mut html_body = String::new();
     let mut attachments = Vec::new();
@@ -1896,7 +2182,10 @@ fn collect_parts(
             id: name.clone(),
             name,
             content_type: mail.ctype.mimetype.clone(),
-            size: mail.get_body_raw().map(|bytes| bytes.len() as i64).unwrap_or_default(),
+            size: mail
+                .get_body_raw()
+                .map(|bytes| bytes.len() as i64)
+                .unwrap_or_default(),
         });
         return;
     }
@@ -1920,7 +2209,10 @@ struct RawAttachment {
     bytes: Vec<u8>,
 }
 
-fn collect_downloadable_parts(mail: &mailparse::ParsedMail<'_>, attachments: &mut Vec<RawAttachment>) {
+fn collect_downloadable_parts(
+    mail: &mailparse::ParsedMail<'_>,
+    attachments: &mut Vec<RawAttachment>,
+) {
     let disposition = mail.get_content_disposition();
     if is_downloadable_part(mail, &disposition) {
         let name = attachment_part_name(mail, &disposition);
@@ -1938,13 +2230,19 @@ fn collect_downloadable_parts(mail: &mailparse::ParsedMail<'_>, attachments: &mu
     }
 }
 
-fn is_downloadable_part(mail: &mailparse::ParsedMail<'_>, disposition: &mailparse::ParsedContentDisposition) -> bool {
+fn is_downloadable_part(
+    mail: &mailparse::ParsedMail<'_>,
+    disposition: &mailparse::ParsedContentDisposition,
+) -> bool {
     disposition.disposition == mailparse::DispositionType::Attachment
         || disposition.params.contains_key("filename")
         || mail.ctype.params.contains_key("name")
 }
 
-fn attachment_part_name(mail: &mailparse::ParsedMail<'_>, disposition: &mailparse::ParsedContentDisposition) -> String {
+fn attachment_part_name(
+    mail: &mailparse::ParsedMail<'_>,
+    disposition: &mailparse::ParsedContentDisposition,
+) -> String {
     disposition
         .params
         .get("filename")
@@ -2006,7 +2304,9 @@ struct GraphMessage {
 
 impl GraphMessage {
     fn into_provider_message(self, folder: &str) -> ProviderMessage {
-        let received_at = self.received_date_time.unwrap_or_else(|| Utc::now().to_rfc3339());
+        let received_at = self
+            .received_date_time
+            .unwrap_or_else(|| Utc::now().to_rfc3339());
         let received_at_sort = DateTime::parse_from_rfc3339(&received_at)
             .map(|value| value.timestamp() as f64)
             .unwrap_or_else(|_| Utc::now().timestamp() as f64);
@@ -2015,7 +2315,9 @@ impl GraphMessage {
             .as_ref()
             .map(|body| body.content_type.to_ascii_lowercase())
             .unwrap_or_else(|| "text".to_string());
-        let body_content = body.map(|body| body.content).filter(|value| !value.is_empty());
+        let body_content = body
+            .map(|body| body.content)
+            .filter(|value| !value.is_empty());
         ProviderMessage {
             folder: folder.to_string(),
             provider_message_id: self.id,
@@ -2081,293 +2383,34 @@ fn recipients_to_string(value: Option<Vec<GraphRecipient>>) -> String {
         .join(", ")
 }
 
-#[derive(Debug, Deserialize)]
-struct GmailMessageList {
-    messages: Option<Vec<GmailMessageRef>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GmailHistoryList {
-    #[serde(default)]
-    history: Option<Vec<GmailHistory>>,
-    #[serde(default, rename = "nextPageToken")]
-    next_page_token: Option<String>,
-    #[serde(default, rename = "historyId")]
-    history_id: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GmailHistory {
-    #[serde(default, rename = "messagesAdded")]
-    messages_added: Vec<GmailHistoryMessageChange>,
-    #[serde(default, rename = "messagesDeleted")]
-    messages_deleted: Vec<GmailHistoryMessageChange>,
-    #[serde(default, rename = "labelsAdded")]
-    labels_added: Vec<GmailHistoryMessageChange>,
-    #[serde(default, rename = "labelsRemoved")]
-    labels_removed: Vec<GmailHistoryMessageChange>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GmailHistoryMessageChange {
-    message: GmailMessageRef,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct GmailMessageRef {
-    id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct GmailMessage {
-    id: String,
-    #[serde(default, rename = "historyId")]
-    history_id: Option<String>,
-    #[serde(default, rename = "labelIds")]
-    label_ids: Vec<String>,
-    #[serde(default, rename = "internalDate")]
-    internal_date: Option<String>,
-    #[serde(default)]
-    snippet: String,
-    #[serde(default)]
-    payload: Option<GmailMessagePart>,
-}
-
-impl GmailMessage {
-    fn into_provider_messages_for_labels(self) -> AppResult<Vec<ProviderMessage>> {
-        let folders = gmail_app_folders_for_labels(&self.label_ids);
-        let mut messages = Vec::new();
-        for folder in folders {
-            messages.push(self.clone().into_provider_message(folder)?);
-        }
-        Ok(messages)
-    }
-
-    fn into_provider_message(self, folder: &str) -> AppResult<ProviderMessage> {
-        let subject = self
-            .payload
-            .as_ref()
-            .and_then(|payload| gmail_header(payload, "Subject"))
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "(no subject)".to_string());
-        let sender = self
-            .payload
-            .as_ref()
-            .and_then(|payload| gmail_header(payload, "From"))
-            .unwrap_or_default();
-        let recipients = self
-            .payload
-            .as_ref()
-            .and_then(|payload| gmail_header(payload, "To"))
-            .unwrap_or_default();
-        let cc = self
-            .payload
-            .as_ref()
-            .and_then(|payload| gmail_header(payload, "Cc"))
-            .unwrap_or_default();
-        let (received_at, received_at_sort) = gmail_received_at(self.internal_date.as_deref(), self.payload.as_ref());
-        let mut content = GmailParsedContent::default();
-        if let Some(payload) = self.payload.as_ref() {
-            collect_gmail_part(payload, &mut content)?;
-        }
-        let has_html_body = !content.html_body.is_empty();
-        let body = if has_html_body {
-            Some(content.html_body)
-        } else if !content.text_body.is_empty() {
-            Some(content.text_body)
-        } else {
-            None
-        };
-        let body_type = if has_html_body {
-            "html".to_string()
-        } else {
-            "text".to_string()
-        };
-        let body_preview = if self.snippet.trim().is_empty() {
-            body.as_deref()
-                .unwrap_or_default()
-                .split_whitespace()
-                .take(30)
-                .collect::<Vec<_>>()
-                .join(" ")
-        } else {
-            self.snippet
-        };
-        Ok(ProviderMessage {
-            folder: folder.to_string(),
-            provider_message_id: self.id,
-            subject,
-            sender,
-            recipients,
-            cc,
-            received_at,
-            received_at_sort,
-            is_read: !self.label_ids.iter().any(|label| label.eq_ignore_ascii_case("UNREAD")),
-            has_attachments: !content.attachments.is_empty(),
-            body_preview,
-            body,
-            body_type,
-            attachments: content.attachments,
-            raw_mime: None,
-        })
-    }
-}
-
-fn gmail_app_folders_for_labels(label_ids: &[String]) -> Vec<&'static str> {
-    let mut folders = Vec::new();
-    if label_ids.iter().any(|label| label.eq_ignore_ascii_case("INBOX")) {
-        folders.push("inbox");
-    }
-    if label_ids.iter().any(|label| label.eq_ignore_ascii_case("SPAM")) {
-        folders.push("junkemail");
-    }
-    if label_ids.iter().any(|label| label.eq_ignore_ascii_case("TRASH")) {
-        folders.push("deleteditems");
-    }
-    folders
-}
-
-#[derive(Debug, Default, Clone, Deserialize)]
-struct GmailMessagePart {
-    #[serde(default, rename = "mimeType")]
-    mime_type: String,
-    #[serde(default)]
-    filename: String,
-    #[serde(default)]
-    headers: Vec<GmailHeader>,
-    #[serde(default)]
-    body: Option<GmailMessagePartBody>,
-    #[serde(default)]
-    parts: Vec<GmailMessagePart>,
-}
-
-#[derive(Debug, Default, Clone, Deserialize)]
-struct GmailHeader {
-    name: String,
-    value: String,
-}
-
-#[derive(Debug, Default, Clone, Deserialize)]
-struct GmailMessagePartBody {
-    #[serde(default, rename = "attachmentId")]
-    attachment_id: Option<String>,
-    #[serde(default)]
-    size: Option<i64>,
-    #[serde(default)]
-    data: Option<String>,
-}
-
-#[derive(Default)]
-struct GmailParsedContent {
-    text_body: String,
-    html_body: String,
-    attachments: Vec<AttachmentInfo>,
-}
-
-fn collect_gmail_part(part: &GmailMessagePart, content: &mut GmailParsedContent) -> AppResult<()> {
-    let mime_type = part.mime_type.to_ascii_lowercase();
-    let filename = part.filename.trim();
-    if !filename.is_empty() || part.body.as_ref().and_then(|body| body.attachment_id.as_ref()).is_some() {
-        if let Some(attachment_id) = part.body.as_ref().and_then(|body| body.attachment_id.as_ref()) {
-            content.attachments.push(AttachmentInfo {
-                id: attachment_id.clone(),
-                name: if filename.is_empty() {
-                    "attachment".to_string()
-                } else {
-                    filename.to_string()
-                },
-                content_type: part.mime_type.clone(),
-                size: part.body.as_ref().and_then(|body| body.size).unwrap_or_default(),
-            });
-            return Ok(());
-        }
-    }
-    if let Some(data) = part.body.as_ref().and_then(|body| body.data.as_deref()) {
-        if mime_type == "text/html" && content.html_body.is_empty() {
-            content.html_body = decode_gmail_text(data)?;
-        } else if mime_type == "text/plain" && content.text_body.is_empty() {
-            content.text_body = decode_gmail_text(data)?;
-        }
-    }
-    for child in &part.parts {
-        collect_gmail_part(child, content)?;
-    }
-    Ok(())
-}
-
-fn find_gmail_attachment_metadata(part: &GmailMessagePart, attachment_id: &str) -> Option<(String, String)> {
-    if part
-        .body
-        .as_ref()
-        .and_then(|body| body.attachment_id.as_deref())
-        .is_some_and(|value| value == attachment_id)
-    {
-        let name = if part.filename.trim().is_empty() {
-            "attachment.bin".to_string()
-        } else {
-            part.filename.trim().to_string()
-        };
-        return Some((name, part.mime_type.clone()));
-    }
-    part.parts
-        .iter()
-        .find_map(|child| find_gmail_attachment_metadata(child, attachment_id))
-}
-
-fn gmail_header(part: &GmailMessagePart, name: &str) -> Option<String> {
-    part.headers
-        .iter()
-        .find(|header| header.name.eq_ignore_ascii_case(name))
-        .map(|header| header.value.clone())
-}
-
-fn gmail_received_at(internal_date: Option<&str>, payload: Option<&GmailMessagePart>) -> (String, f64) {
-    if let Some(ms) = internal_date.and_then(|value| value.parse::<i64>().ok()) {
-        let secs = ms / 1000;
-        let nanos = ((ms % 1000).max(0) as u32) * 1_000_000;
-        if let Some(value) = DateTime::<Utc>::from_timestamp(secs, nanos) {
-            return (value.to_rfc3339(), ms as f64 / 1000.0);
-        }
-    }
-    if let Some(date_header) = payload.and_then(|part| gmail_header(part, "Date")) {
-        if let Ok(timestamp) = mailparse::dateparse(&date_header) {
-            let value = DateTime::<Utc>::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
-            return (value.to_rfc3339(), timestamp as f64);
-        }
-    }
-    let now = Utc::now();
-    (now.to_rfc3339(), now.timestamp() as f64)
-}
-
-fn decode_gmail_text(data: &str) -> AppResult<String> {
-    let bytes = decode_gmail_base64(data)?;
-    Ok(String::from_utf8_lossy(&bytes).to_string())
-}
-
-fn decode_gmail_base64(data: &str) -> AppResult<Vec<u8>> {
-    let compact = data
-        .split_whitespace()
-        .collect::<String>()
-        .trim_end_matches('=')
-        .to_string();
-    URL_SAFE_NO_PAD
-        .decode(compact)
-        .map_err(|err| AppError::Internal(format!("Gmail base64 decode failed: {err}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn classifies_imap_special_use_and_common_mailbox_names() {
-        assert_eq!(classify_imap_mailbox(&["junk".to_string()], "Mailbox"), Some("junkemail"));
-        assert_eq!(classify_imap_mailbox(&["trash".to_string()], "Mailbox"), Some("deleteditems"));
+        assert_eq!(
+            classify_imap_mailbox(&["junk".to_string()], "Mailbox"),
+            Some("junkemail")
+        );
+        assert_eq!(
+            classify_imap_mailbox(&["trash".to_string()], "Mailbox"),
+            Some("deleteditems")
+        );
         assert_eq!(classify_imap_mailbox(&[], "INBOX"), Some("inbox"));
-        assert_eq!(classify_imap_mailbox(&[], "[Gmail]/Spam"), Some("junkemail"));
-        assert_eq!(classify_imap_mailbox(&[], "Deleted Items"), Some("deleteditems"));
+        assert_eq!(
+            classify_imap_mailbox(&[], "[Gmail]/Spam"),
+            Some("junkemail")
+        );
+        assert_eq!(
+            classify_imap_mailbox(&[], "Deleted Items"),
+            Some("deleteditems")
+        );
         assert_eq!(classify_imap_mailbox(&[], "垃圾邮件"), Some("junkemail"));
-        assert_eq!(classify_imap_mailbox(&[], "已删除邮件"), Some("deleteditems"));
+        assert_eq!(
+            classify_imap_mailbox(&[], "已删除邮件"),
+            Some("deleteditems")
+        );
         assert_eq!(classify_imap_mailbox(&[], "回收站"), Some("deleteditems"));
         assert_eq!(classify_imap_mailbox(&[], "Archive"), None);
     }
@@ -2394,12 +2437,130 @@ mod tests {
     }
 
     #[test]
+    fn build_imap_select_variants_includes_quoted_and_unquoted_names() {
+        assert_eq!(
+            build_imap_select_variants("INBOX"),
+            vec!["INBOX".to_string(), "\"INBOX\"".to_string()]
+        );
+        assert_eq!(
+            build_imap_select_variants("\"垃圾邮件\""),
+            vec![
+                "\"垃圾邮件\"".to_string(),
+                "垃圾邮件".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn imap_flags_include_seen_detects_seen_flag() {
+        assert!(imap_flags_include_seen(&[Flag::Seen]));
+        assert!(!imap_flags_include_seen(&[Flag::Answered, Flag::Flagged]));
+    }
+
+    #[test]
+    fn resolve_imap_received_time_prefers_internal_date() {
+        let internal_date = chrono::DateTime::parse_from_rfc3339("2026-07-01T08:00:00+00:00")
+            .expect("internal date");
+        let (received_at, received_at_sort) = resolve_imap_received_time(
+            Some(internal_date),
+            "Tue, 07 Jul 2026 12:00:00 +0000",
+        );
+        assert_eq!(received_at, "2026-07-01T08:00:00+00:00");
+        assert_eq!(received_at_sort, internal_date.timestamp() as f64);
+    }
+
+    #[test]
+    fn resolve_imap_received_time_falls_back_to_mime_date() {
+        let mime_date = "Tue, 07 Jul 2026 12:00:00 +0000";
+        let expected_timestamp = mailparse::dateparse(mime_date).expect("mime date");
+        let (received_at, received_at_sort) = resolve_imap_received_time(None, mime_date);
+        assert_eq!(received_at, "2026-07-07T12:00:00+00:00");
+        assert_eq!(received_at_sort, expected_timestamp as f64);
+    }
+
+    #[test]
+    fn parse_imap_message_uses_seen_flag_from_fetch_meta() {
+        let raw = concat!(
+            "Subject: Seen flag\r\n",
+            "From: sender@example.com\r\n",
+            "To: user@example.com\r\n",
+            "Date: Tue, 07 Jul 2026 12:00:00 +0000\r\n",
+            "Content-Type: text/plain; charset=utf-8\r\n",
+            "\r\n",
+            "Hello"
+        );
+        let message = parse_imap_message(
+            "inbox",
+            7,
+            raw.as_bytes(),
+            ImapFetchMeta {
+                is_read: true,
+                internal_date: None,
+            },
+        );
+        assert!(message.is_read);
+        assert_eq!(message.subject, "Seen flag");
+    }
+
+    #[test]
+    fn should_send_imap_client_id_for_qq_gmail_and_custom_providers() {
+        fn account_with_provider(provider: &str) -> AccountCredentials {
+            AccountCredentials {
+                id: 1,
+                email: "user@example.com".to_string(),
+                provider: provider.to_string(),
+                account_type: "imap".to_string(),
+                password: String::new(),
+                client_id: String::new(),
+                refresh_token: String::new(),
+                imap_host: String::new(),
+                imap_port: 993,
+                imap_password: String::new(),
+                proxy_chain: Vec::new(),
+            }
+        }
+
+        assert!(should_send_imap_client_id(&account_with_provider("qq")));
+        assert!(should_send_imap_client_id(&account_with_provider("gmail")));
+        assert!(should_send_imap_client_id(&account_with_provider("imap_custom")));
+        assert!(should_send_imap_client_id(&account_with_provider("netease_163")));
+        assert!(!should_send_imap_client_id(&account_with_provider("graph")));
+    }
+
+    #[test]
+    fn imap_html_preview_strips_tags_and_keeps_html_body() {
+        let raw = concat!(
+            "Subject: HTML preview\r\n",
+            "From: sender@example.com\r\n",
+            "To: user@example.com\r\n",
+            "Date: Tue, 07 Jul 2026 12:00:00 +0000\r\n",
+            "Content-Type: text/html; charset=utf-8\r\n",
+            "\r\n",
+            "<html><head><style>.x{display:none}</style></head>",
+            "<body>.aw a {color: #FFFFFF; text-decoration: none;} ",
+            "@font-face {font-family: Roboto; src: url(https://example.test/font.woff2);} ",
+            "*{box-sizing:border-box}body{margin:0;padding:0}",
+            "a[x-apple-data-detectors]{color:inherit!important;text-decoration:none}",
+            "<p>Hello <strong>Gmail</strong><br>Code &amp; value</p></body></html>"
+        );
+        let message = parse_imap_message("inbox", 42, raw.as_bytes(), ImapFetchMeta::default());
+
+        assert_eq!(message.body_type, "html");
+        assert_eq!(message.body_preview, "Hello Gmail Code & value");
+        assert!(message
+            .body
+            .unwrap_or_default()
+            .contains("<strong>Gmail</strong>"));
+    }
+
+    #[test]
     fn detects_mail_provider_registry_defaults() {
         let gmail = detect_mail_provider("person@gmail.com", None, false).expect("gmail");
         assert_eq!(gmail.id, "gmail");
-        assert_eq!(gmail.account_type, "gmail");
-        assert!(gmail.capabilities.contains(&"history_sync"));
-        assert!(gmail.capabilities.contains(&"trash"));
+        assert_eq!(gmail.account_type, "imap");
+        assert_eq!(gmail.default_imap_host, "imap.gmail.com");
+        assert!(gmail.capabilities.contains(&"imap_folders"));
+        assert!(gmail.capabilities.contains(&"remote_delete"));
 
         let qq = detect_mail_provider("user@foxmail.com", None, false).expect("qq");
         assert_eq!(qq.id, "qq");
@@ -2418,126 +2579,15 @@ mod tests {
     }
 
     #[test]
-    fn derives_pkce_s256_challenge() {
-        let challenge = pkce_s256_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk").expect("challenge");
-        assert_eq!(challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
-    }
-
-    #[test]
-    fn builds_google_auth_url_with_pkce() {
-        let verifier = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~".to_string();
-        let url = build_graph_auth_url(&OAuthAuthUrlInput {
+    fn rejects_gmail_oauth_auth_url() {
+        let error = build_graph_auth_url(&OAuthAuthUrlInput {
             client_id: "google-client".to_string(),
             redirect_uri: "http://127.0.0.1:53682/callback".to_string(),
             login_hint: Some("person@gmail.com".to_string()),
             provider: Some("gmail".to_string()),
-            code_verifier: Some(verifier.clone()),
         })
-        .expect("google auth url");
+        .expect_err("gmail oauth disabled");
 
-        assert!(url.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"));
-        assert!(url.contains("client_id=google-client"));
-        assert!(url.contains("scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.modify"));
-        assert!(url.contains("code_challenge="));
-        assert!(url.contains("code_challenge_method=S256"));
-        assert!(url.contains("access_type=offline"));
-        assert!(url.contains("login_hint=person%40gmail.com"));
-        assert!(!url.contains(&verifier));
-    }
-
-    #[test]
-    fn maps_gmail_folder_targets_to_app_folders() {
-        let targets = gmail_folder_targets("all");
-        assert_eq!(targets.len(), 3);
-        assert_eq!(targets[0].app_folder, "inbox");
-        assert_eq!(targets[0].label_id, "INBOX");
-        assert_eq!(gmail_folder_targets("junkemail")[0].label_id, "SPAM");
-        assert_eq!(gmail_folder_targets("deleteditems")[0].label_id, "TRASH");
-    }
-
-    #[test]
-    fn maps_gmail_labels_to_cached_folders() {
-        let labels = vec!["INBOX".to_string(), "TRASH".to_string()];
-        assert_eq!(gmail_app_folders_for_labels(&labels), vec!["inbox", "deleteditems"]);
-        let archived = vec!["CATEGORY_UPDATES".to_string()];
-        assert!(gmail_app_folders_for_labels(&archived).is_empty());
-    }
-
-    #[test]
-    fn compares_gmail_history_ids_numerically() {
-        assert_eq!(max_gmail_history_id(Some("99".to_string()), Some("100")), Some("100".to_string()));
-        assert_eq!(max_gmail_history_id(Some("101".to_string()), Some("100")), Some("101".to_string()));
-        assert_eq!(max_gmail_history_id(None, Some("42")), Some("42".to_string()));
-    }
-
-    #[test]
-    fn builds_gmail_read_state_payloads() {
-        assert_eq!(gmail_read_state_payload(true), json!({ "removeLabelIds": ["UNREAD"] }));
-        assert_eq!(gmail_read_state_payload(false), json!({ "addLabelIds": ["UNREAD"] }));
-    }
-
-    #[test]
-    fn normalizes_gmail_message_payload() {
-        let message = GmailMessage {
-            id: "gmail-1".to_string(),
-            history_id: Some("777".to_string()),
-            label_ids: vec!["INBOX".to_string(), "UNREAD".to_string()],
-            internal_date: Some("1700000000000".to_string()),
-            snippet: "Preview from Gmail".to_string(),
-            payload: Some(GmailMessagePart {
-                mime_type: "multipart/mixed".to_string(),
-                headers: vec![
-                    GmailHeader {
-                        name: "Subject".to_string(),
-                        value: "Gmail subject".to_string(),
-                    },
-                    GmailHeader {
-                        name: "From".to_string(),
-                        value: "Sender <sender@gmail.com>".to_string(),
-                    },
-                    GmailHeader {
-                        name: "To".to_string(),
-                        value: "Receiver <to@example.com>".to_string(),
-                    },
-                ],
-                parts: vec![
-                    GmailMessagePart {
-                        mime_type: "text/html".to_string(),
-                        body: Some(GmailMessagePartBody {
-                            data: Some("PGI-SGVsbG88L2I-".to_string()),
-                            ..GmailMessagePartBody::default()
-                        }),
-                        ..GmailMessagePart::default()
-                    },
-                    GmailMessagePart {
-                        mime_type: "application/pdf".to_string(),
-                        filename: "invoice.pdf".to_string(),
-                        body: Some(GmailMessagePartBody {
-                            attachment_id: Some("att-1".to_string()),
-                            size: Some(42),
-                            data: None,
-                        }),
-                        ..GmailMessagePart::default()
-                    },
-                ],
-                ..GmailMessagePart::default()
-            }),
-        };
-
-        let normalized = message.into_provider_message("inbox").expect("normalize gmail");
-        assert_eq!(normalized.folder, "inbox");
-        assert_eq!(normalized.provider_message_id, "gmail-1");
-        assert_eq!(normalized.subject, "Gmail subject");
-        assert_eq!(normalized.sender, "Sender <sender@gmail.com>");
-        assert_eq!(normalized.recipients, "Receiver <to@example.com>");
-        assert!(!normalized.is_read);
-        assert_eq!(normalized.body_type, "html");
-        assert_eq!(normalized.body.as_deref(), Some("<b>Hello</b>"));
-        assert_eq!(normalized.body_preview, "Preview from Gmail");
-        assert_eq!(normalized.attachments.len(), 1);
-        assert_eq!(normalized.attachments[0].id, "att-1");
-        assert_eq!(normalized.attachments[0].name, "invoice.pdf");
-        assert_eq!(normalized.attachments[0].content_type, "application/pdf");
-        assert_eq!(normalized.attachments[0].size, 42);
+        assert!(error.to_string().contains("IMAP app password"));
     }
 }

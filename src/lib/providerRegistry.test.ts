@@ -8,11 +8,13 @@ import {
 } from "./providerRegistry";
 
 describe("providerRegistry capabilities", () => {
-  it("tracks Gmail API capabilities separately from generic IMAP providers", () => {
-    expect(providerSupportsCapability("gmail", "history_sync")).toBe(true);
-    expect(providerSupportsCapability("gmail", "trash")).toBe(true);
-    expect(providerSupportsCapability("gmail", "imap_folders")).toBe(false);
-    expect(providerCapabilitySummary("gmail")).toContain("增量同步");
+  it("tracks Gmail as an IMAP provider", () => {
+    expect(accountProviderDefinition("gmail").accountType).toBe("imap");
+    expect(accountProviderDefinition("gmail").defaultImapHost).toBe("imap.gmail.com");
+    expect(providerSupportsCapability("gmail", "imap_folders")).toBe(true);
+    expect(providerSupportsCapability("gmail", "remote_delete")).toBe(true);
+    expect(providerSupportsCapability("gmail", "history_sync")).toBe(false);
+    expect(providerCapabilitySummary("gmail")).toContain("IMAP 文件夹");
   });
 
   it("tracks QQ and 163 as IMAP providers with folder discovery", () => {
@@ -26,15 +28,15 @@ describe("providerRegistry capabilities", () => {
   });
 
   it("provides provider-specific refresh failure hints", () => {
-    expect(providerFailureHint("gmail", "HTTP 403 insufficientPermissions missing gmail.modify scope")).toContain("gmail.modify");
+    expect(providerFailureHint("gmail", "IMAP login failed: authentication failed")).toContain("应用专用密码");
     expect(providerFailureHint("qq", "NO [AUTHENTICATIONFAILED] invalid QQ 授权码")).toContain("QQ 邮箱已开启 IMAP/SMTP");
     expect(providerFailureHint("netease_163", "163 客户端授权密码错误")).toContain("163 已开启客户端授权");
     expect(providerFailureHint("imap_custom", "connection refused by proxy")).toContain("代理链");
   });
 
   it("checks provider readiness from non-secret account fields", () => {
-    expect(providerReadiness({ provider: "gmail", has_client_id: true, has_refresh_token: true }).status).toBe("ready");
-    expect(providerReadiness({ provider: "gmail", has_client_id: false, has_refresh_token: true }).missing).toContain("Google Client ID");
+    expect(providerReadiness({ provider: "gmail", has_imap_password: true, imap_host: "imap.gmail.com", imap_port: 993 }).status).toBe("ready");
+    expect(providerReadiness({ provider: "gmail", has_client_id: true, has_refresh_token: true }).missing).toContain("Gmail 应用专用密码");
     expect(
       providerReadiness({
         provider: "qq",

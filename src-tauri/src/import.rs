@@ -29,20 +29,39 @@ pub fn parse_accounts(raw: &str) -> Vec<ImportedAccount> {
                 .filter(|part| !is_provider_assignment(part))
                 .collect::<Vec<_>>();
             let mut provider = explicit_provider;
-            if positional_parts.len() >= 2 && is_provider_token(&positional_parts[0]) && positional_parts[1].contains('@') {
-                provider = providers::normalize_mail_provider_id(&positional_parts[0]).map(str::to_string);
+            if provider.is_none()
+                && positional_parts.len() >= 2
+                && is_provider_token(&positional_parts[0])
+                && positional_parts[1].contains('@')
+            {
+                provider =
+                    providers::normalize_mail_provider_id(&positional_parts[0]).map(str::to_string);
                 positional_parts.remove(0);
             }
 
-            let email_index = positional_parts.iter().position(|part| part.contains('@'))?;
+            let email_index = positional_parts
+                .iter()
+                .position(|part| part.contains('@'))?;
             let email = positional_parts.get(email_index)?.trim().to_lowercase();
 
             Some(ImportedAccount {
                 email,
-                password: positional_parts.get(email_index + 1).cloned().unwrap_or_default(),
-                client_id: positional_parts.get(email_index + 2).cloned().unwrap_or_default(),
-                refresh_token: positional_parts.get(email_index + 3).cloned().unwrap_or_default(),
-                remark: positional_parts.get(email_index + 4).cloned().unwrap_or_default(),
+                password: positional_parts
+                    .get(email_index + 1)
+                    .cloned()
+                    .unwrap_or_default(),
+                client_id: positional_parts
+                    .get(email_index + 2)
+                    .cloned()
+                    .unwrap_or_default(),
+                refresh_token: positional_parts
+                    .get(email_index + 3)
+                    .cloned()
+                    .unwrap_or_default(),
+                remark: positional_parts
+                    .get(email_index + 4)
+                    .cloned()
+                    .unwrap_or_default(),
                 provider,
             })
         })
@@ -99,5 +118,14 @@ mod tests {
         assert_eq!(rows[0].provider.as_deref(), Some("qq"));
         assert_eq!(rows[1].provider.as_deref(), Some("netease_163"));
         assert_eq!(rows[2].email, "person@gmail.com");
+    }
+
+    #[test]
+    fn explicit_provider_takes_priority_over_positional_provider_token() {
+        let rows = parse_accounts("provider=gmail----qq----user@example.com----secret");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].email, "user@example.com");
+        assert_eq!(rows[0].password, "secret");
+        assert_eq!(rows[0].provider.as_deref(), Some("gmail"));
     }
 }

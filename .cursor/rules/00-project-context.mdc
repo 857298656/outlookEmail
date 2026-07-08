@@ -1,0 +1,27 @@
+---
+description: OutlookEmail Desktop project context — read AGENTS.md instead of re-exploring the repo
+alwaysApply: true
+---
+
+# OutlookEmail Desktop
+
+**Read `AGENTS.md` first.** Docs synced 2026-07-08.
+
+## Snapshot
+
+- Tauri 2 + React/Vite/TS + Rust commands + SQLite (local-first, single-user desktop).
+- Core done: Graph OAuth, IMAP sync (Gmail/QQ/163 presets), mailbox search/preview dialog, temp mail, forwarding, WebDAV backup, scheduler, automation dashboard, project pools, retry queue, themes, share exports.
+- **M9 code complete;** remaining work = real Gmail/QQ/163 manual QA.
+- **OAuth = Microsoft only** (`graph`, Outlook `imap`). Gmail uses IMAP app password; Gmail OAuth rejected in backend.
+
+## Where to change things
+
+- UI: `src/` — `App.tsx`, `api.ts`, `lib/providerRegistry.ts`, `lib/mailPreview.ts`, `lib/emailHtml.ts`
+- Rust: `src-tauri/src/` — `commands.rs`, `db.rs`, `providers.rs`, `import.rs`
+- Keep frontend and backend provider registries in sync.
+
+## Rules
+
+- No web service / extension / SaaS / Gmail OAuth unless user explicitly requests.
+- Prefer minimal diffs; match existing patterns.
+- Provider or mail changes: run `pnpm test` and `cargo test`.

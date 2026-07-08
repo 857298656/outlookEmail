@@ -2,6 +2,45 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_GRAPH_CLIENT_ID: &str = "6daa9f56-5e67-4cb6-ae52-ef89ef912d36";
 pub const DEFAULT_OAUTH_REDIRECT_URI: &str = "http://localhost:8080";
+pub const DEFAULT_LOGIN_USERNAME: &str = "admin";
+pub const DEFAULT_LOGIN_PASSWORD: &str = "admin123";
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoginInput {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateLoginPasswordInput {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspaceKeyRecord {
+    pub id: i64,
+    pub purpose: String,
+    pub key_fingerprint: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GenerateWorkspaceKeyInput {
+    pub purpose: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateWorkspaceKeyRecordInput {
+    pub id: i64,
+    pub purpose: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GenerateWorkspaceKeyResult {
+    pub record: WorkspaceKeyRecord,
+    pub workspace_key: String,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AppStatus {
@@ -192,7 +231,7 @@ impl Default for Settings {
             forward_telegram_chat_id: String::new(),
             forward_wecom_webhook: String::new(),
             appearance_theme: "default".to_string(),
-            accent_color: "#2563eb".to_string(),
+            accent_color: "#d97757".to_string(),
         }
     }
 }
@@ -619,6 +658,7 @@ pub struct ImportAccountsInput {
 pub struct ImportAccountsResult {
     pub imported: usize,
     pub skipped: usize,
+    pub accounts: Vec<Account>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -763,7 +803,6 @@ pub struct OAuthAuthUrlInput {
     pub redirect_uri: String,
     pub login_hint: Option<String>,
     pub provider: Option<String>,
-    pub code_verifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -928,7 +967,6 @@ pub struct AccountCredentials {
     pub imap_host: String,
     pub imap_port: i64,
     pub imap_password: String,
-    pub provider_sync_state: String,
     pub proxy_chain: Vec<String>,
 }
 

@@ -12,7 +12,7 @@ This version is intentionally local-first:
 
 ## Current implementation
 
-The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag management, account tag assignment, local retained-mail workspace, advanced message search/sort/filter/pagination, sandboxed HTML body rendering, batch read/unread/delete actions with remote failure surfacing, local mail/account/project exports, settings storage, Microsoft Graph OAuth, Graph mailbox sync, Graph attachment metadata/download, basic TLS IMAP sync with cached-MIME attachment download, GPTMail/DuckMail/Cloudflare temp-mail management, SMTP/Telegram/WeCom forwarding, failed-operation retry queue, WebDAV backup and local restore, in-app scheduling with unified task history, desktop project account pools, and Windows desktop bundling.
+The implementation includes the desktop project scaffold, SQLite schema, lock/setup flow, account/group/tag/alias management, provider registry with Gmail/QQ/163 IMAP presets, provider readiness checks and failure hints, account tag assignment and batch operations, refresh management view, local retained-mail workspace with full-screen preview dialog and cleaned list snippets, advanced message search/sort/filter/pagination, sandboxed HTML body rendering, batch read/unread/delete actions with remote failure surfacing, local mail share records, local HTML/CSV exports and confirmed account-secret export, settings storage with appearance themes and retention cleanup, Microsoft Graph OAuth (Outlook only), Graph mailbox sync, Graph attachment metadata/download, TLS IMAP sync with cached-MIME attachment download and NetEase IMAP `ID` support, GPTMail/DuckMail/Cloudflare temp-mail management, SMTP/Telegram/WeCom forwarding, failed-operation retry queue, WebDAV backup and local restore, in-app scheduling with unified task history and a dedicated Automation dashboard view, desktop project account pools, and Windows desktop bundling.
 
 See [`docs/requirements-milestones.md`](docs/requirements-milestones.md) for the full requirement record, completed scope, unfinished scope, and milestone plan.
 
@@ -61,15 +61,15 @@ Sensitive fields are encrypted with a key derived from the local app password.
 
 ## Mail sync
 
-Graph accounts need a Microsoft client ID and OAuth callback URL. Generate the auth URL in the account authorization panel, paste the callback URL or code back into the app, then refresh the account.
+Graph accounts need a Microsoft client ID and OAuth callback URL. Generate the auth URL in the account authorization panel, paste the callback URL or code back into the app, then refresh the account. OAuth is limited to Outlook Graph and Outlook IMAP providers; attempting Gmail OAuth returns an error.
 
-Gmail accounts use Google OAuth and the Gmail API. QQ Mail and 163 Mail use provider-specific IMAP presets with authorization codes or client authorization passwords rather than web login passwords.
+Gmail accounts currently use IMAP with `imap.gmail.com:993` and a Google account app password; Google OAuth login is not used for Gmail. QQ Mail and 163 Mail use provider-specific IMAP presets with authorization codes or client authorization passwords rather than web login passwords.
 
 The account inventory and refresh management views show provider-aware readiness details before refresh, including missing OAuth Client IDs, refresh tokens, IMAP host/port values, and provider-specific IMAP authorization secrets.
 
 IMAP accounts need host, port, and password fields. The IMAP implementation supports TLS password login, caches recent messages in SQLite, stores raw RFC822 MIME for synced messages, and downloads attachments by extracting them from the local cached MIME.
 
-The Mailbox view supports cached-message search, field tokens such as `from:`, `to:`, `subject:`, `body:`, `folder:`, `is:`, and `has:`, read/unread filtering, attachment filtering, multi-field sorting, pagination, sandboxed HTML body rendering, single-message actions, and batch read/unread/delete actions. Graph and IMAP message actions update the local SQLite cache and attempt remote synchronization. Failed remote mark/delete attempts are surfaced on affected messages and queued for manual or scheduled retry; failed deletes keep the cached message visible until the remote delete retry succeeds.
+The Mailbox view supports cached-message search, field tokens such as `from:`, `to:`, `subject:`, `body:`, `folder:`, `is:`, and `has:`, read/unread filtering, attachment filtering, multi-field sorting, pagination, cleaned list preview text, a full-screen preview dialog with share/export/raw actions, sandboxed HTML body rendering, single-message actions, and batch read/unread/delete actions. Graph and IMAP message actions update the local SQLite cache and attempt remote synchronization. Failed remote mark/delete attempts are surfaced on affected messages and queued for manual or scheduled retry; failed deletes keep the cached message visible until the remote delete retry succeeds.
 
 ## Local exports
 
@@ -79,7 +79,7 @@ The app can export selected cached messages as a local read-only HTML file. It a
 
 Forwarding is enabled per account in the account authorization panel. The Settings view configures SMTP, Telegram, and WeCom channels, WebDAV backup credentials, and local scheduler intervals.
 
-The scheduler runs inside the desktop process after the workspace is unlocked. It can periodically refresh mail, forward cached messages, retry failed mailbox refreshes, remote actions, temp-mail refreshes, and backups, and upload a consistent SQLite snapshot created with `VACUUM INTO`. Successful local backup snapshots can be restored from Settings after SQLite integrity validation and a pre-restore safety snapshot. Manual and scheduled refresh/forwarding/backup/retry jobs are recorded in a unified automation history table shown in Settings, where runs can be filtered and cleared.
+The scheduler runs inside the desktop process after the workspace is unlocked. It can periodically refresh mail, forward cached messages, retry failed mailbox refreshes, remote actions, temp-mail refreshes, and backups, and upload a consistent SQLite snapshot created with `VACUUM INTO`. Successful local backup snapshots can be restored from Settings after SQLite integrity validation and a pre-restore safety snapshot. Manual and scheduled refresh/forwarding/backup/retry jobs are recorded in a unified automation history table; Settings and the dedicated Automation view can filter runs, inspect observability metrics, and clear history.
 
 ## Temp mail
 

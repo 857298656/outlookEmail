@@ -24,7 +24,8 @@
 - 后端：Rust Tauri commands
 - 数据库：SQLite WAL mode
 - 密钥保护：本地应用密码派生密钥，AES-GCM 加密敏感配置
-- 邮件协议：Microsoft Graph OAuth + Graph API，基础 IMAP TLS
+- 邮件协议：Microsoft Graph OAuth + Graph API；通用 TLS IMAP（含 Gmail/QQ/163 preset、Outlook IMAP OAuth XOAUTH2）；Gmail **不使用** Google OAuth/Gmail API
+- 依赖：`imap-proto` 通过 `vendor/imap-proto-0.10.2` 本地 patch 构建
 - 临时邮箱：GPTMail、DuckMail、Cloudflare Worker 通道
 - 自动化：桌面进程内 scheduler
 - 打包：Windows exe、MSI、NSIS installer
@@ -50,6 +51,9 @@
 - 账号库存支持多选批量删除、移动分组、开关转发、添加/移除标签和按选中账号导出。
 - 刷新管理桌面视图支持统计、失败账号列表、单账号刷新、选中账号批量刷新、停止选中批量刷新、刷新重试队列、账号级刷新历史和刷新任务历史。
 - 账号敏感信息查看需要本地密码二次验证，验证后只读显示账号密码、Client ID、Refresh Token 预览和 IMAP 密码。
+- 账号库存和刷新管理页显示 provider-aware 接入就绪状态（OAuth Client ID/refresh token 或 IMAP host/port/密钥完整性）。
+- 刷新失败按服务商汇总，并显示 provider-specific 处理建议。
+- Gmail/QQ/163 provider-specific 凭据错误归类为 `auth`，影响重试退避策略。
 - 账号/分组 HTTP 代理链配置，Graph、IMAP HTTP CONNECT、SMTP HTTP CONNECT 和 HTTP 转发通道按主代理、备用代理顺序故障切换。
 - 账号授权编辑面板。
 - Microsoft Graph OAuth 授权 URL 生成。
@@ -73,6 +77,8 @@
 - 邮件排序：支持按日期、主题、发件人、已读状态、附件和文件夹升降序排序。
 - 邮件分页：支持固定页大小分页浏览缓存邮件。
 - 邮件正文 HTML 通过清理和沙箱 iframe 安全渲染，不插入主应用 DOM 执行。
+- 邮件列表摘要与预览弹窗使用 `formatMailPreview` 剥离 HTML/CSS 噪声，避免列表和预览区显示原始样式片段。
+- 邮箱页邮件详情以全屏预览弹窗展示，支持 Raw 查看、分享、导出和远端失败面板。
 - 单封和批量标记已读/未读。
 - 单封和批量删除。
 - Graph 标记已读/未读和删除远端同步尝试。
@@ -208,12 +214,12 @@ Outlook/Graph 接入已基本可用，下一批服务商接入记录在 [`docs/p
 
 接入优先级：
 
-- Gmail：优先走 Gmail API + Google OAuth，补齐首次同步、增量同步、附件、远端操作和本地缓存复用。
+- Gmail：当前走 IMAP 应用专用密码，使用 `imap.gmail.com:993` preset，复用现有 IMAP 同步、缓存 MIME、附件解析和远端 UID 操作；暂不处理 Google OAuth 登录。
 - QQ 邮箱：优先走 IMAP 授权码，复用现有 IMAP 同步、缓存 MIME、附件解析和远端 UID 操作。
 - 163 邮箱：优先走 IMAP 客户端授权密码，复用现有 IMAP 同步、缓存 MIME、附件解析和远端 UID 操作。
 - Custom IMAP：作为 QQ/163 以外邮箱的手动兜底。
 
-注意：Gmail API scope、QQ 授权码和 163 客户端授权密码都需要按真实账号进行人工验证；Web 推送类能力仍归入后续增强，不进入本轮桌面接入验收口径。
+注意：Gmail 应用专用密码、QQ 授权码和 163 客户端授权密码都需要按真实账号进行人工验证；Web 推送类能力仍归入后续增强，不进入本轮桌面接入验收口径。
 
 ### 分享与外部集成增强
 
@@ -313,18 +319,24 @@ Outlook/Graph 接入已基本可用，下一批服务商接入记录在 [`docs/p
 - 剩余交付物：无当前桌面 P0/P1/P2 缺口。
 - 风险点：自动化任务会触发真实网络请求，需要更强的失败隔离和可观测性。
 
-### M9：多邮箱服务商接入，规划中
+### M9：多邮箱服务商接入，代码已完成，待人工验收
 
 详细拆分见 [`docs/provider-integration-plan.md`](provider-integration-plan.md)。
 
-- P9.0 Provider Foundation：服务商注册表、provider-aware UI 文案、刷新路由和导入识别。已完成首批基础：provider registry、导入显式 provider/域名识别、QQ/163 IMAP preset、账号树/库存/刷新管理服务商标签和筛选、Graph/IMAP/Gmail adapter 路由骨架。
-- P9.1 Gmail OAuth and Gmail API Read Sync：Google OAuth URL/token exchange、PKCE、Gmail 账号保存、Gmail API `messages.list`/`messages.get` 首次只读同步、正文/附件归一化和 Gmail 附件下载已完成；仍需要真实 Gmail 测试账号人工验收。
-- P9.2 Gmail Incremental Sync and Remote Actions：Gmail 远端已读/未读、移入垃圾箱、失败重试和 `historyId` 增量同步已接入；仍需要真实 Gmail 测试账号验收。
-- P9.3 QQ Mail IMAP Provider：QQ provider 选项、`imap.qq.com:993` preset、导入识别、账号设置授权码提示和导入提示已接入；仍需要真实 QQ 邮箱账号验证 IMAP 开启、授权码、文件夹映射和远端 UID 操作。
-- P9.4 163 Mail IMAP Provider：163 provider 选项、`imap.163.com:993` preset、导入识别、账号设置授权密码提示和常见中文文件夹映射已接入；仍需要真实 163 邮箱账号验证 IMAP 开启、授权密码、实际文件夹命名和远端 UID 操作。
-- P9.5 Provider UX and Batch Operations：服务商筛选、统一服务商徽标、批量导入账号级服务商/凭据类型预览，以及刷新失败按服务商分组已接入；仍需真实多服务商批量操作验收。
-- P9.6 Hardening and Documentation：已新增服务商故障排查与验收清单，README/架构文档已链接；provider 能力元数据、provider-specific 凭据错误归类、刷新失败处理建议、账号接入就绪检查和自动化回归覆盖记录已整理，仍需真实 Gmail/QQ/163 账号人工验收。
+- P9.0 Provider Foundation：**已完成** — provider registry、导入识别、Graph/IMAP adapter 路由、服务商标签/筛选。
+- P9.1 Gmail IMAP Provider：**已完成（代码）** — `imap.gmail.com:993` preset、应用专用密码提示、Gmail OAuth 在代码层禁用；**待真实 Gmail 账号验收**。
+- P9.2 Gmail IMAP Remote Actions：**已完成（代码）** — 复用 IMAP UID 已读/未读、删除、MIME 缓存附件；**待真实 Gmail 账号验收**。
+- P9.3 QQ Mail IMAP Provider：**已完成（代码）** — `imap.qq.com:993` preset、授权码提示；**待真实 QQ 账号验收**。
+- P9.4 163 Mail IMAP Provider：**已完成（代码）** — `imap.163.com:993` preset、中文文件夹映射、IMAP `ID` 客户端标识；**待真实 163 账号验收**。
+- P9.5 Provider UX and Batch Operations：**已完成（代码）** — 服务商徽标、批量导入预览、刷新失败按服务商汇总；**待多服务商批量验收**。
+- P9.6 Hardening and Documentation：**已完成（代码与文档）** — 故障排查文档、凭据错误归类、接入就绪检查、回归测试清单；**待真实账号执行验收清单**。
+
+> 注意：旧版 Gmail OAuth/Gmail API 计划已从实现中移除，文档中以「历史记录（已废弃）」标注；当前 Gmail 只走 IMAP 应用专用密码。
 
 ## 当前推荐下一步
 
-继续按“桌面版够用，优先补功能”推进。当前桌面优先级中的 P0/P1/P2 项已补齐；M9 已完成首批 Provider Foundation、Gmail OAuth/API 同步基础、Gmail 远端操作、Gmail `historyId` 增量同步、QQ IMAP preset/提示基础、163 IMAP preset/中文文件夹映射基础、P9.5 Provider UX and Batch Operations 主要 UI 能力，以及 P9.6 故障排查、接入就绪检查和验收文档。下一步建议在具备真实 Gmail/QQ/163 测试账号时按 [`docs/provider-operations.md`](provider-operations.md) 补做人工验收；Web 服务和浏览器扩展暂不处理。
+M9 代码与文档已对齐当前实现；**剩余工作主要是验收，不是功能 backlog**。下一步：
+
+1. 在具备真实 Gmail/QQ/163 测试账号时，按 [`docs/provider-operations.md`](provider-operations.md) 执行手工验收清单。
+2. 根据验收结果补充 IMAP 文件夹映射或错误提示；若仍不够，按该文档 **「IMAP 兼容增强（暂缓）」** 中的 PR5（UTF-7/LIST）或 PR4（UID 回退）按需实施。
+3. Web 服务、浏览器扩展、Gmail OAuth/Gmail API 暂不处理。

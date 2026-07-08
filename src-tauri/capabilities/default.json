@@ -3,5 +3,19 @@
   "identifier": "default",
   "description": "Default capability for the main application window",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-center",
+    "core:window:allow-set-size",
+    "core:window:allow-set-min-size",
+    "core:window:allow-set-max-size",
+    "core:window:allow-is-maximized",
+    "core:window:allow-unmaximize",
+    "core:window:allow-set-decorations",
+    "core:window:allow-set-resizable",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging"
+  ]
 }

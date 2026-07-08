@@ -38,6 +38,36 @@ pub fn random_salt() -> String {
     STANDARD.encode(bytes)
 }
 
+pub fn random_workspace_key() -> String {
+    let mut bytes = [0_u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    STANDARD.encode(bytes)
+}
+
+pub fn workspace_key_fingerprint(workspace_key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(workspace_key.trim().as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .take(4)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+pub fn derive_workspace_key(workspace_key: &str) -> AppResult<[u8; 32]> {
+    let bytes = STANDARD
+        .decode(workspace_key.trim())
+        .map_err(|err| AppError::Crypto(err.to_string()))?;
+    if bytes.len() != 16 {
+        return Err(AppError::Crypto("workspace key must be 16 bytes".to_string()));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(b"outlook-email-desktop:workspace-key:");
+    hasher.update(bytes);
+    Ok(hasher.finalize().into())
+}
+
 pub fn encrypt_text(value: &str, key: &[u8; 32]) -> AppResult<String> {
     if value.is_empty() {
         return Ok(String::new());

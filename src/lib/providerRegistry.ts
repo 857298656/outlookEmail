@@ -59,22 +59,22 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
   {
     id: "gmail",
     label: "Gmail",
-    credentialLabel: "Google OAuth",
-    credentialPlaceholder: "Gmail 不使用网页登录密码",
-    setupHint: "Gmail 使用 Google OAuth；已用旧 scope 授权的 Gmail 账号需要重新授权后才能远端标记已读和移入垃圾箱。",
-    accountType: "gmail",
-    defaultImapHost: "",
+    credentialLabel: "Gmail 应用专用密码",
+    credentialPlaceholder: "Gmail 应用专用密码",
+    setupHint: "Gmail 当前使用 IMAP 接入；请在 Gmail 设置中开启 IMAP，并填写 Google 账号应用专用密码，不是网页登录密码。",
+    accountType: "imap",
+    defaultImapHost: "imap.gmail.com",
     defaultImapPort: 993,
     aliases: ["google", "googlemail"],
     domains: ["gmail.com", "googlemail.com"],
-    capabilities: ["read_mail", "download_attachments", "mark_read", "trash", "history_sync"]
+    capabilities: ["read_mail", "download_attachments", "mark_read", "remote_delete", "imap_folders"]
   },
   {
     id: "qq",
     label: "QQ 邮箱",
     credentialLabel: "IMAP 授权码",
     credentialPlaceholder: "QQ 邮箱 IMAP/SMTP 授权码",
-    setupHint: "QQ 邮箱请填写网页端生成的 IMAP/SMTP 客户端授权码，不是 QQ 登录密码；导入行的 password 字段也按授权码处理。",
+    setupHint: "QQ 邮箱请先登录邮箱，在 设置 > 账号安全 > 安全设置 > POP3/IMAP/SMTP 服务 中开启 IMAP/SMTP 并生成授权码；这里填写授权码，不是 QQ 登录密码。",
     accountType: "imap",
     defaultImapHost: "imap.qq.com",
     defaultImapPort: 993,
@@ -100,7 +100,7 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
     label: "163 邮箱",
     credentialLabel: "IMAP 授权密码",
     credentialPlaceholder: "163 客户端授权密码",
-    setupHint: "163 邮箱请填写客户端授权密码或应用密码，不是网页登录密码；导入行的 password 字段也按授权密码处理。",
+    setupHint: "163 邮箱请先登录邮箱，在 设置 > POP3/SMTP/IMAP 中开启服务并生成客户端授权密码；这里填写授权密码，不是网页登录密码。",
     accountType: "imap",
     defaultImapHost: "imap.163.com",
     defaultImapPort: 993,
@@ -191,8 +191,8 @@ export function providerReadiness(account: ProviderReadinessInput): ProviderRead
   const missing: string[] = [];
 
   if (provider.accountType !== "imap") {
-    if (!hasClientId) missing.push(provider.id === "gmail" ? "Google Client ID" : "Microsoft Client ID");
-    if (!hasRefreshToken) missing.push(provider.id === "gmail" ? "Google refresh token" : "Microsoft refresh token");
+    if (!hasClientId) missing.push("Microsoft Client ID");
+    if (!hasRefreshToken) missing.push("Microsoft refresh token");
     return readinessResult(missing, provider.credentialLabel, `${provider.credentialLabel} 已保存`);
   }
 
@@ -206,6 +206,11 @@ export function providerReadiness(account: ProviderReadinessInput): ProviderRead
 
   if (provider.id === "netease_163") {
     if (!hasImapPassword) missing.push("163 客户端授权密码");
+    return readinessResult(missing, provider.credentialLabel, `${provider.credentialLabel} + ${host || provider.defaultImapHost}:${port || provider.defaultImapPort}`);
+  }
+
+  if (provider.id === "gmail") {
+    if (!hasImapPassword) missing.push("Gmail 应用专用密码");
     return readinessResult(missing, provider.credentialLabel, `${provider.credentialLabel} + ${host || provider.defaultImapHost}:${port || provider.defaultImapPort}`);
   }
 
@@ -277,10 +282,10 @@ export function providerFailureHint(value?: string | null, error?: string | null
     lower.includes("refused");
 
   if (provider.id === "gmail" && lower.includes("history") && lower.includes("404")) {
-    return "Gmail historyId 可能过期；应用会回退全量同步，连续失败时重新授权。";
+    return "Gmail 当前走 IMAP 同步；请确认该账号已配置 IMAP host、端口和应用专用密码。";
   }
   if (provider.id === "gmail" && isAuthError) {
-    return "重新授权 Gmail，确认使用当前 Google Client ID 和 gmail.modify scope。";
+    return "检查 Gmail 已开启 IMAP，并填写 Google 账号应用专用密码，不是网页登录密码。";
   }
   if (provider.id === "graph" && isAuthError) {
     return "重新授权 Outlook，确认 Microsoft Client ID 和回调地址与设置一致。";

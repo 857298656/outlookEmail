@@ -3,6 +3,7 @@ use crate::import::parse_accounts;
 use crate::models::*;
 use crate::providers;
 use crate::AppState;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::process::Command;
 use tauri::State;
 
@@ -20,10 +21,26 @@ pub fn initialize_app(state: State<'_, AppState>, password: String) -> AppResult
 }
 
 #[tauri::command]
+pub fn login_app(state: State<'_, AppState>, input: LoginInput) -> AppResult<AppStatus> {
+    let mut db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.login(input)?;
+    db.app_status()
+}
+
+#[tauri::command]
 pub fn unlock_app(state: State<'_, AppState>, password: String) -> AppResult<AppStatus> {
     let mut db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.unlock(&password)?;
     db.app_status()
+}
+
+#[tauri::command]
+pub fn update_login_password(
+    state: State<'_, AppState>,
+    input: UpdateLoginPasswordInput,
+) -> AppResult<()> {
+    let mut db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.update_login_password(input)
 }
 
 #[tauri::command]
@@ -140,6 +157,24 @@ pub fn list_messages(
         }
         None => db.list_messages(account_id, folder),
     }
+}
+
+#[tauri::command]
+pub fn count_messages(
+    state: State<'_, AppState>,
+    account_id: Option<i64>,
+    folder: Option<String>,
+    query: Option<MailMessageQuery>,
+) -> AppResult<i64> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    let mut query = query.unwrap_or_default();
+    if query.account_id.is_none() {
+        query.account_id = account_id;
+    }
+    if query.folder.is_none() {
+        query.folder = folder;
+    }
+    db.count_messages_query(query)
 }
 
 #[tauri::command]
@@ -537,11 +572,58 @@ pub fn test_cloudflare_channel(state: State<'_, AppState>, channel_id: i64) -> A
 }
 
 #[tauri::command]
+pub fn list_workspace_key_records(state: State<'_, AppState>) -> AppResult<Vec<WorkspaceKeyRecord>> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.list_workspace_key_records()
+}
+
+#[tauri::command]
+pub fn generate_workspace_key(
+    state: State<'_, AppState>,
+    input: GenerateWorkspaceKeyInput,
+) -> AppResult<GenerateWorkspaceKeyResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.generate_workspace_key(input)
+}
+
+#[tauri::command]
+pub fn update_workspace_key_record(
+    state: State<'_, AppState>,
+    input: UpdateWorkspaceKeyRecordInput,
+) -> AppResult<WorkspaceKeyRecord> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.update_workspace_key_record(input)
+}
+
+#[tauri::command]
+pub fn delete_workspace_key_record(state: State<'_, AppState>, record_id: i64) -> AppResult<()> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.delete_workspace_key_record(record_id)
+}
+
+#[tauri::command]
 pub fn run_refresh_job(state: State<'_, AppState>, input: Option<RefreshInput>, account_id: Option<i64>) -> AppResult<JobResult> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.refresh_accounts(input.unwrap_or(RefreshInput {
+    let refresh_input = input.unwrap_or(RefreshInput {
         account_id,
         folder: Some("all".to_string()),
-        top: Some(25),
-    }))
+        top: None,
+    });
+    match catch_unwind(AssertUnwindSafe(|| db.refresh_accounts(refresh_input))) {
+        Ok(result) => result,
+        Err(payload) => Err(AppError::Internal(format!(
+            "刷新任务异常中断：{}",
+            panic_payload_message(payload.as_ref())
+        ))),
+    }
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "unknown panic".to_string()
 }

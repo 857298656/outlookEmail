@@ -127,3 +127,75 @@ $env:RUSTUP_HOME='E:\RustCache\.rustup'; $env:CARGO_HOME='E:\RustCache\.cargo'; 
 - IMAP 删除语义因服务商不同可能表现为 `\Deleted` + expunge、移动到 Trash 或服务商拒绝 UID 操作。
 - QQ/163 授权码流程可能随服务商策略变化，需要以真实账号网页端说明为准。
 - 当前 SMTP 转发仍是全局配置；按账号发信或按服务商发信不在本轮 M9 范围内。
+
+## IMAP 兼容增强（暂缓，按需实施）
+
+以下两项借鉴自 Python 旧版 Web 项目，**当前未实现**；仅在真实账号验收踩坑时再开发。编号 PR4/PR5 仅作备忘，**不代表必须按顺序全部交付**。
+
+### 已完成的相关增强（2026-07-08）
+
+| 编号 | 内容 | 状态 |
+|------|------|------|
+| PR1 | FETCH 解析 `FLAGS` / `INTERNALDATE`，保留 `BODY.PEEK[]` | 已完成 |
+| PR2 | SELECT 文件夹引号/去引号多策略重试 | 已完成 |
+| PR3 | QQ/Gmail/163/Custom 登录后发送 IMAP `ID` | 已完成 |
+
+### PR4：UID 失败回退序号（暂缓）
+
+**含义：** IMAP 命令层先走 UID，失败或拿不到有效 payload 时再改用序号（sequence number）。
+
+| 步骤 | 优先 | 回退 |
+|------|------|------|
+| 搜索 | `UID SEARCH ALL` | `SEARCH ALL` → 1, 2, 3… |
+| 拉取 | `UID FETCH <uid> …` | `FETCH <序号> …` |
+
+**触发条件（验收时再考虑）：**
+
+- `uid_search` / `uid_fetch` 报错，但网页邮箱里邮件存在
+- 刷新结果为空，而 SELECT 显示文件夹有信
+- 日志明确指向 UID 相关失败
+
+**实现注意：**
+
+- 本地 `provider_message_id` 仍优先存 **UID**；序号仅作拉取容错
+- 若需与 Python 旧版对齐，可能要记录实际使用的 `id_mode`（`uid` / `sequence`）
+- 详情、标记已读、删除等远端操作需与回退策略一致
+
+**参考：** Python 旧版 `fetch_imap_message()`、`search_imap_message_ids()`（`outlook_web/segments/03_mail_helpers.py`）。
+
+### PR5：UTF-7 / LIST 模糊匹配增强（暂缓）
+
+**含义：** 当预设文件夹名和 SELECT 重试都失败时，通过 `LIST` 列出全部邮箱，解码 Modified UTF-7 并模糊排名，再尝试 SELECT。
+
+**解决的问题：**
+
+- 中文文件夹名在 IMAP 中以 Modified UTF-7 编码（如 `&ZeV0L2xw-...`），与预设 `垃圾邮件` 对不上
+- 服务商使用非常规路径（如 `其他文件夹/垃圾邮件`、`[Gmail]/Spam`）
+- special-use 属性（`\Junk`、`\Trash`）与预设名均匹配失败
+
+**本项目已有能力（可能已够用）：**
+
+- `imap_mailbox_map()`：`LIST` + `\Junk`/`\Trash` 属性 + 中英文名称表
+- `build_imap_select_variants()`：引号/去引号 SELECT 重试
+
+**PR5 待补能力：**
+
+- `decode_imap_utf7()`：Modified UTF-7 → 可读中文
+- `rank_imap_listed_mailboxes()`：对 LIST 结果按全名、终端名、别名打分排序后再 SELECT
+- （可选）`uid_search` 空但 SELECT 返回 EXISTS>0 时，用序号 1..N 兜底
+
+**触发条件（验收时再考虑）：**
+
+- 垃圾邮件 / 已删除文件夹刷新失败，收件箱正常
+- 故障排查记录的实际文件夹名与 `classify_imap_mailbox` 预设不一致
+- LIST 返回 UTF-7 编码名，现有中文名表未命中
+
+**参考：** Python 旧版 `decode_imap_utf7()`、`rank_imap_listed_mailboxes()`、`resolve_imap_folder()`。
+
+### 建议实施顺序（若两项都需要）
+
+对 QQ/163 真实账号验收为主时，**可优先 PR5，再 PR4**——文件夹选不中比 UID 全链路不可用更常见；PR 编号不代表业务优先级。
+
+1. 先完成 M9 真实账号手工验收
+2. 若文件夹问题 → 实施 PR5
+3. 若 UID SEARCH/FETCH 全挂 → 实施 PR4

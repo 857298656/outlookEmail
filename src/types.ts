@@ -6,6 +6,28 @@ export type AppStatus = {
   message_count: number;
 };
 
+export type LoginInput = {
+  username: string;
+  password: string;
+};
+
+export type UpdateLoginPasswordInput = {
+  current_password: string;
+  new_password: string;
+};
+
+export type WorkspaceKeyRecord = {
+  id: number;
+  purpose: string;
+  key_fingerprint: string;
+  created_at: string;
+};
+
+export type GenerateWorkspaceKeyResult = {
+  record: WorkspaceKeyRecord;
+  workspace_key: string;
+};
+
 export type Group = {
   id: number;
   name: string;
@@ -184,6 +206,7 @@ export type Settings = {
 export type ImportAccountsResult = {
   imported: number;
   skipped: number;
+  accounts?: Account[];
 };
 
 export type JobResult = {

@@ -4,7 +4,13 @@
 
 本计划不恢复 Web 服务，不处理浏览器扩展，不做 SaaS。Gmail、QQ 邮箱和 163 邮箱都应接入现有本地优先架构，复用账号库存、SQLite 邮件缓存、刷新日志、重试队列、附件缓存、邮件列表、预览、导出和本地安全存储。
 
+当前实现决策：Gmail **只走 IMAP 应用专用密码**（`imap.gmail.com:993`），**不生成 Google OAuth URL、不做 Gmail API 同步、不保存 Gmail refresh token**。后端 `normalize_oauth_provider` 和 `exchange_oauth_code_for_provider` 会对 `gmail`/`google` 直接返回错误。OAuth 当前仅支持 Microsoft Graph 和 Outlook IMAP OAuth（`graph` / `imap` provider）。
+
+**实现状态（2026-07-08）：** P9.0–P9.6 代码与文档已落地；Gmail/QQ/163 均复用通用 IMAP 适配器。剩余缺口主要是真实 Gmail/QQ/163 测试账号的人工验收，不是功能开发 backlog。
+
 ## 已查阅资料
+
+以下链接主要供**暂缓的 Gmail API/OAuth 路线**参考；当前实现不调用这些 API。
 
 - Gmail API scopes: https://developers.google.com/workspace/gmail/api/auth/scopes
 - Gmail API list messages: https://developers.google.com/workspace/gmail/api/guides/list-messages
@@ -21,24 +27,24 @@
 
 ### Gmail
 
-优先路线：Gmail API + Google OAuth。
+当前路线：Gmail IMAP + Google 账号应用专用密码。
 
 原因：
 
-- Google 当前推荐第三方客户端使用 Google 账号登录，不推荐直接交出 Google 用户名和密码。
-- Gmail API 支持消息列表、消息详情、基于 `historyId` 的增量同步，以及 Cloud Pub/Sub 推送通知。
-- Gmail API scope 更细，但 `gmail.readonly`、`gmail.modify` 等邮件 scope 可能涉及敏感或受限权限，需要考虑 Google OAuth 应用验证。
+- 与 QQ/163 一样复用现有 IMAP 适配器，当前阶段不处理 Google OAuth 登录和应用验证。
+- Gmail 用户需要先开启 IMAP，并使用 Google 账号应用专用密码；不要填写 Google 网页登录密码。
+- 导入行的 password 字段保存到 IMAP 密码字段，provider 保持 `gmail`，account_type 归一为 `imap`。
 
-兜底路线：Gmail IMAP + XOAUTH2。
+暂缓路线：Gmail API + Google OAuth。
 
-仅在 Gmail API scope 审核或实现复杂度阻塞时使用。Gmail IMAP 支持 SASL XOAUTH2，但 IMAP/SMTP 使用的 `https://mail.google.com/` scope 权限很宽，合规要求更重。
+仅在后续明确恢复 OAuth 登录时使用。届时需要重新评估 Google OAuth 应用验证、scope、PKCE、refresh token 保存和 Gmail API 增量同步。
 
 首版目标：
 
-- Google OAuth 授权、回调粘贴和 refresh token 加密保存。
-- 使用 `messages.list` + `messages.get` 完成首次同步。
-- 保存 Gmail `message.id`、`threadId`、`labelIds`、`historyId`、发件人、收件人、主题、正文、附件和接收时间。
-- 基于 `historyId` 做增量同步。
+- Gmail 域名自动识别为 provider `gmail`。
+- 默认 IMAP host/port 为 `imap.gmail.com:993`。
+- 应用专用密码保存到加密 IMAP 密码字段。
+- 刷新、正文解析、附件下载、已读/未读和删除操作复用 IMAP 适配器。
 - 邮件进入现有 SQLite 缓存后，复用列表、搜索、预览、验证码复制、导出和附件下载。
 
 ### QQ 邮箱
@@ -113,20 +119,18 @@
 
 可能需要补充：
 
-- provider-specific JSON 设置，用于 Gmail `historyId`、Gmail label 同步状态、服务商能力探测结果和服务商警告。
+- provider-specific JSON 设置，用于服务商能力探测结果和服务商警告（**暂缓** Gmail `historyId`/label 同步状态）。
 - 后续如果做账号级 SMTP，再补账号级 SMTP host/port。
 
 ### OAuth
 
-Gmail OAuth 不能直接复用 Microsoft OAuth 地址，需要 provider-specific 实现：
+桌面 OAuth 当前**仅服务 Microsoft**：
 
-- Google 授权 URL。
-- Google token URL。
-- 桌面版继续使用当前“打开授权页 -> 粘贴回调 URL”的流程。
-- 首版 scope 建议：
-  - 只读 MVP：`https://www.googleapis.com/auth/gmail.readonly`
-  - 需要远端标记/删除：`https://www.googleapis.com/auth/gmail.modify`
-  - IMAP XOAUTH2 兜底：`https://mail.google.com/`
+- `graph` provider：Microsoft Graph OAuth v2，scope 含 `Mail.Read` / `Mail.ReadWrite`。
+- `imap` provider：Outlook IMAP OAuth，scope 含 `IMAP.AccessAsUser.All`；登录时使用 IMAP XOAUTH2。
+- Gmail、QQ、163、Custom IMAP **不使用 OAuth**；凭据分别写入 IMAP 应用专用密码或授权码/授权密码字段。
+
+**暂缓：** Google OAuth / Gmail API / Gmail XOAUTH2。若后续重新启用，需要单独评估 scope、应用验证、PKCE 和增量同步方案；当前代码库中不存在 Gmail API 调用。
 
 ### 刷新与远端操作适配器
 
@@ -139,13 +143,11 @@ Gmail OAuth 不能直接复用 Microsoft OAuth 地址，需要 provider-specific
 - `discover_folders(account)`
 - `refresh_delta(account)`，仅服务商支持时实现
 
-适配器列表：
+适配器列表（当前实现）：
 
-- Outlook Graph adapter：保留现有 Graph 逻辑。
-- Generic IMAP adapter：保留现有 IMAP 逻辑。
-- Gmail API adapter：新增。
-- QQ adapter：IMAP preset + QQ 授权码提示 + 文件夹验证。
-- 163 adapter：IMAP preset + 163 授权密码提示 + 文件夹验证。
+- Outlook Graph adapter：Microsoft Graph 刷新、附件、远端标记/删除。
+- Generic IMAP adapter：Gmail、QQ、163、Custom IMAP、Outlook IMAP OAuth 共用；含 TLS 登录、UID fetch、raw MIME 缓存、XOAUTH2（仅 Outlook IMAP OAuth）、文件夹发现、UID 标记/删除。
+- 163 特例：连接后发送 IMAP `ID` 命令（`imap.163.com` / `imap.126.com` / `imap.yeah.net`），满足网易客户端标识要求。
 
 ### UI
 
@@ -153,10 +155,10 @@ Gmail OAuth 不能直接复用 Microsoft OAuth 地址，需要 provider-specific
 
 - provider selector：Outlook、Gmail、QQ、163、Custom IMAP。
 - provider-aware 凭据表单：
-  - Outlook：Microsoft OAuth / IMAP OAuth。
-  - Gmail：Google OAuth。
-  - QQ：邮箱 + 授权码 + IMAP preset。
-  - 163：邮箱 + 客户端授权密码 + IMAP preset。
+  - Outlook：Microsoft OAuth；可选 Outlook IMAP OAuth（Client ID + OAuth 链接）。
+  - Gmail：邮箱 + IMAP 应用专用密码 + `imap.gmail.com:993` preset。
+  - QQ：邮箱 + IMAP 授权码 + `imap.qq.com:993` preset。
+  - 163：邮箱 + 客户端授权密码 + `imap.163.com:993` preset。
   - Custom IMAP：手动 host/port/password。
 - provider-specific 帮助文案和错误提示。
 
@@ -181,29 +183,19 @@ QQ/163 导入行里的 password 字段应解释为客户端授权码或应用密
 
 单元测试：
 
-- provider 自动识别
-- provider registry 默认配置
-- Gmail API 响应归一化
-- IMAP provider preset 归一化
-- 文件夹映射
-- 附件解析继续 provider-neutral
+- provider 自动识别与 registry 默认配置
+- IMAP provider preset 归一化（Gmail/QQ/163 host/port/account_type）
+- IMAP 文件夹映射（special-use、英文、中文、`[Gmail]/Spam`）
+- provider-specific 凭据错误归类（Gmail 应用专用密码、QQ 授权码、163 授权密码）
+- provider-aware 接入就绪判断
+- 附件解析与 mail list preview 格式化（provider-neutral）
 
-Mock 网络集成测试：
+人工验证（仍待完成）：
 
-- Gmail 首次同步
-- Gmail `historyId` 增量同步
-- QQ/163 IMAP raw MIME 同步
-- IMAP 标记已读/未读和删除失败进入重试队列
-- provider-specific 凭据错误归类
-
-人工验证：
-
-- Gmail OAuth 测试用户授权。
-- Gmail 首次同步和增量同步。
-- QQ 真实账号 IMAP 授权码刷新。
-- 163 真实账号 IMAP 授权密码刷新。
-- 三类服务商的附件下载。
-- 三类服务商的标记已读/未读和删除。
+- Gmail IMAP 应用专用密码刷新、附件、已读/未读、删除。
+- QQ 真实账号 IMAP 授权码刷新与文件夹映射。
+- 163 真实账号 IMAP 授权密码刷新与中文文件夹映射。
+- 多服务商批量导入、筛选、刷新失败汇总与跨服务商邮件操作。
 
 ## 里程碑拆分
 
@@ -232,64 +224,56 @@ Mock 网络集成测试：
 - 账号导入 parser 已支持显式 provider 字段，例如 `provider=qq----user@example.com----auth` 和 `netease_163----user@custom.test----secret`；未显式指定时会按 `gmail.com`/`googlemail.com`、`qq.com`/`foxmail.com`、`163.com` 自动识别。
 - QQ/163/Custom IMAP 导入行中的 `password` 字段已写入 IMAP 密钥位置；QQ 和 163 会自动填充默认 IMAP host/port。
 - 账号树、账号库存、刷新管理和导入预览已改为显示真实服务商标签，支持按 Outlook/Gmail/QQ/163/IMAP 筛选，不再用 refresh token 状态把 Gmail/QQ/163 误标为 Outlook。
-- 刷新、附件下载、远端标记和远端删除已集中到 provider adapter 路由。Gmail adapter 在 P9.1 前会返回明确的未接入错误，不再误走 Graph/IMAP。
+- 刷新、附件下载、远端标记和远端删除已集中到 provider adapter 路由；Gmail/QQ/163/Custom IMAP 走 Generic IMAP adapter，Graph 走 Graph adapter。
 - 已补充前端导入 parser 测试、Rust provider registry 测试和数据库导入 preset 测试；`pnpm test`、`pnpm build`、`cargo test` 均已通过。
 
-### P9.1 Gmail OAuth and Gmail API Read Sync
+### P9.1 Gmail IMAP Provider
 
-目标：把 Gmail 作为一等 OAuth 服务商接入，先完成只读同步。
-
-交付：
-
-- Google OAuth URL 生成和 token exchange。
-- Gmail 账号保存流程。
-- Gmail API 首次同步，使用 `messages.list` 和 `messages.get`。
-- Gmail 邮件归一化写入现有本地缓存。
-- Gmail 附件元数据和下载。
-
-验收：
-
-- Gmail 测试账号可以授权并保存。
-- 刷新当前账号能拉取 Gmail 收件箱最新邮件。
-- 邮件预览和附件下载可用。
-- 本地搜索、排序、筛选、分页、导出和验证码复制可用于 Gmail 邮件。
-
-进展（2026-07-06）：
-
-- 已完成 Google OAuth 授权 URL 生成，桌面端使用 PKCE S256；P9.2 开始默认 scope 升级为 `https://www.googleapis.com/auth/gmail.modify`，用于读取、已读/未读标记和移入垃圾箱。已用旧 `gmail.readonly` scope 授权的 Gmail 账号需要重新授权后才能执行远端修改。
-- 后端已接入 Google token endpoint，OAuth token exchange / save account 会按 provider 分发到 Microsoft 或 Google；Gmail refresh token 复用现有加密字段保存，provider/account_type 归一为 `gmail`。
-- 前端“授权并保存 OAuth 账号”和账号编辑弹窗已支持 Outlook/Gmail 切换、Gmail Client ID、PKCE verifier 传递、Gmail token 预览与保存；mock API 也返回 Gmail readonly scope。
-- 已补充 PKCE、Gmail OAuth URL、OAuth provider 归一化测试；`pnpm test`、`pnpm build`、`cargo test` 通过。
-- 已完成 Gmail API 首次只读同步：Gmail adapter 会刷新 access token，按 `INBOX`/`SPAM`/`TRASH` 映射现有 inbox/junkemail/deleteditems 文件夹，使用 `messages.list` 获取 id，再用 `messages.get(format=full)` 归一化 subject/from/to/cc、`internalDate`、`labelIds` 未读状态、snippet、HTML/文本正文和附件元数据。
-- 已接入 Gmail 附件下载：缓存中的 Gmail attachment id 会通过 `users.messages.attachments.get` 下载内容，并回查 message payload 取得文件名和 MIME 类型。
-- P9.1 尚未通过真实 Gmail 测试账号人工验收。
-
-P9.2 进展（2026-07-06）：
-
-- 已接入 Gmail 远端已读/未读：通过 `users.messages.modify` 添加或移除 `UNREAD` label，并复用现有远端操作失败重试队列。
-- 已接入 Gmail 删除语义：删除操作调用 `users.messages.trash` 移入垃圾箱，不做永久删除，不请求 `https://mail.google.com/` 全量权限。
-- 已接入 Gmail `historyId` 增量同步：账号级 `provider_sync_state` JSON 保存 `gmail_history_id`；刷新 all 文件夹时优先调用 `users.history.list(startHistoryId=...)`，按变更 message id 重新获取详情并刷新本地缓存。
-- `historyId` 过期或 Gmail 返回 HTTP 404 时自动回退全量同步；history label 变化会先删除本地旧 message id 行，再按当前 `INBOX`/`SPAM`/`TRASH` label 重新 upsert，永久删除事件会清理本地缓存。
-- 已补充 Gmail read-state payload、label 文件夹映射、history id 比较和 provider sync state 解析测试；仍需要真实 Gmail 测试账号验证 scope、标记、trash 和 history 行为。
-
-### P9.2 Gmail Incremental Sync and Remote Actions
-
-目标：让 Gmail 接近 Outlook/Graph 的同步效率和操作能力。
+目标：把 Gmail 作为 IMAP 一等服务商接入。
 
 交付：
 
-- 保存 Gmail `historyId`。
-- 使用 Gmail `history.list` 做增量同步。
-- `historyId` 过期或无效时自动回退首次同步。
-- Gmail 标记已读/未读。
-- Gmail 删除或移入垃圾箱行为与本地删除语义对齐。
-- Gmail 远端操作失败接入重试队列。
+- Gmail provider 选项与 `imap.gmail.com:993` preset。
+- `@gmail.com` / `@googlemail.com` 导入自动识别。
+- 账号设置应用专用密码提示；IMAP 密码字段保存 Google 应用专用密码。
+- 后端拒绝 Gmail OAuth 请求，避免误走 Google token exchange。
 
 验收：
 
-- 重复刷新不会不必要地全量拉取邮件详情。
-- 新邮件、已读状态变化和删除状态可以正确同步。
-- Gmail 远端操作失败在 UI 中以 Graph/IMAP 同样方式展示和重试。
+- Gmail 测试账号开启 IMAP 后，可用应用专用密码刷新 Inbox。
+- 邮件进入 SQLite 缓存后，列表、搜索、预览、附件下载可用。
+- 本地搜索、排序、筛选、分页、导出可用于 Gmail 邮件。
+
+进展（2026-07-08）：
+
+- 前后端 registry 已将 Gmail 标记为 `imap_app_password`，account_type 归一为 `imap`。
+- 导入、账号表单、批量预览、服务商徽标和筛选均已 provider-aware。
+- 刷新/附件/远端操作经 IMAP adapter 路由；Gmail OAuth URL 生成与 token exchange 在代码层被禁用。
+- **仍待真实 Gmail 测试账号人工验收。**
+
+### P9.2 Gmail IMAP Remote Actions
+
+目标：让 Gmail 通过 IMAP 具备与 Outlook IMAP 同级的操作能力。
+
+交付：
+
+- IMAP UID 标记已读/未读。
+- IMAP `\Deleted` + expunge 删除语义。
+- raw MIME 本地缓存与附件解析下载。
+- 远端操作失败进入重试队列并在 UI 可视化。
+
+验收：
+
+- Gmail 标记已读/未读、删除可用，或失败时进入可视化重试。
+- Gmail 应用专用密码错误会归类为 `auth` 并给出 setup hint。
+
+进展（2026-07-08）：
+
+- 已复用 Generic IMAP adapter 的 UID flag、删除、MIME 缓存和附件路径。
+- provider-specific 凭据错误与 failure hint 已覆盖 Gmail 应用专用密码场景。
+- **仍待真实 Gmail 测试账号验收远端 UID 操作。**
+
+> **历史记录（已废弃，勿按此开发）：** 早期文档曾规划 Gmail OAuth + Gmail API + `historyId` 增量同步（P9.1/P9.2 OAuth 版本）。该路线已从代码中移除；若未来重新启用，需单独立项，不能假设现有实现存在 Google token endpoint 或 `users.messages.*` 调用。
 
 ### P9.3 QQ Mail IMAP Provider
 
@@ -397,10 +381,22 @@ P9.2 进展（2026-07-06）：
 
 ## 风险和待确认问题
 
-- Gmail API scope 可能需要 OAuth 应用验证，尤其是公开给更多用户使用时。
-- Gmail push notifications 依赖 Cloud Pub/Sub，不是纯本地桌面方案。
+- Gmail OAuth / Gmail API / push notifications 已明确暂缓；当前 Gmail 只走 IMAP 应用专用密码。
 - QQ 和 163 授权码流程可能变化，需要真实账号确认。
 - QQ 和 163 可能限制 IMAP 登录频率，或要求先在网页登录开启 IMAP。
+- 163 邮箱可能要求 IMAP `ID` 命令携带客户端标识；已实现但需真实账号验证。
 - 文件夹名和 special-use flags 在不同邮箱中差异明显，必须真实账号验证。
-- 远端删除语义不同：Gmail API 有 trash/delete 区别，IMAP delete 通常是 `\Deleted` + expunge。
+- IMAP 删除语义不同：Gmail/QQ/163 通常表现为 `\Deleted` + expunge 或移动到 Trash，与 Graph `DELETE` 不同。
+- `imap-proto` 通过 `vendor/imap-proto-0.10.2` 本地 patch 引入，构建依赖该 vendored crate。
 - 当前 SMTP 转发偏应用全局配置；如果以后需要按账号发信，可能需要账号级 SMTP 配置。
+
+## IMAP 兼容增强 backlog（暂缓）
+
+PR1–PR3 已于 2026-07-08 落地（FLAGS/INTERNALDATE、SELECT 重试、通用 IMAP `ID`）。以下两项保留为按需 backlog，详见 [`docs/provider-operations.md`](provider-operations.md) 中 **「IMAP 兼容增强（暂缓）」**：
+
+| 编号 | 内容 | 何时做 |
+|------|------|--------|
+| PR4 | UID 失败回退序号（`UID SEARCH/FETCH` → `SEARCH/FETCH`） | `uid_search`/`uid_fetch` 全挂但邮箱有信时 |
+| PR5 | UTF-7 解码 + LIST 模糊排名 fallback | 垃圾邮件/已删除等文件夹选不中、LIST 名为编码或非常规路径时 |
+
+验收阶段若文件夹问题多于 UID 问题，**可优先 PR5 再 PR4**。

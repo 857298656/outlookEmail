@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAccountRows } from "./importParser";
+import { parseAccountRows, rawWithDefaultProvider } from "./importParser";
 
 describe("parseAccountRows", () => {
   it("parses legacy outlook import rows", () => {
@@ -38,5 +38,17 @@ describe("parseAccountRows", () => {
       password: "secret",
       provider: "netease_163"
     });
+  });
+
+  it("applies a selected default provider to preview and submitted rows", () => {
+    expect(parseAccountRows("user@example.com----gmail-app-password", { defaultProvider: "gmail" })[0]).toMatchObject({
+      email: "user@example.com",
+      password: "gmail-app-password",
+      provider: "gmail"
+    });
+    expect(parseAccountRows("qq----user@example.com----auth", { defaultProvider: "gmail" })[0].provider).toBe("gmail");
+    expect(rawWithDefaultProvider("# keep comment\nuser@example.com----secret", "gmail")).toBe(
+      "# keep comment\nprovider=gmail----user@example.com----secret"
+    );
   });
 });

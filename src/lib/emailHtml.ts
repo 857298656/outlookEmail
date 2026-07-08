@@ -25,7 +25,7 @@ export function buildSandboxedEmailHtml(html: string) {
     "body{padding:16px}",
     "img{max-width:100%;height:auto}",
     "table{max-width:100%;border-collapse:collapse}",
-    "a{color:#2563eb}",
+    "a{color:#d97757}",
     "</style>",
     "</head>",
     `<body>${sanitized}</body>`,

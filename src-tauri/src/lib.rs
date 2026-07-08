@@ -30,7 +30,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_status,
             initialize_app,
+            login_app,
             unlock_app,
+            update_login_password,
             lock_app,
             list_groups,
             create_group,
@@ -47,6 +49,7 @@ pub fn run() {
             batch_accounts,
             reveal_account_secrets,
             list_messages,
+            count_messages,
             create_demo_message,
             mark_mail_messages,
             delete_mail_messages,
@@ -105,6 +108,10 @@ pub fn run() {
             upsert_cloudflare_channel,
             delete_cloudflare_channel,
             test_cloudflare_channel,
+            list_workspace_key_records,
+            generate_workspace_key,
+            update_workspace_key_record,
+            delete_workspace_key_record,
             run_refresh_job
         ])
         .run(tauri::generate_context!())

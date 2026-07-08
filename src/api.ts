@@ -18,6 +18,7 @@ import type {
   Group,
   ImportAccountsResult,
   JobResult,
+  LoginInput,
   LocalRetentionSummary,
   MailMessage,
   MailMessageQuery,
@@ -37,7 +38,10 @@ import type {
   Settings,
   Tag,
   TempEmail,
-  TempEmailMessage
+  TempEmailMessage,
+  UpdateLoginPasswordInput,
+  WorkspaceKeyRecord,
+  GenerateWorkspaceKeyResult
 } from "./types";
 
 const defaultGraphClientId = "6daa9f56-5e67-4cb6-ae52-ef89ef912d36";
@@ -45,14 +49,6 @@ const defaultOAuthRedirectUri = "http://localhost:8080";
 const defaultGraphOAuthScope =
   "offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read";
 const encodeOAuthQueryValue = (value: string) => encodeURIComponent(value).replace(/%20/g, "+");
-
-async function mockPkceS256Challenge(codeVerifier: string | undefined): Promise<string> {
-  const verifier = codeVerifier?.trim();
-  if (!verifier || !globalThis.crypto?.subtle) return "";
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
-  const binary = Array.from(new Uint8Array(digest), (byte) => String.fromCharCode(byte)).join("");
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
 
 const defaultSettings: Settings = {
   graph_client_id: defaultGraphClientId,
@@ -81,11 +77,12 @@ const defaultSettings: Settings = {
   forward_telegram_chat_id: "",
   forward_wecom_webhook: "",
   appearance_theme: "default",
-  accent_color: "#2563eb"
+  accent_color: "#d97757"
 };
 
 let mockInitialized = false;
 let mockUnlocked = false;
+let mockLoginPassword = "admin123";
 let mockGroups: Group[] = [
   {
     id: 1,
@@ -117,6 +114,7 @@ let mockBackupLogs: BackupLog[] = [];
 let mockTempEmails: TempEmail[] = [];
 let mockTempMessages: TempEmailMessage[] = [];
 let mockCloudflareChannels: CloudflareChannel[] = [];
+let mockWorkspaceKeyRecords: WorkspaceKeyRecord[] = [];
 let mockSchedulerStatus: SchedulerStatus = {
   last_refresh_at: null,
   last_forwarding_at: null,
@@ -146,10 +144,32 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     case "initialize_app":
       mockInitialized = true;
       mockUnlocked = true;
+      mockLoginPassword = (args?.password as string | undefined) || mockLoginPassword;
       return status() as T;
-    case "unlock_app":
+    case "login_app": {
+      const input = args?.input as LoginInput;
+      if (input.username.trim().toLowerCase() !== "admin") throw new Error("账号或密码错误");
+      if (!mockInitialized) {
+        if (input.password !== "admin123") throw new Error("账号或密码错误");
+        mockInitialized = true;
+        mockLoginPassword = "admin123";
+      } else if (input.password !== mockLoginPassword) {
+        throw new Error("账号或密码错误");
+      }
       mockUnlocked = true;
       return status() as T;
+    }
+    case "unlock_app":
+      if ((args?.password as string | undefined) !== mockLoginPassword) throw new Error("账号或密码错误");
+      mockUnlocked = true;
+      return status() as T;
+    case "update_login_password": {
+      const input = args?.input as UpdateLoginPasswordInput;
+      if (input.current_password !== mockLoginPassword) throw new Error("当前密码错误");
+      if (input.new_password.length < 8) throw new Error("login password must be at least 8 characters");
+      mockLoginPassword = input.new_password;
+      return undefined as T;
+    }
     case "lock_app":
       mockUnlocked = false;
       return status() as T;
@@ -316,7 +336,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         ...group,
         account_count: mockAccounts.filter((account) => account.group_id === group.id).length
       }));
-      return { imported, skipped: 0 } as T;
+      return { imported, skipped: 0, accounts: nextAccounts } as T;
     }
     case "delete_account":
       mockAccounts = mockAccounts.filter((account) => account.id !== args?.accountId);
@@ -386,6 +406,8 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     }
     case "list_messages":
       return filterMockMessages(args) as T;
+    case "count_messages":
+      return filterMockMessagesWithoutPagination(args).length as T;
     case "create_demo_message": {
       const accountId = args?.accountId as number;
       const message: MailMessage = {
@@ -667,12 +689,53 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       return undefined as T;
     case "test_cloudflare_channel":
       return { success: true, message: "Cloudflare channel connected", refreshed: 1, failed: 0 } as T;
+    case "list_workspace_key_records":
+      return mockWorkspaceKeyRecords as T;
+    case "generate_workspace_key": {
+      const input = args?.input as { purpose: string };
+      const trimmedPurpose = input.purpose.trim();
+      let purpose = trimmedPurpose;
+      if (!purpose) {
+        let maxIndex = 0;
+        for (const record of mockWorkspaceKeyRecords) {
+          const match = /^密钥_(\d+)$/.exec(record.purpose);
+          if (match) maxIndex = Math.max(maxIndex, Number(match[1]));
+        }
+        purpose = `密钥_${maxIndex + 1}`;
+      }
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      const workspaceKey = btoa(String.fromCharCode(...bytes));
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(workspaceKey));
+      const keyFingerprint = Array.from(new Uint8Array(digest).slice(0, 4))
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
+      const record: WorkspaceKeyRecord = {
+        id: Date.now(),
+        purpose,
+        key_fingerprint: keyFingerprint,
+        created_at: new Date().toISOString()
+      };
+      mockWorkspaceKeyRecords = [record, ...mockWorkspaceKeyRecords];
+      return { record, workspace_key: workspaceKey } as T;
+    }
+    case "delete_workspace_key_record":
+      mockWorkspaceKeyRecords = mockWorkspaceKeyRecords.filter((item) => item.id !== args?.recordId);
+      return undefined as T;
+    case "update_workspace_key_record": {
+      const input = args?.input as { id: number; purpose: string };
+      const existing = mockWorkspaceKeyRecords.find((item) => item.id === input.id);
+      if (!existing) throw new Error("workspace key record not found");
+      const trimmed = input.purpose.trim();
+      const purpose = trimmed || existing.purpose;
+      const updated: WorkspaceKeyRecord = { ...existing, purpose };
+      mockWorkspaceKeyRecords = mockWorkspaceKeyRecords.map((item) => (item.id === input.id ? updated : item));
+      return updated as T;
+    }
     case "generate_oauth_auth_url": {
       const input = args?.input as { client_id: string; redirect_uri: string; login_hint?: string; provider?: string; code_verifier?: string };
       if (input.provider === "gmail") {
-        const codeChallenge = await mockPkceS256Challenge(input.code_verifier);
-        const pkceQuery = codeChallenge ? `&code_challenge=${encodeOAuthQueryValue(codeChallenge)}&code_challenge_method=S256` : "";
-        return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeOAuthQueryValue(input.client_id)}&response_type=code&redirect_uri=${encodeOAuthQueryValue(input.redirect_uri)}&scope=${encodeOAuthQueryValue("https://www.googleapis.com/auth/gmail.modify")}&state=12345&access_type=offline&prompt=consent${pkceQuery}${input.login_hint ? `&login_hint=${encodeOAuthQueryValue(input.login_hint)}` : ""}` as T;
+        throw new Error("Gmail OAuth is disabled; use IMAP app password");
       }
       const scope =
         input.provider === "imap"
@@ -682,10 +745,9 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     }
     case "exchange_oauth_token": {
       const input = args?.input as { account_id?: number; provider?: string };
+      if (input.provider === "gmail") throw new Error("Gmail OAuth is disabled; use IMAP app password");
       const scope =
-        input.provider === "gmail"
-          ? "https://www.googleapis.com/auth/gmail.modify"
-          : input.provider === "imap"
+        input.provider === "imap"
           ? "offline_access https://outlook.office.com/IMAP.AccessAsUser.All"
           : defaultGraphOAuthScope;
       return {
@@ -700,6 +762,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     case "save_oauth_account": {
       const input = args?.input as { email: string; group_id?: number | null; client_id: string; refresh_token?: string; provider?: string };
       const provider = input.provider ?? "graph";
+      if (provider === "gmail") throw new Error("Gmail OAuth is disabled; use IMAP app password");
       const account: Account = {
         id: Date.now(),
         email: input.email,
@@ -733,7 +796,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       return {
         success: true,
         account,
-        scope: provider === "gmail" ? "https://www.googleapis.com/auth/gmail.modify" : defaultGraphOAuthScope,
+        scope: defaultGraphOAuthScope,
         expires_in: 3600,
         refresh_token_preview: "mock...oken"
       } as T;
@@ -1142,14 +1205,19 @@ function classifyMockError(message: string) {
 
 function filterMockMessages(args?: Record<string, unknown>) {
   const query = (args?.query ?? {}) as MailMessageQuery;
+  const limit = query.limit ?? 200;
+  const offset = query.offset ?? 0;
+  return filterMockMessagesWithoutPagination(args).slice(offset, offset + limit);
+}
+
+function filterMockMessagesWithoutPagination(args?: Record<string, unknown>) {
+  const query = (args?.query ?? {}) as MailMessageQuery;
   const accountId = query.account_id ?? (args?.accountId as number | undefined);
   const folder = query.folder ?? (args?.folder as string | undefined);
   const parsedSearch = parseMockMailSearch(query.search ?? "");
   const effectiveFolder = (!folder || folder === "all") && parsedSearch.folder ? parsedSearch.folder : folder;
   const readState = query.read_state && query.read_state !== "all" ? query.read_state : parsedSearch.read_state ?? "all";
   const hasAttachments = query.has_attachments ?? parsedSearch.has_attachments;
-  const limit = query.limit ?? 200;
-  const offset = query.offset ?? 0;
   return mockMessages
     .filter((message) => {
       const haystack = [
@@ -1167,8 +1235,7 @@ function filterMockMessages(args?: Record<string, unknown>) {
         (hasAttachments === undefined || message.has_attachments === hasAttachments)
       );
     })
-    .sort((left, right) => compareMockMessages(left, right, query.sort_by ?? "date", query.sort_order ?? "desc"))
-    .slice(offset, offset + limit);
+    .sort((left, right) => compareMockMessages(left, right, query.sort_by ?? "date", query.sort_order ?? "desc"));
 }
 
 type MockMailSearchTerm = {
@@ -1311,8 +1378,10 @@ function mockTempMessage(email: string): TempEmailMessage {
 
 export const api = {
   status: () => call<AppStatus>("app_status"),
+  login: (input: LoginInput) => call<AppStatus>("login_app", { input }),
   initialize: (password: string) => call<AppStatus>("initialize_app", { password }),
   unlock: (password: string) => call<AppStatus>("unlock_app", { password }),
+  updateLoginPassword: (input: UpdateLoginPasswordInput) => call<void>("update_login_password", { input }),
   lock: () => call<AppStatus>("lock_app"),
   listGroups: () => call<Group[]>("list_groups"),
   createGroup: (input: {
@@ -1391,6 +1460,16 @@ export const api = {
         folder: query.folder ?? folder
       }
     }),
+  countMessages: (accountId?: number, folder = "all", query: MailMessageQuery = {}) =>
+    call<number>("count_messages", {
+      accountId,
+      folder,
+      query: {
+        ...query,
+        account_id: query.account_id ?? accountId,
+        folder: query.folder ?? folder
+      }
+    }),
   createDemoMessage: (accountId: number) => call<MailMessage>("create_demo_message", { accountId }),
   markMessagesRead: (messageIds: number[], isRead: boolean, syncRemote = true) =>
     call<JobResult>("mark_mail_messages", { input: { message_ids: messageIds, is_read: isRead, sync_remote: syncRemote } }),
@@ -1455,6 +1534,12 @@ export const api = {
   }) => call<CloudflareChannel>("upsert_cloudflare_channel", { input }),
   deleteCloudflareChannel: (channelId: number) => call<void>("delete_cloudflare_channel", { channelId }),
   testCloudflareChannel: (channelId: number) => call<JobResult>("test_cloudflare_channel", { channelId }),
+  listWorkspaceKeyRecords: () => call<WorkspaceKeyRecord[]>("list_workspace_key_records"),
+  generateWorkspaceKey: (input: { purpose: string }) =>
+    call<GenerateWorkspaceKeyResult>("generate_workspace_key", { input }),
+  updateWorkspaceKeyRecord: (input: { id: number; purpose: string }) =>
+    call<WorkspaceKeyRecord>("update_workspace_key_record", { input }),
+  deleteWorkspaceKeyRecord: (recordId: number) => call<void>("delete_workspace_key_record", { recordId }),
   generateOAuthAuthUrl: (input: { client_id: string; redirect_uri: string; login_hint?: string; provider?: string; code_verifier?: string }) =>
     call<string>("generate_oauth_auth_url", { input }),
   openExternalUrl: (url: string) => call<void>("open_external_url", { url }),
@@ -1494,6 +1579,9 @@ export const api = {
   restoreProjectAccount: (projectAccountId: number, detail = "") =>
     call<ProjectAccount>("restore_project_account", { input: { project_account_id: projectAccountId, detail } }),
   listProjectEvents: (projectId: number) => call<ProjectAccountEvent[]>("list_project_events", { projectId }),
-  runRefreshJob: (accountId?: number, folder = "all", top = 25) =>
-    call<JobResult>("run_refresh_job", { input: { account_id: accountId, folder, top }, accountId })
+  runRefreshJob: (accountId?: number, folder = "all", top?: number) => {
+    const input: { account_id?: number; folder: string; top?: number } = { account_id: accountId, folder };
+    if (top !== undefined) input.top = top;
+    return call<JobResult>("run_refresh_job", { input, accountId });
+  }
 };

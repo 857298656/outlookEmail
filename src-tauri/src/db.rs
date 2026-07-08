@@ -19,6 +19,17 @@ pub struct Database {
     crypto_key: Option<[u8; 32]>,
 }
 
+const CONFIG_SECRET_KEYS: &[&str] = &[
+    "gptmail_api_key",
+    "duckmail_api_key",
+    "webdav_password",
+    "forward_smtp_password",
+    "forward_telegram_bot_token",
+    "forward_wecom_webhook",
+];
+
+const WORKSPACE_KEY_CONFIG: &str = "workspace_key_enc";
+
 #[derive(Debug, Clone)]
 struct MailMessageRef {
     id: i64,
@@ -58,9 +69,21 @@ struct AutomationRunFilter {
 impl AutomationRunFilter {
     fn from_query(query: AutomationRunQuery) -> AppResult<Self> {
         Ok(Self {
-            job_type: normalize_automation_value(query.job_type.as_deref(), &["refresh", "forwarding", "backup", "retry"], "job_type")?,
-            trigger_type: normalize_automation_value(query.trigger_type.as_deref(), &["manual", "schedule"], "trigger_type")?,
-            status: normalize_automation_value(query.status.as_deref(), &["success", "failed"], "status")?,
+            job_type: normalize_automation_value(
+                query.job_type.as_deref(),
+                &["refresh", "forwarding", "backup", "retry"],
+                "job_type",
+            )?,
+            trigger_type: normalize_automation_value(
+                query.trigger_type.as_deref(),
+                &["manual", "schedule"],
+                "trigger_type",
+            )?,
+            status: normalize_automation_value(
+                query.status.as_deref(),
+                &["success", "failed"],
+                "status",
+            )?,
             search: query.search.unwrap_or_default().trim().to_string(),
             limit: query.limit.unwrap_or(100).clamp(1, 500),
         })
@@ -68,9 +91,21 @@ impl AutomationRunFilter {
 
     fn from_clear_input(input: &ClearAutomationRunsInput) -> AppResult<Self> {
         Ok(Self {
-            job_type: normalize_automation_value(input.job_type.as_deref(), &["refresh", "forwarding", "backup", "retry"], "job_type")?,
-            trigger_type: normalize_automation_value(input.trigger_type.as_deref(), &["manual", "schedule"], "trigger_type")?,
-            status: normalize_automation_value(input.status.as_deref(), &["success", "failed"], "status")?,
+            job_type: normalize_automation_value(
+                input.job_type.as_deref(),
+                &["refresh", "forwarding", "backup", "retry"],
+                "job_type",
+            )?,
+            trigger_type: normalize_automation_value(
+                input.trigger_type.as_deref(),
+                &["manual", "schedule"],
+                "trigger_type",
+            )?,
+            status: normalize_automation_value(
+                input.status.as_deref(),
+                &["success", "failed"],
+                "status",
+            )?,
             search: input.search.clone().unwrap_or_default().trim().to_string(),
             limit: 500,
         })
@@ -140,20 +175,38 @@ impl Database {
         self.crypto_key.is_some()
     }
 
-    pub fn initialize_app(&mut self, password: &str) -> AppResult<()> {
-        validate_password(password)?;
+    pub fn initialize_app(&mut self, _password: &str) -> AppResult<()> {
+        validate_password(DEFAULT_LOGIN_PASSWORD)?;
         if self.is_initialized()? {
-            return Err(AppError::InvalidInput("app is already initialized".to_string()));
+            return Err(AppError::InvalidInput(
+                "app is already initialized".to_string(),
+            ));
         }
 
-        let hash = crypto::hash_password(password)?;
+        let workspace_key = crypto::random_workspace_key();
+        let runtime_key = crypto::derive_workspace_key(&workspace_key)?;
+        let hash = crypto::hash_password(DEFAULT_LOGIN_PASSWORD)?;
         let salt = crypto::random_salt();
+        let password_key = crypto::derive_key(DEFAULT_LOGIN_PASSWORD, &salt);
+        let workspace_key_enc = crypto::encrypt_text(&workspace_key, &password_key)?;
         self.set_config("password_hash", &hash)?;
         self.set_config("crypto_salt", &salt)?;
-        self.crypto_key = Some(crypto::derive_key(password, &salt));
+        self.set_config(WORKSPACE_KEY_CONFIG, &workspace_key_enc)?;
+        self.crypto_key = Some(runtime_key);
         self.ensure_default_data()?;
         self.audit("app.initialized", "settings", None, "initial setup")?;
         Ok(())
+    }
+
+    pub fn login(&mut self, input: LoginInput) -> AppResult<()> {
+        validate_login_username(&input.username)?;
+        if self.is_initialized()? {
+            return self.unlock(&input.password);
+        }
+        if input.password != DEFAULT_LOGIN_PASSWORD {
+            return Err(AppError::Unauthorized);
+        }
+        self.initialize_app(DEFAULT_LOGIN_PASSWORD)
     }
 
     pub fn unlock(&mut self, password: &str) -> AppResult<()> {
@@ -166,13 +219,256 @@ impl Database {
         let salt = self
             .get_config("crypto_salt")?
             .ok_or_else(|| AppError::Crypto("missing crypto salt".to_string()))?;
-        self.crypto_key = Some(crypto::derive_key(password, &salt));
+        let password_key = crypto::derive_key(password, &salt);
+        if let Some(workspace_key_enc) = self.get_config(WORKSPACE_KEY_CONFIG)? {
+            let workspace_key = crypto::decrypt_text(&workspace_key_enc, &password_key)?;
+            self.crypto_key = Some(crypto::derive_workspace_key(&workspace_key)?);
+        } else {
+            self.migrate_legacy_password_key(&password_key)?;
+        }
         self.audit("app.unlocked", "session", None, "local unlock")?;
+        Ok(())
+    }
+
+    pub fn update_login_password(&mut self, input: UpdateLoginPasswordInput) -> AppResult<()> {
+        self.require_unlocked()?;
+        validate_password(&input.new_password)?;
+        let hash = self
+            .get_config("password_hash")?
+            .ok_or_else(|| AppError::InvalidInput("app is not initialized".to_string()))?;
+        if !crypto::verify_password(&input.current_password, &hash)? {
+            return Err(AppError::Unauthorized);
+        }
+        let current_salt = self
+            .get_config("crypto_salt")?
+            .ok_or_else(|| AppError::Crypto("missing crypto salt".to_string()))?;
+        let migrated_legacy_key = if self.get_config(WORKSPACE_KEY_CONFIG)?.is_none() {
+            let legacy_key = crypto::derive_key(&input.current_password, &current_salt);
+            self.migrate_legacy_password_key(&legacy_key)?;
+            true
+        } else {
+            false
+        };
+        let current_salt = self
+            .get_config("crypto_salt")?
+            .ok_or_else(|| AppError::Crypto("missing crypto salt".to_string()))?;
+        let workspace_key_enc = self
+            .get_config(WORKSPACE_KEY_CONFIG)?
+            .ok_or_else(|| AppError::Crypto("missing workspace key".to_string()))?;
+        let current_password = if migrated_legacy_key {
+            DEFAULT_LOGIN_PASSWORD
+        } else {
+            input.current_password.as_str()
+        };
+        let current_password_key = crypto::derive_key(current_password, &current_salt);
+        let workspace_key = crypto::decrypt_text(&workspace_key_enc, &current_password_key)?;
+        let new_hash = crypto::hash_password(&input.new_password)?;
+        let new_salt = crypto::random_salt();
+        let new_password_key = crypto::derive_key(&input.new_password, &new_salt);
+        let new_workspace_key_enc = crypto::encrypt_text(&workspace_key, &new_password_key)?;
+
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "
+            INSERT INTO app_config (key, value, updated_at)
+            VALUES ('password_hash', ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+            ",
+            [new_hash.as_str()],
+        )?;
+        tx.execute(
+            "
+            INSERT INTO app_config (key, value, updated_at)
+            VALUES ('crypto_salt', ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+            ",
+            [new_salt.as_str()],
+        )?;
+        tx.execute(
+            "
+            INSERT INTO app_config (key, value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+            ",
+            params![WORKSPACE_KEY_CONFIG, new_workspace_key_enc],
+        )?;
+        tx.commit()?;
+
+        self.audit(
+            "app.password_updated",
+            "settings",
+            None,
+            "login password changed",
+        )?;
         Ok(())
     }
 
     pub fn lock(&mut self) {
         self.crypto_key = None;
+    }
+
+    pub fn list_workspace_key_records(&self) -> AppResult<Vec<WorkspaceKeyRecord>> {
+        self.require_unlocked()?;
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT id, purpose, key_fingerprint, created_at
+            FROM workspace_key_records
+            ORDER BY created_at DESC, id DESC
+            ",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(WorkspaceKeyRecord {
+                id: row.get(0)?,
+                purpose: row.get(1)?,
+                key_fingerprint: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?;
+        collect_rows(rows)
+    }
+
+    pub fn generate_workspace_key(
+        &self,
+        input: GenerateWorkspaceKeyInput,
+    ) -> AppResult<GenerateWorkspaceKeyResult> {
+        self.require_unlocked()?;
+        let purpose = input.purpose.trim();
+        let purpose = if purpose.is_empty() {
+            self.next_default_workspace_key_purpose()?
+        } else {
+            purpose.to_string()
+        };
+        let workspace_key = crypto::random_workspace_key();
+        let key_fingerprint = crypto::workspace_key_fingerprint(&workspace_key);
+        self.conn.execute(
+            "
+            INSERT INTO workspace_key_records (purpose, key_fingerprint)
+            VALUES (?, ?)
+            ",
+            params![purpose, key_fingerprint],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        let record = self
+            .conn
+            .query_row(
+                "
+                SELECT id, purpose, key_fingerprint, created_at
+                FROM workspace_key_records
+                WHERE id = ?
+                ",
+                [id],
+                |row| {
+                    Ok(WorkspaceKeyRecord {
+                        id: row.get(0)?,
+                        purpose: row.get(1)?,
+                        key_fingerprint: row.get(2)?,
+                        created_at: row.get(3)?,
+                    })
+                },
+            )
+            .map_err(|_| AppError::Internal("failed to load generated workspace key record".to_string()))?;
+        self.audit(
+            "workspace_key.generated",
+            "workspace_key",
+            Some(id),
+            &purpose,
+        )?;
+        Ok(GenerateWorkspaceKeyResult {
+            record,
+            workspace_key,
+        })
+    }
+
+    fn next_default_workspace_key_purpose(&self) -> AppResult<String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT purpose FROM workspace_key_records")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut max_index = 0_u64;
+        for purpose in collect_rows(rows)? {
+            if let Some(suffix) = purpose.strip_prefix("密钥_") {
+                if let Ok(index) = suffix.parse::<u64>() {
+                    max_index = max_index.max(index);
+                }
+            }
+        }
+        Ok(format!("密钥_{}", max_index + 1))
+    }
+
+    pub fn update_workspace_key_record(
+        &self,
+        input: UpdateWorkspaceKeyRecordInput,
+    ) -> AppResult<WorkspaceKeyRecord> {
+        self.require_unlocked()?;
+        let existing_purpose: String = self
+            .conn
+            .query_row(
+                "SELECT purpose FROM workspace_key_records WHERE id = ?",
+                [input.id],
+                |row| row.get(0),
+            )
+            .map_err(|_| AppError::InvalidInput("workspace key record not found".to_string()))?;
+        let trimmed = input.purpose.trim();
+        let purpose = if trimmed.is_empty() {
+            existing_purpose
+        } else {
+            trimmed.to_string()
+        };
+        let changed = self.conn.execute(
+            "UPDATE workspace_key_records SET purpose = ? WHERE id = ?",
+            params![purpose, input.id],
+        )?;
+        if changed == 0 {
+            return Err(AppError::InvalidInput(
+                "workspace key record not found".to_string(),
+            ));
+        }
+        let record = self
+            .conn
+            .query_row(
+                "
+                SELECT id, purpose, key_fingerprint, created_at
+                FROM workspace_key_records
+                WHERE id = ?
+                ",
+                [input.id],
+                |row| {
+                    Ok(WorkspaceKeyRecord {
+                        id: row.get(0)?,
+                        purpose: row.get(1)?,
+                        key_fingerprint: row.get(2)?,
+                        created_at: row.get(3)?,
+                    })
+                },
+            )
+            .map_err(|_| AppError::Internal("failed to load workspace key record".to_string()))?;
+        self.audit(
+            "workspace_key.updated",
+            "workspace_key",
+            Some(input.id),
+            &record.purpose,
+        )?;
+        Ok(record)
+    }
+
+    pub fn delete_workspace_key_record(&self, record_id: i64) -> AppResult<()> {
+        self.require_unlocked()?;
+        let changed = self.conn.execute(
+            "DELETE FROM workspace_key_records WHERE id = ?",
+            [record_id],
+        )?;
+        if changed == 0 {
+            return Err(AppError::InvalidInput(
+                "workspace key record not found".to_string(),
+            ));
+        }
+        self.audit(
+            "workspace_key.deleted",
+            "workspace_key",
+            Some(record_id),
+            "record deleted",
+        )?;
+        Ok(())
     }
 
     pub fn app_status(&self) -> AppResult<AppStatus> {
@@ -226,14 +522,20 @@ impl Database {
         let parent_level = match input.parent_id {
             Some(parent_id) => self
                 .conn
-                .query_row("SELECT level FROM groups WHERE id = ?", [parent_id], |row| row.get::<_, i64>(0))
+                .query_row(
+                    "SELECT level FROM groups WHERE id = ?",
+                    [parent_id],
+                    |row| row.get::<_, i64>(0),
+                )
                 .optional()?
                 .ok_or_else(|| AppError::InvalidInput("parent group not found".to_string()))?,
             None => 0,
         };
         let level = parent_level + 1;
         if level > 3 {
-            return Err(AppError::InvalidInput("groups support at most 3 levels".to_string()));
+            return Err(AppError::InvalidInput(
+                "groups support at most 3 levels".to_string(),
+            ));
         }
 
         self.conn.execute(
@@ -262,7 +564,9 @@ impl Database {
         self.require_unlocked()?;
         let existing_id = self
             .conn
-            .query_row("SELECT id FROM groups WHERE id = ?", [input.id], |row| row.get::<_, i64>(0))
+            .query_row("SELECT id FROM groups WHERE id = ?", [input.id], |row| {
+                row.get::<_, i64>(0)
+            })
             .optional()?
             .ok_or_else(|| AppError::InvalidInput("group not found".to_string()))?;
         self.conn.execute(
@@ -292,23 +596,33 @@ impl Database {
         }
         let (current_parent_id, current_level): (Option<i64>, i64) = self
             .conn
-            .query_row("SELECT parent_id, level FROM groups WHERE id = ?", [input.id], |row| {
-                Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, i64>(1)?))
-            })
+            .query_row(
+                "SELECT parent_id, level FROM groups WHERE id = ?",
+                [input.id],
+                |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, i64>(1)?)),
+            )
             .optional()?
             .ok_or_else(|| AppError::InvalidInput("group not found".to_string()))?;
         if input.parent_id == Some(input.id) {
-            return Err(AppError::InvalidInput("group cannot be its own parent".to_string()));
+            return Err(AppError::InvalidInput(
+                "group cannot be its own parent".to_string(),
+            ));
         }
         if let Some(parent_id) = input.parent_id {
             if self.group_descendant_ids(input.id)?.contains(&parent_id) {
-                return Err(AppError::InvalidInput("group cannot move under its descendant".to_string()));
+                return Err(AppError::InvalidInput(
+                    "group cannot move under its descendant".to_string(),
+                ));
             }
         }
         let parent_level = match input.parent_id {
             Some(parent_id) => self
                 .conn
-                .query_row("SELECT level FROM groups WHERE id = ?", [parent_id], |row| row.get::<_, i64>(0))
+                .query_row(
+                    "SELECT level FROM groups WHERE id = ?",
+                    [parent_id],
+                    |row| row.get::<_, i64>(0),
+                )
                 .optional()?
                 .ok_or_else(|| AppError::InvalidInput("parent group not found".to_string()))?,
             None => 0,
@@ -316,7 +630,9 @@ impl Database {
         let new_level = parent_level + 1;
         let subtree_depth = self.group_subtree_depth(input.id, current_level)?;
         if new_level + subtree_depth > 3 {
-            return Err(AppError::InvalidInput("groups support at most 3 levels".to_string()));
+            return Err(AppError::InvalidInput(
+                "groups support at most 3 levels".to_string(),
+            ));
         }
 
         self.conn.execute(
@@ -365,11 +681,15 @@ impl Database {
             .optional()?
             .ok_or_else(|| AppError::InvalidInput("group not found".to_string()))?;
         if is_system == 1 {
-            return Err(AppError::InvalidInput("system group cannot be deleted".to_string()));
+            return Err(AppError::InvalidInput(
+                "system group cannot be deleted".to_string(),
+            ));
         }
         let descendants = self.group_descendant_ids(group_id)?;
-        self.conn
-            .execute("UPDATE accounts SET group_id = ? WHERE group_id = ?", params![parent_id, group_id])?;
+        self.conn.execute(
+            "UPDATE accounts SET group_id = ? WHERE group_id = ?",
+            params![parent_id, group_id],
+        )?;
         self.conn.execute(
             "UPDATE groups SET parent_id = ? WHERE parent_id = ?",
             params![parent_id, group_id],
@@ -377,8 +697,14 @@ impl Database {
         if !descendants.is_empty() {
             self.shift_group_levels(&descendants, -1)?;
         }
-        self.conn.execute("DELETE FROM groups WHERE id = ?", [group_id])?;
-        self.audit("group.deleted", "group", Some(group_id), &format!("level {level}"))?;
+        self.conn
+            .execute("DELETE FROM groups WHERE id = ?", [group_id])?;
+        self.audit(
+            "group.deleted",
+            "group",
+            Some(group_id),
+            &format!("level {level}"),
+        )?;
         Ok(())
     }
 
@@ -418,7 +744,8 @@ impl Database {
 
     pub fn delete_tag(&self, tag_id: i64) -> AppResult<()> {
         self.require_unlocked()?;
-        self.conn.execute("DELETE FROM tags WHERE id = ?", [tag_id])?;
+        self.conn
+            .execute("DELETE FROM tags WHERE id = ?", [tag_id])?;
         self.audit("tag.deleted", "tag", Some(tag_id), "")?;
         Ok(())
     }
@@ -481,11 +808,16 @@ impl Database {
         Ok(accounts)
     }
 
-    pub fn import_accounts(&self, rows: Vec<ImportedAccount>, group_id: Option<i64>) -> AppResult<ImportAccountsResult> {
+    pub fn import_accounts(
+        &self,
+        rows: Vec<ImportedAccount>,
+        group_id: Option<i64>,
+    ) -> AppResult<ImportAccountsResult> {
         self.require_unlocked()?;
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
         let mut imported = 0_usize;
         let mut skipped = 0_usize;
+        let mut imported_emails = HashSet::new();
 
         for row in rows {
             let provider = providers::detect_mail_provider(
@@ -494,10 +826,24 @@ impl Database {
                 !row.refresh_token.trim().is_empty(),
             )?;
             let is_imap_provider = provider.credential_kind.starts_with("imap");
-            let password = crypto::encrypt_text(if is_imap_provider { "" } else { row.password.as_str() }, key)?;
+            let password = crypto::encrypt_text(
+                if is_imap_provider {
+                    ""
+                } else {
+                    row.password.as_str()
+                },
+                key,
+            )?;
             let client_id = crypto::encrypt_text(&row.client_id, key)?;
             let refresh_token = crypto::encrypt_text(&row.refresh_token, key)?;
-            let imap_password = crypto::encrypt_text(if is_imap_provider { row.password.as_str() } else { "" }, key)?;
+            let imap_password = crypto::encrypt_text(
+                if is_imap_provider {
+                    row.password.as_str()
+                } else {
+                    ""
+                },
+                key,
+            )?;
             let changed = self.conn.execute(
                 "
                 INSERT INTO accounts
@@ -539,49 +885,81 @@ impl Database {
             )?;
             if changed > 0 {
                 imported += 1;
+                imported_emails.insert(row.email.clone());
             } else {
                 skipped += 1;
             }
         }
 
-        self.audit("account.imported", "account", None, &format!("{} imported", imported))?;
-        Ok(ImportAccountsResult { imported, skipped })
+        self.audit(
+            "account.imported",
+            "account",
+            None,
+            &format!("{} imported", imported),
+        )?;
+        let accounts = self
+            .list_accounts()?
+            .into_iter()
+            .filter(|account| imported_emails.contains(&account.email))
+            .collect();
+        Ok(ImportAccountsResult {
+            imported,
+            skipped,
+            accounts,
+        })
     }
 
     pub fn update_account(&self, input: UpdateAccountInput) -> AppResult<Account> {
         self.require_unlocked()?;
         let email = input.email.trim().to_ascii_lowercase();
         if !email.contains('@') {
-            return Err(AppError::InvalidInput("account email is invalid".to_string()));
+            return Err(AppError::InvalidInput(
+                "account email is invalid".to_string(),
+            ));
         }
         let existing_id = self
             .conn
-            .query_row("SELECT id FROM accounts WHERE id = ?", [input.id], |row| row.get::<_, i64>(0))
+            .query_row("SELECT id FROM accounts WHERE id = ?", [input.id], |row| {
+                row.get::<_, i64>(0)
+            })
             .optional()?
             .ok_or_else(|| AppError::InvalidInput("account not found".to_string()))?;
         self.ensure_primary_email_is_not_alias(existing_id, &email)?;
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
         let mail_retention_days = input.mail_retention_days.map(|days| days.clamp(1, 3650));
-        let provider_id = match input.provider.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        let provider_id = match input
+            .provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             Some(value) => Some(
                 providers::normalize_mail_provider_id(value)
-                    .ok_or_else(|| AppError::InvalidInput(format!("unsupported mail provider: {value}")))?
+                    .ok_or_else(|| {
+                        AppError::InvalidInput(format!("unsupported mail provider: {value}"))
+                    })?
                     .to_string(),
             ),
             None => None,
         };
-        let provider_definition = provider_id.as_deref().and_then(providers::mail_provider_definition);
+        let provider_definition = provider_id
+            .as_deref()
+            .and_then(providers::mail_provider_definition);
         let account_type = input
             .account_type
             .clone()
             .or_else(|| provider_definition.map(|provider| provider.account_type.to_string()));
         let imap_host = match (input.imap_host.clone(), provider_definition) {
             (Some(value), _) if !value.trim().is_empty() => Some(value),
-            (_, Some(provider)) if !provider.default_imap_host.is_empty() => Some(provider.default_imap_host.to_string()),
+            (_, Some(provider)) if !provider.default_imap_host.is_empty() => {
+                Some(provider.default_imap_host.to_string())
+            }
             (Some(value), _) => Some(value),
             (None, _) => None,
         };
-        let imap_port = input.imap_port.or_else(|| provider_definition.map(|provider| provider.default_imap_port));
+        let imap_port = input
+            .imap_port
+            .or_else(|| provider_definition.map(|provider| provider.default_imap_port));
 
         self.conn.execute(
             "
@@ -615,7 +993,9 @@ impl Database {
                 normalize_proxy_option(input.fallback_proxy_url_1.as_deref())?,
                 normalize_proxy_option(input.fallback_proxy_url_2.as_deref())?,
                 mail_retention_days,
-                input.forward_enabled.map(|enabled| if enabled { 1 } else { 0 }),
+                input
+                    .forward_enabled
+                    .map(|enabled| if enabled { 1 } else { 0 }),
                 existing_id
             ],
         )?;
@@ -669,18 +1049,22 @@ impl Database {
 
     pub fn delete_account(&self, account_id: i64) -> AppResult<()> {
         self.require_unlocked()?;
-        self.conn.execute("DELETE FROM accounts WHERE id = ?", [account_id])?;
+        self.conn
+            .execute("DELETE FROM accounts WHERE id = ?", [account_id])?;
         self.audit("account.deleted", "account", Some(account_id), "")?;
         Ok(())
     }
 
     pub fn batch_accounts(&self, input: AccountBatchInput) -> AppResult<JobResult> {
         self.require_unlocked()?;
-        let mut requested_ids: Vec<i64> = input.account_ids.into_iter().filter(|id| *id > 0).collect();
+        let mut requested_ids: Vec<i64> =
+            input.account_ids.into_iter().filter(|id| *id > 0).collect();
         requested_ids.sort_unstable();
         requested_ids.dedup();
         if requested_ids.is_empty() {
-            return Err(AppError::InvalidInput("account_ids are required".to_string()));
+            return Err(AppError::InvalidInput(
+                "account_ids are required".to_string(),
+            ));
         }
 
         let mut account_ids = Vec::new();
@@ -700,13 +1084,17 @@ impl Database {
         let affected = match action {
             "delete" => {
                 for account_id in &account_ids {
-                    self.conn.execute("DELETE FROM accounts WHERE id = ?", [account_id])?;
+                    self.conn
+                        .execute("DELETE FROM accounts WHERE id = ?", [account_id])?;
                 }
                 account_ids.len()
             }
             "move_group" => {
                 if let Some(group_id) = input.group_id {
-                    let exists = self.conn.prepare("SELECT id FROM groups WHERE id = ?")?.exists([group_id])?;
+                    let exists = self
+                        .conn
+                        .prepare("SELECT id FROM groups WHERE id = ?")?
+                        .exists([group_id])?;
                     if !exists {
                         return Err(AppError::InvalidInput("group not found".to_string()));
                     }
@@ -720,9 +1108,9 @@ impl Database {
                 account_ids.len()
             }
             "set_forward" => {
-                let enabled = input
-                    .forward_enabled
-                    .ok_or_else(|| AppError::InvalidInput("forward_enabled is required".to_string()))?;
+                let enabled = input.forward_enabled.ok_or_else(|| {
+                    AppError::InvalidInput("forward_enabled is required".to_string())
+                })?;
                 for account_id in &account_ids {
                     self.conn.execute(
                         "UPDATE accounts SET forward_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -767,7 +1155,11 @@ impl Database {
                 }
                 account_ids.len()
             }
-            _ => return Err(AppError::InvalidInput("unsupported batch action".to_string())),
+            _ => {
+                return Err(AppError::InvalidInput(
+                    "unsupported batch action".to_string(),
+                ))
+            }
         };
 
         self.audit(
@@ -784,7 +1176,10 @@ impl Database {
         })
     }
 
-    pub fn reveal_account_secrets(&self, input: RevealAccountSecretsInput) -> AppResult<AccountSecretsPreview> {
+    pub fn reveal_account_secrets(
+        &self,
+        input: RevealAccountSecretsInput,
+    ) -> AppResult<AccountSecretsPreview> {
         self.require_unlocked()?;
         let hash = self
             .get_config("password_hash")?
@@ -792,11 +1187,13 @@ impl Database {
         if !crypto::verify_password(&input.password, &hash)? {
             return Err(AppError::Unauthorized);
         }
-        let salt = self
-            .get_config("crypto_salt")?
-            .ok_or_else(|| AppError::Crypto("missing crypto salt".to_string()))?;
-        let key = crypto::derive_key(&input.password, &salt);
-        let (password_enc, client_id_enc, refresh_token_enc, imap_password_enc): (String, String, String, String) = self
+        let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
+        let (password_enc, client_id_enc, refresh_token_enc, imap_password_enc): (
+            String,
+            String,
+            String,
+            String,
+        ) = self
             .conn
             .query_row(
                 "
@@ -813,7 +1210,12 @@ impl Database {
         let client_id = crypto::decrypt_text(&client_id_enc, &key)?;
         let refresh_token = crypto::decrypt_text(&refresh_token_enc, &key)?;
         let imap_password = crypto::decrypt_text(&imap_password_enc, &key)?;
-        self.audit("account.secrets_viewed", "account", Some(input.account_id), "local password verified")?;
+        self.audit(
+            "account.secrets_viewed",
+            "account",
+            Some(input.account_id),
+            "local password verified",
+        )?;
         Ok(AccountSecretsPreview {
             password,
             client_id,
@@ -846,7 +1248,17 @@ impl Database {
         })?;
         let mut projects = Vec::new();
         for row in rows {
-            let (id, name, project_key, description, scope_mode, use_alias_email, status, created_at, updated_at) = row?;
+            let (
+                id,
+                name,
+                project_key,
+                description,
+                scope_mode,
+                use_alias_email,
+                status,
+                created_at,
+                updated_at,
+            ) = row?;
             projects.push(Project {
                 id,
                 name,
@@ -879,11 +1291,15 @@ impl Database {
         self.require_unlocked()?;
         let name = input.name.trim();
         if name.is_empty() {
-            return Err(AppError::InvalidInput("project name is required".to_string()));
+            return Err(AppError::InvalidInput(
+                "project name is required".to_string(),
+            ));
         }
         let scope_mode = input.scope_mode.unwrap_or_else(|| "all".to_string());
         if !matches!(scope_mode.as_str(), "all" | "groups" | "tags") {
-            return Err(AppError::InvalidInput("project scope_mode must be all, groups, or tags".to_string()));
+            return Err(AppError::InvalidInput(
+                "project scope_mode must be all, groups, or tags".to_string(),
+            ));
         }
         let project_key = input
             .project_key
@@ -891,7 +1307,9 @@ impl Database {
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| normalize_project_key(name));
         if project_key.is_empty() {
-            return Err(AppError::InvalidInput("project key is required".to_string()));
+            return Err(AppError::InvalidInput(
+                "project key is required".to_string(),
+            ));
         }
 
         self.conn.execute(
@@ -919,14 +1337,17 @@ impl Database {
         self.require_unlocked()?;
         let (scope_mode, use_alias_email): (String, bool) = self
             .conn
-            .query_row("SELECT scope_mode, use_alias_email FROM projects WHERE id = ?", [project_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? == 1))
-            })
+            .query_row(
+                "SELECT scope_mode, use_alias_email FROM projects WHERE id = ?",
+                [project_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? == 1)),
+            )
             .optional()?
             .ok_or_else(|| AppError::InvalidInput("project not found".to_string()))?;
         let group_ids = self.project_group_ids(project_id)?;
         let tag_ids = self.project_tag_ids(project_id)?;
-        let accounts = self.accounts_for_project_scope(&scope_mode, use_alias_email, &group_ids, &tag_ids)?;
+        let accounts =
+            self.accounts_for_project_scope(&scope_mode, use_alias_email, &group_ids, &tag_ids)?;
         for (account_id, email) in &accounts {
             let normalized = email.trim().to_ascii_lowercase();
             self.conn.execute(
@@ -949,7 +1370,8 @@ impl Database {
             .collect::<Vec<_>>();
         let existing = self.project_account_ids(project_id)?;
         for (project_account_id, account_id, normalized_email, status) in existing {
-            if !target_emails.iter().any(|email| email == &normalized_email) && status != "removed" {
+            if !target_emails.iter().any(|email| email == &normalized_email) && status != "removed"
+            {
                 self.transition_project_account(
                     project_account_id,
                     "removed",
@@ -994,7 +1416,10 @@ impl Database {
         collect_rows(rows)
     }
 
-    pub fn claim_project_account(&self, input: ClaimProjectAccountInput) -> AppResult<Option<ProjectAccount>> {
+    pub fn claim_project_account(
+        &self,
+        input: ClaimProjectAccountInput,
+    ) -> AppResult<Option<ProjectAccount>> {
         self.require_unlocked()?;
         let lease_minutes = input.lease_minutes.unwrap_or(30).clamp(1, 1440);
         let candidate = self
@@ -1036,13 +1461,20 @@ impl Database {
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             ",
-            params![token, format!("+{} minutes", lease_minutes), project_account_id],
+            params![
+                token,
+                format!("+{} minutes", lease_minutes),
+                project_account_id
+            ],
         )?;
         self.insert_project_event(&before, "claim", Some(&before.status), Some("claimed"), "")?;
         self.get_project_account(project_account_id).map(Some)
     }
 
-    pub fn complete_project_account_success(&self, input: ProjectAccountActionInput) -> AppResult<ProjectAccount> {
+    pub fn complete_project_account_success(
+        &self,
+        input: ProjectAccountActionInput,
+    ) -> AppResult<ProjectAccount> {
         self.transition_project_account(
             input.project_account_id,
             "success",
@@ -1052,7 +1484,10 @@ impl Database {
         )
     }
 
-    pub fn complete_project_account_failed(&self, input: ProjectAccountActionInput) -> AppResult<ProjectAccount> {
+    pub fn complete_project_account_failed(
+        &self,
+        input: ProjectAccountActionInput,
+    ) -> AppResult<ProjectAccount> {
         self.transition_project_account(
             input.project_account_id,
             "failed",
@@ -1062,7 +1497,10 @@ impl Database {
         )
     }
 
-    pub fn release_project_account(&self, input: ProjectAccountActionInput) -> AppResult<ProjectAccount> {
+    pub fn release_project_account(
+        &self,
+        input: ProjectAccountActionInput,
+    ) -> AppResult<ProjectAccount> {
         self.transition_project_account(
             input.project_account_id,
             "toClaim",
@@ -1072,7 +1510,10 @@ impl Database {
         )
     }
 
-    pub fn remove_project_account(&self, input: ProjectAccountActionInput) -> AppResult<ProjectAccount> {
+    pub fn remove_project_account(
+        &self,
+        input: ProjectAccountActionInput,
+    ) -> AppResult<ProjectAccount> {
         self.transition_project_account(
             input.project_account_id,
             "removed",
@@ -1082,7 +1523,10 @@ impl Database {
         )
     }
 
-    pub fn restore_project_account(&self, input: ProjectAccountActionInput) -> AppResult<ProjectAccount> {
+    pub fn restore_project_account(
+        &self,
+        input: ProjectAccountActionInput,
+    ) -> AppResult<ProjectAccount> {
         self.transition_project_account(
             input.project_account_id,
             "toClaim",
@@ -1121,7 +1565,11 @@ impl Database {
         collect_rows(rows)
     }
 
-    pub fn list_messages(&self, account_id: Option<i64>, folder: Option<String>) -> AppResult<Vec<MailMessage>> {
+    pub fn list_messages(
+        &self,
+        account_id: Option<i64>,
+        folder: Option<String>,
+    ) -> AppResult<Vec<MailMessage>> {
         self.list_messages_query(MailMessageQuery {
             account_id,
             folder,
@@ -1138,7 +1586,8 @@ impl Database {
     pub fn list_messages_query(&self, query: MailMessageQuery) -> AppResult<Vec<MailMessage>> {
         self.require_unlocked()?;
         let search = parse_mail_search(query.search.as_deref().unwrap_or_default());
-        let folder = match normalize_mail_folder(query.folder.as_deref().unwrap_or("all")).as_str() {
+        let folder = match normalize_mail_folder(query.folder.as_deref().unwrap_or("all")).as_str()
+        {
             "all" => search.folder.unwrap_or_else(|| "all".to_string()),
             value => value.to_string(),
         };
@@ -1221,11 +1670,59 @@ impl Database {
         collect_rows(rows)
     }
 
+    pub fn count_messages_query(&self, query: MailMessageQuery) -> AppResult<i64> {
+        self.require_unlocked()?;
+        let search = parse_mail_search(query.search.as_deref().unwrap_or_default());
+        let folder = match normalize_mail_folder(query.folder.as_deref().unwrap_or("all")).as_str()
+        {
+            "all" => search.folder.unwrap_or_else(|| "all".to_string()),
+            value => value.to_string(),
+        };
+        let read_state = match normalize_read_state(query.read_state.as_deref())?.as_str() {
+            "all" => search.read_state.unwrap_or_else(|| "all".to_string()),
+            value => value.to_string(),
+        };
+        let has_attachments = query.has_attachments.or(search.has_attachments);
+        let mut sql = String::from(
+            r#"
+            SELECT COUNT(*)
+            FROM retained_mail_messages m
+            WHERE 1 = 1
+            "#,
+        );
+        let mut values = Vec::new();
+        if let Some(account_id) = query.account_id {
+            sql.push_str(" AND m.account_id = ?");
+            values.push(SqlValue::Integer(account_id));
+        }
+        if folder != "all" {
+            sql.push_str(" AND m.folder = ?");
+            values.push(SqlValue::Text(folder));
+        }
+        match read_state.as_str() {
+            "read" => sql.push_str(" AND m.is_read = 1"),
+            "unread" => sql.push_str(" AND m.is_read = 0"),
+            _ => {}
+        }
+        if let Some(has_attachments) = has_attachments {
+            sql.push_str(" AND m.has_attachments = ?");
+            values.push(SqlValue::Integer(if has_attachments { 1 } else { 0 }));
+        }
+        append_mail_search_terms(&mut sql, &mut values, &search.terms);
+        self.conn
+            .query_row(&sql, params_from_iter(values), |row| row.get::<_, i64>(0))
+            .map_err(AppError::from)
+    }
+
     pub fn create_demo_message(&self, account_id: i64) -> AppResult<MailMessage> {
         self.require_unlocked()?;
         let exists = self
             .conn
-            .query_row("SELECT id FROM accounts WHERE id = ?", [account_id], |row| row.get::<_, i64>(0))
+            .query_row(
+                "SELECT id FROM accounts WHERE id = ?",
+                [account_id],
+                |row| row.get::<_, i64>(0),
+            )
             .optional()?;
         if exists.is_none() {
             return Err(AppError::InvalidInput("account not found".to_string()));
@@ -1262,7 +1759,9 @@ impl Database {
         let ids = normalize_message_ids(&input.message_ids)?;
         let targets = self.mail_message_refs(&ids)?;
         if targets.is_empty() {
-            return Err(AppError::InvalidInput("no matching messages found".to_string()));
+            return Err(AppError::InvalidInput(
+                "no matching messages found".to_string(),
+            ));
         }
 
         let sync_remote = input.sync_remote.unwrap_or(true);
@@ -1273,7 +1772,10 @@ impl Database {
                 if let Err(err) = self.sync_remote_mark_message(target, input.is_read) {
                     failed += 1;
                     let error = err.to_string();
-                    errors.push(format!("#{} {}: {}", target.id, target.provider_message_id, error));
+                    errors.push(format!(
+                        "#{} {}: {}",
+                        target.id, target.provider_message_id, error
+                    ));
                     self.enqueue_mail_retry(target, input.is_read, &error)?;
                 }
             }
@@ -1291,12 +1793,20 @@ impl Database {
             )?;
         }
 
-        let action = if input.is_read { "mail.mark_read" } else { "mail.mark_unread" };
+        let action = if input.is_read {
+            "mail.mark_read"
+        } else {
+            "mail.mark_unread"
+        };
         self.audit(action, "message", None, &format!("{} message(s)", changed))?;
         Ok(JobResult {
             success: failed == 0,
             message: mail_action_message(
-                if input.is_read { "Marked read" } else { "Marked unread" },
+                if input.is_read {
+                    "Marked read"
+                } else {
+                    "Marked unread"
+                },
                 changed,
                 failed,
                 &errors,
@@ -1311,7 +1821,9 @@ impl Database {
         let ids = normalize_message_ids(&input.message_ids)?;
         let targets = self.mail_message_refs(&ids)?;
         if targets.is_empty() {
-            return Err(AppError::InvalidInput("no matching messages found".to_string()));
+            return Err(AppError::InvalidInput(
+                "no matching messages found".to_string(),
+            ));
         }
 
         let sync_remote = input.sync_remote.unwrap_or(true);
@@ -1323,7 +1835,10 @@ impl Database {
                 if let Err(err) = self.sync_remote_delete_message(target) {
                     failed += 1;
                     let error = err.to_string();
-                    errors.push(format!("#{} {}: {}", target.id, target.provider_message_id, error));
+                    errors.push(format!(
+                        "#{} {}: {}",
+                        target.id, target.provider_message_id, error
+                    ));
                     self.enqueue_mail_delete_retry(target, &error)?;
                     failed_local_ids.insert(target.id);
                 } else {
@@ -1348,7 +1863,12 @@ impl Database {
             }
         }
 
-        self.audit("mail.deleted", "message", None, &format!("{} message(s)", changed))?;
+        self.audit(
+            "mail.deleted",
+            "message",
+            None,
+            &format!("{} message(s)", changed),
+        )?;
         Ok(JobResult {
             success: failed == 0,
             message: mail_action_message("Deleted", changed, failed, &errors),
@@ -1379,27 +1899,40 @@ impl Database {
         settings.webdav_url = self.get_config("webdav_url")?.unwrap_or_default();
         settings.webdav_username = self.get_config("webdav_username")?.unwrap_or_default();
         settings.webdav_password = self.get_config_secret("webdav_password")?;
-        settings.backup_enabled = self.get_config_bool("backup_enabled", settings.backup_enabled)?;
+        settings.backup_enabled =
+            self.get_config_bool("backup_enabled", settings.backup_enabled)?;
         settings.backup_interval_minutes =
             self.get_config_i64("backup_interval_minutes", settings.backup_interval_minutes)?;
-        settings.scheduler_refresh_enabled =
-            self.get_config_bool("scheduler_refresh_enabled", settings.scheduler_refresh_enabled)?;
+        settings.scheduler_refresh_enabled = self.get_config_bool(
+            "scheduler_refresh_enabled",
+            settings.scheduler_refresh_enabled,
+        )?;
         settings.scheduler_refresh_interval_minutes = self.get_config_i64(
             "scheduler_refresh_interval_minutes",
             settings.scheduler_refresh_interval_minutes,
         )?;
-        settings.scheduler_refresh_top = self.get_config_i64("scheduler_refresh_top", settings.scheduler_refresh_top)?;
-        settings.forwarding_enabled = self.get_config_bool("forwarding_enabled", settings.forwarding_enabled)?;
-        settings.forwarding_interval_minutes =
-            self.get_config_i64("forwarding_interval_minutes", settings.forwarding_interval_minutes)?;
+        settings.scheduler_refresh_top =
+            self.get_config_i64("scheduler_refresh_top", settings.scheduler_refresh_top)?;
+        settings.forwarding_enabled =
+            self.get_config_bool("forwarding_enabled", settings.forwarding_enabled)?;
+        settings.forwarding_interval_minutes = self.get_config_i64(
+            "forwarding_interval_minutes",
+            settings.forwarding_interval_minutes,
+        )?;
         settings.forward_smtp_host = self.get_config("forward_smtp_host")?.unwrap_or_default();
-        settings.forward_smtp_port = self.get_config_i64("forward_smtp_port", settings.forward_smtp_port)?;
-        settings.forward_smtp_username = self.get_config("forward_smtp_username")?.unwrap_or_default();
+        settings.forward_smtp_port =
+            self.get_config_i64("forward_smtp_port", settings.forward_smtp_port)?;
+        settings.forward_smtp_username = self
+            .get_config("forward_smtp_username")?
+            .unwrap_or_default();
         settings.forward_smtp_password = self.get_config_secret("forward_smtp_password")?;
         settings.forward_smtp_from = self.get_config("forward_smtp_from")?.unwrap_or_default();
         settings.forward_smtp_to = self.get_config("forward_smtp_to")?.unwrap_or_default();
-        settings.forward_telegram_bot_token = self.get_config_secret("forward_telegram_bot_token")?;
-        settings.forward_telegram_chat_id = self.get_config("forward_telegram_chat_id")?.unwrap_or_default();
+        settings.forward_telegram_bot_token =
+            self.get_config_secret("forward_telegram_bot_token")?;
+        settings.forward_telegram_chat_id = self
+            .get_config("forward_telegram_chat_id")?
+            .unwrap_or_default();
         settings.forward_wecom_webhook = self.get_config_secret("forward_wecom_webhook")?;
         settings.appearance_theme = normalize_theme_setting(
             self.get_config("appearance_theme")?
@@ -1426,26 +1959,55 @@ impl Database {
         self.set_config("webdav_username", &settings.webdav_username)?;
         self.set_config_secret("webdav_password", &settings.webdav_password)?;
         self.set_config_bool("backup_enabled", settings.backup_enabled)?;
-        self.set_config_i64("backup_interval_minutes", settings.backup_interval_minutes.max(1))?;
-        self.set_config_bool("scheduler_refresh_enabled", settings.scheduler_refresh_enabled)?;
+        self.set_config_i64(
+            "backup_interval_minutes",
+            settings.backup_interval_minutes.max(1),
+        )?;
+        self.set_config_bool(
+            "scheduler_refresh_enabled",
+            settings.scheduler_refresh_enabled,
+        )?;
         self.set_config_i64(
             "scheduler_refresh_interval_minutes",
             settings.scheduler_refresh_interval_minutes.max(1),
         )?;
-        self.set_config_i64("scheduler_refresh_top", settings.scheduler_refresh_top.clamp(1, 50))?;
+        self.set_config_i64(
+            "scheduler_refresh_top",
+            settings
+                .scheduler_refresh_top
+                .clamp(1, providers::MAIL_REFRESH_MAX_TOP as i64),
+        )?;
         self.set_config_bool("forwarding_enabled", settings.forwarding_enabled)?;
-        self.set_config_i64("forwarding_interval_minutes", settings.forwarding_interval_minutes.max(1))?;
+        self.set_config_i64(
+            "forwarding_interval_minutes",
+            settings.forwarding_interval_minutes.max(1),
+        )?;
         self.set_config("forward_smtp_host", &settings.forward_smtp_host)?;
-        self.set_config_i64("forward_smtp_port", settings.forward_smtp_port.clamp(1, 65535))?;
+        self.set_config_i64(
+            "forward_smtp_port",
+            settings.forward_smtp_port.clamp(1, 65535),
+        )?;
         self.set_config("forward_smtp_username", &settings.forward_smtp_username)?;
         self.set_config_secret("forward_smtp_password", &settings.forward_smtp_password)?;
         self.set_config("forward_smtp_from", &settings.forward_smtp_from)?;
         self.set_config("forward_smtp_to", &settings.forward_smtp_to)?;
-        self.set_config_secret("forward_telegram_bot_token", &settings.forward_telegram_bot_token)?;
-        self.set_config("forward_telegram_chat_id", &settings.forward_telegram_chat_id)?;
+        self.set_config_secret(
+            "forward_telegram_bot_token",
+            &settings.forward_telegram_bot_token,
+        )?;
+        self.set_config(
+            "forward_telegram_chat_id",
+            &settings.forward_telegram_chat_id,
+        )?;
         self.set_config_secret("forward_wecom_webhook", &settings.forward_wecom_webhook)?;
-        self.set_config("appearance_theme", &normalize_theme_setting(&settings.appearance_theme))?;
-        self.set_config("accent_color", &normalize_accent_color(&settings.accent_color))?;
+        self.set_config(
+            "appearance_theme",
+            &normalize_theme_setting(&settings.appearance_theme),
+        )?;
+        self.set_config(
+            "accent_color",
+            &normalize_accent_color(&settings.accent_color),
+        )?;
         self.audit("settings.updated", "settings", None, "")?;
         self.get_settings()
     }
@@ -1458,9 +2020,14 @@ impl Database {
                 Some(account_id) => {
                     let stored_provider = self
                         .conn
-                        .query_row("SELECT provider FROM accounts WHERE id = ?", [account_id], |row| row.get::<_, String>(0))
+                        .query_row(
+                            "SELECT provider FROM accounts WHERE id = ?",
+                            [account_id],
+                            |row| row.get::<_, String>(0),
+                        )
                         .optional()?;
-                    normalize_oauth_provider(stored_provider.as_deref())?.unwrap_or_else(|| "graph".to_string())
+                    normalize_oauth_provider(stored_provider.as_deref())?
+                        .unwrap_or_else(|| "graph".to_string())
                 }
                 None => "graph".to_string(),
             },
@@ -1490,9 +2057,20 @@ impl Database {
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 ",
-                params![client_id, refresh_token, provider.as_str(), account_type.as_str(), account_id],
+                params![
+                    client_id,
+                    refresh_token,
+                    provider.as_str(),
+                    account_type.as_str(),
+                    account_id
+                ],
             )?;
-            self.audit(&format!("oauth.{provider}.exchanged"), "account", Some(account_id), "")?;
+            self.audit(
+                &format!("oauth.{provider}.exchanged"),
+                "account",
+                Some(account_id),
+                "",
+            )?;
         }
         Ok(OAuthTokenResult {
             success: true,
@@ -1508,19 +2086,31 @@ impl Database {
         })
     }
 
-    pub fn save_oauth_account(&self, input: OAuthSaveAccountInput) -> AppResult<OAuthSaveAccountResult> {
+    pub fn save_oauth_account(
+        &self,
+        input: OAuthSaveAccountInput,
+    ) -> AppResult<OAuthSaveAccountResult> {
         self.require_unlocked()?;
         let email = input.email.trim().to_ascii_lowercase();
         if !email.contains('@') {
-            return Err(AppError::InvalidInput("account email is required".to_string()));
+            return Err(AppError::InvalidInput(
+                "account email is required".to_string(),
+            ));
         }
         let client_id = input.client_id.trim();
         if client_id.is_empty() {
-            return Err(AppError::InvalidInput("OAuth client id is required".to_string()));
+            return Err(AppError::InvalidInput(
+                "OAuth client id is required".to_string(),
+            ));
         }
 
-        let provider = normalize_oauth_provider(input.provider.as_deref())?.unwrap_or_else(|| "graph".to_string());
-        let token = if let Some(refresh_token) = input.refresh_token.as_ref().filter(|value| !value.trim().is_empty()) {
+        let provider = normalize_oauth_provider(input.provider.as_deref())?
+            .unwrap_or_else(|| "graph".to_string());
+        let token = if let Some(refresh_token) = input
+            .refresh_token
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
             providers::OAuthTokenResponse {
                 access_token: String::new(),
                 refresh_token: refresh_token.trim().to_string(),
@@ -1532,7 +2122,9 @@ impl Database {
                 .code_or_url
                 .as_ref()
                 .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| AppError::InvalidInput("OAuth callback URL is required".to_string()))?;
+                .ok_or_else(|| {
+                    AppError::InvalidInput("OAuth callback URL is required".to_string())
+                })?;
             exchange_oauth_code_for_provider(
                 &provider,
                 client_id,
@@ -1542,7 +2134,9 @@ impl Database {
             )?
         };
         if token.refresh_token.trim().is_empty() {
-            return Err(AppError::InvalidInput("OAuth response did not include a refresh token".to_string()));
+            return Err(AppError::InvalidInput(
+                "OAuth response did not include a refresh token".to_string(),
+            ));
         }
 
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
@@ -1550,7 +2144,11 @@ impl Database {
         let client_id_enc = crypto::encrypt_text(client_id, key)?;
         let refresh_token_enc = crypto::encrypt_text(&token.refresh_token, key)?;
         let remark = input.remark.unwrap_or_default();
-        let forward_enabled = if input.forward_enabled.unwrap_or(false) { 1 } else { 0 };
+        let forward_enabled = if input.forward_enabled.unwrap_or(false) {
+            1
+        } else {
+            0
+        };
         let account_type = oauth_account_type(&provider);
 
         self.conn.execute(
@@ -1592,10 +2190,17 @@ impl Database {
             ],
         )?;
 
-        let account_id = self.conn.query_row("SELECT id FROM accounts WHERE email = ?", params![email.as_str()], |row| {
-            row.get::<_, i64>(0)
-        })?;
-        self.audit(&format!("oauth.{provider}.account_saved"), "account", Some(account_id), "")?;
+        let account_id = self.conn.query_row(
+            "SELECT id FROM accounts WHERE email = ?",
+            params![email.as_str()],
+            |row| row.get::<_, i64>(0),
+        )?;
+        self.audit(
+            &format!("oauth.{provider}.account_saved"),
+            "account",
+            Some(account_id),
+            "",
+        )?;
         let account = self
             .list_accounts()?
             .into_iter()
@@ -1615,7 +2220,11 @@ impl Database {
         self.refresh_accounts_with_trigger(input, "manual")
     }
 
-    fn refresh_accounts_with_trigger(&self, input: RefreshInput, trigger_type: &str) -> AppResult<JobResult> {
+    fn refresh_accounts_with_trigger(
+        &self,
+        input: RefreshInput,
+        trigger_type: &str,
+    ) -> AppResult<JobResult> {
         let started_at = Utc::now();
         let result = self.refresh_accounts_inner(input);
         let _ = self.record_job_result("refresh", trigger_type, started_at, &result);
@@ -1626,11 +2235,13 @@ impl Database {
         self.require_unlocked()?;
         let credentials = self.account_credentials(input.account_id)?;
         if credentials.is_empty() {
-            return Err(AppError::InvalidInput("no matching accounts to refresh".to_string()));
+            return Err(AppError::InvalidInput(
+                "no matching accounts to refresh".to_string(),
+            ));
         }
 
         let folder = input.folder.unwrap_or_else(|| "all".to_string());
-        let top = input.top.unwrap_or(25).clamp(1, 50);
+        let top = self.refresh_top_for_input(input.top)?;
         let mut refreshed = 0_usize;
         let mut failed = 0_usize;
         let mut cached_messages = 0_usize;
@@ -1656,7 +2267,10 @@ impl Database {
         Ok(JobResult {
             success: failed == 0,
             message: if errors.is_empty() {
-                format!("Refreshed {} account(s), cached {} message(s)", refreshed, cached_messages)
+                format!(
+                    "Refreshed {} account(s), cached {} message(s)",
+                    refreshed, cached_messages
+                )
             } else {
                 format!(
                     "Refreshed {} account(s), cached {} message(s), {} failed: {}",
@@ -1671,7 +2285,21 @@ impl Database {
         })
     }
 
-    pub fn download_attachment(&self, input: DownloadAttachmentInput) -> AppResult<DownloadAttachmentResult> {
+    fn refresh_top_for_input(&self, top: Option<usize>) -> AppResult<usize> {
+        match top {
+            Some(0) => Ok(providers::MAIL_REFRESH_MAX_TOP),
+            Some(value) => Ok(value.clamp(1, providers::MAIL_REFRESH_MAX_TOP)),
+            None => Ok(self
+                .get_settings()?
+                .scheduler_refresh_top
+                .clamp(1, providers::MAIL_REFRESH_MAX_TOP as i64) as usize),
+        }
+    }
+
+    pub fn download_attachment(
+        &self,
+        input: DownloadAttachmentInput,
+    ) -> AppResult<DownloadAttachmentResult> {
         self.require_unlocked()?;
         let account = self
             .account_credentials(Some(input.account_id))?
@@ -1683,12 +2311,18 @@ impl Database {
             .as_deref()
             .map(normalize_mail_folder)
             .filter(|value| value != "all");
-        let attachment = self.fetch_attachment_content(&account, &input.message_id, &input.attachment_id, folder.as_deref())?;
+        let attachment = self.fetch_attachment_content(
+            &account,
+            &input.message_id,
+            &input.attachment_id,
+            folder.as_deref(),
+        )?;
         let file_name = safe_file_name(&attachment.name);
         let dir = attachment_dir(&self.db_path)?;
         std::fs::create_dir_all(&dir).map_err(|err| AppError::Internal(err.to_string()))?;
         let path = unique_path(&dir, &file_name);
-        std::fs::write(&path, &attachment.bytes).map_err(|err| AppError::Internal(err.to_string()))?;
+        std::fs::write(&path, &attachment.bytes)
+            .map_err(|err| AppError::Internal(err.to_string()))?;
         self.audit(
             "attachment.downloaded",
             "attachment",
@@ -1702,7 +2336,10 @@ impl Database {
         })
     }
 
-    pub fn download_all_attachments(&self, input: DownloadAllAttachmentsInput) -> AppResult<ExportResult> {
+    pub fn download_all_attachments(
+        &self,
+        input: DownloadAllAttachmentsInput,
+    ) -> AppResult<ExportResult> {
         self.require_unlocked()?;
         let account = self
             .account_credentials(Some(input.account_id))?
@@ -1714,23 +2351,39 @@ impl Database {
             .as_deref()
             .map(normalize_mail_folder)
             .filter(|value| value != "all");
-        let attachment_infos = self.cached_message_attachments(account.id, &input.message_id, folder.as_deref())?;
+        let attachment_infos =
+            self.cached_message_attachments(account.id, &input.message_id, folder.as_deref())?;
         if attachment_infos.is_empty() {
-            return Err(AppError::InvalidInput("message has no cached attachment metadata".to_string()));
+            return Err(AppError::InvalidInput(
+                "message has no cached attachment metadata".to_string(),
+            ));
         }
 
         let mut used_names = HashSet::new();
         let mut files = Vec::new();
         for attachment_info in attachment_infos {
             let downloaded = self
-                .fetch_attachment_content(&account, &input.message_id, &attachment_info.id, folder.as_deref())
-                .map_err(|err| AppError::Internal(format!("failed to download attachment {}: {}", attachment_info.name, err)))?;
+                .fetch_attachment_content(
+                    &account,
+                    &input.message_id,
+                    &attachment_info.id,
+                    folder.as_deref(),
+                )
+                .map_err(|err| {
+                    AppError::Internal(format!(
+                        "failed to download attachment {}: {}",
+                        attachment_info.name, err
+                    ))
+                })?;
             let display_name = if downloaded.name.trim().is_empty() {
                 attachment_info.name.as_str()
             } else {
                 downloaded.name.as_str()
             };
-            files.push((unique_bundle_file_name(&mut used_names, display_name), downloaded.bytes));
+            files.push((
+                unique_bundle_file_name(&mut used_names, display_name),
+                downloaded.bytes,
+            ));
         }
 
         let dir = attachment_dir(&self.db_path)?;
@@ -1778,7 +2431,9 @@ impl Database {
             )
         })?;
         if raw_mime.is_empty() {
-            return Err(AppError::InvalidInput("cached raw MIME is empty".to_string()));
+            return Err(AppError::InvalidInput(
+                "cached raw MIME is empty".to_string(),
+            ));
         }
         Ok(MailRawContent {
             message_id,
@@ -1797,12 +2452,13 @@ impl Database {
     ) -> AppResult<DownloadedAttachment> {
         require_provider_capability(account, "download_attachments", "attachment download")?;
         match mail_provider_adapter(account)? {
-            MailProviderAdapter::Graph => providers::download_graph_attachment(account, message_id, attachment_id),
+            MailProviderAdapter::Graph => {
+                providers::download_graph_attachment(account, message_id, attachment_id)
+            }
             MailProviderAdapter::Imap => {
                 let raw_mime = self.cached_imap_raw_mime(account.id, message_id, folder)?;
                 providers::download_imap_attachment_from_raw(&raw_mime, attachment_id)
             }
-            MailProviderAdapter::Gmail => providers::download_gmail_attachment(account, message_id, attachment_id),
         }
     }
 
@@ -1811,7 +2467,9 @@ impl Database {
         let ids = normalize_message_ids(&input.message_ids)?;
         let rows = self.export_mail_message_rows(&ids)?;
         if rows.is_empty() {
-            return Err(AppError::InvalidInput("no matching messages found".to_string()));
+            return Err(AppError::InvalidInput(
+                "no matching messages found".to_string(),
+            ));
         }
         let title = input
             .title
@@ -1822,7 +2480,12 @@ impl Database {
         let content = render_mail_export_html(title, &rows);
         let file_name = timestamped_file_name("mail-export", "html");
         let (path, size) = self.write_export_file("mail", &file_name, content.as_bytes())?;
-        self.audit("mail.exported", "message", None, &format!("{} message(s)", rows.len()))?;
+        self.audit(
+            "mail.exported",
+            "message",
+            None,
+            &format!("{} message(s)", rows.len()),
+        )?;
         Ok(ExportResult {
             path,
             file_name,
@@ -1836,7 +2499,9 @@ impl Database {
         let ids = normalize_message_ids(&input.message_ids)?;
         let rows = self.export_mail_message_rows(&ids)?;
         if rows.is_empty() {
-            return Err(AppError::InvalidInput("no matching messages found".to_string()));
+            return Err(AppError::InvalidInput(
+                "no matching messages found".to_string(),
+            ));
         }
         let title = input
             .title
@@ -1857,8 +2522,9 @@ impl Database {
         let token = Uuid::new_v4().to_string();
         let token_hash = share_token_hash(&token);
         let token_preview = token.chars().take(8).collect::<String>();
-        let message_ids_json = serde_json::to_string(&ids)
-            .map_err(|err| AppError::Internal(format!("serialize share message ids failed: {err}")))?;
+        let message_ids_json = serde_json::to_string(&ids).map_err(|err| {
+            AppError::Internal(format!("serialize share message ids failed: {err}"))
+        })?;
         let account_id = rows[0].account_id;
         self.conn.execute(
             "
@@ -1879,7 +2545,12 @@ impl Database {
             ],
         )?;
         let id = self.conn.last_insert_rowid();
-        self.audit("mail_share.created", "share", Some(id), &format!("{} message(s)", rows.len()))?;
+        self.audit(
+            "mail_share.created",
+            "share",
+            Some(id),
+            &format!("{} message(s)", rows.len()),
+        )?;
         let mut record = self.get_mail_share_record(id)?;
         record.token_preview = token_preview;
         Ok(record)
@@ -1990,7 +2661,12 @@ impl Database {
         }
         let file_name = timestamped_file_name("accounts-export", "csv");
         let (path, size) = self.write_export_file("accounts", &file_name, csv.as_bytes())?;
-        self.audit("accounts.exported", "account", None, &format!("{} account(s)", accounts.len()))?;
+        self.audit(
+            "accounts.exported",
+            "account",
+            None,
+            &format!("{} account(s)", accounts.len()),
+        )?;
         Ok(ExportResult {
             path,
             file_name,
@@ -1999,7 +2675,10 @@ impl Database {
         })
     }
 
-    pub fn export_account_secrets(&self, input: ExportAccountSecretsInput) -> AppResult<ExportResult> {
+    pub fn export_account_secrets(
+        &self,
+        input: ExportAccountSecretsInput,
+    ) -> AppResult<ExportResult> {
         self.require_unlocked()?;
         if input.confirm.trim() != "EXPORT ACCOUNT SECRETS" {
             return Err(AppError::InvalidInput(
@@ -2013,7 +2692,9 @@ impl Database {
             .filter(|id| *id > 0 && seen.insert(*id))
             .collect::<Vec<_>>();
         if account_ids.is_empty() {
-            return Err(AppError::InvalidInput("select at least one account".to_string()));
+            return Err(AppError::InvalidInput(
+                "select at least one account".to_string(),
+            ));
         }
         let hash = self
             .get_config("password_hash")?
@@ -2021,10 +2702,7 @@ impl Database {
         if !crypto::verify_password(&input.password, &hash)? {
             return Err(AppError::Unauthorized);
         }
-        let salt = self
-            .get_config("crypto_salt")?
-            .ok_or_else(|| AppError::Crypto("missing crypto salt".to_string()))?;
-        let key = crypto::derive_key(&input.password, &salt);
+        let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
         let placeholders = repeat_placeholders(account_ids.len());
         let sql = format!(
             "
@@ -2054,7 +2732,9 @@ impl Database {
         })?;
         let rows = collect_rows(rows)?;
         if rows.is_empty() {
-            return Err(AppError::InvalidInput("no matching accounts found".to_string()));
+            return Err(AppError::InvalidInput(
+                "no matching accounts found".to_string(),
+            ));
         }
         let exported_count = rows.len();
 
@@ -2116,7 +2796,10 @@ impl Database {
         })
     }
 
-    pub fn export_project_accounts(&self, input: ExportProjectAccountsInput) -> AppResult<ExportResult> {
+    pub fn export_project_accounts(
+        &self,
+        input: ExportProjectAccountsInput,
+    ) -> AppResult<ExportResult> {
         self.require_unlocked()?;
         let project = self.get_project(input.project_id)?;
         let accounts = self.list_project_accounts(input.project_id)?;
@@ -2174,7 +2857,11 @@ impl Database {
         self.run_forwarding_job_with_trigger(input, "manual")
     }
 
-    fn run_forwarding_job_with_trigger(&self, input: Option<ForwardingInput>, trigger_type: &str) -> AppResult<JobResult> {
+    fn run_forwarding_job_with_trigger(
+        &self,
+        input: Option<ForwardingInput>,
+        trigger_type: &str,
+    ) -> AppResult<JobResult> {
         let started_at = Utc::now();
         let result = self.run_forwarding_job_inner(input);
         let _ = self.record_job_result("forwarding", trigger_type, started_at, &result);
@@ -2215,7 +2902,10 @@ impl Database {
             let proxy_chain = self.proxy_chain_for_account(account_id)?;
             for message in messages {
                 for channel in &channels {
-                    if let Some(circuit) = channel_circuits.iter().find(|item| item.channel == *channel && item.status == "open") {
+                    if let Some(circuit) = channel_circuits
+                        .iter()
+                        .find(|item| item.channel == *channel && item.status == "open")
+                    {
                         circuit_skipped += 1;
                         let error = forwarding_circuit_error(circuit);
                         if !errors.iter().any(|item| item == &error) {
@@ -2251,7 +2941,13 @@ impl Database {
                                 "failed",
                                 Some(&error),
                             )?;
-                            self.enqueue_forwarding_retry(account_id, &account_email, &message, channel, &error)?;
+                            self.enqueue_forwarding_retry(
+                                account_id,
+                                &account_email,
+                                &message,
+                                channel,
+                                &error,
+                            )?;
                         }
                     }
                 }
@@ -2306,7 +3002,10 @@ impl Database {
         }
         let backup_dir = backup_dir(&self.db_path)?;
         std::fs::create_dir_all(&backup_dir).map_err(|err| AppError::Internal(err.to_string()))?;
-        let file_name = format!("outlook-email-{}.sqlite", Utc::now().format("%Y%m%d-%H%M%S"));
+        let file_name = format!(
+            "outlook-email-{}.sqlite",
+            Utc::now().format("%Y%m%d-%H%M%S")
+        );
         let path = unique_path(&backup_dir, &file_name);
         let path_text = path.to_string_lossy().to_string();
 
@@ -2331,7 +3030,9 @@ impl Database {
                 settings.webdav_url.trim(),
                 "failed",
                 &file_name,
-                path.metadata().map(|meta| meta.len() as i64).unwrap_or_default(),
+                path.metadata()
+                    .map(|meta| meta.len() as i64)
+                    .unwrap_or_default(),
                 Some(&err.to_string()),
             );
         }
@@ -2407,9 +3108,11 @@ impl Database {
         let file_name = validate_local_backup_file_name(&log.file_name)?;
         let backup_dir = backup_dir(&self.db_path)?;
         std::fs::create_dir_all(&backup_dir).map_err(|err| AppError::Internal(err.to_string()))?;
-        let backup_dir = std::fs::canonicalize(&backup_dir).map_err(|err| AppError::Internal(err.to_string()))?;
-        let source_path = std::fs::canonicalize(backup_dir.join(&file_name))
-            .map_err(|err| AppError::InvalidInput(format!("local backup snapshot not found: {err}")))?;
+        let backup_dir = std::fs::canonicalize(&backup_dir)
+            .map_err(|err| AppError::Internal(err.to_string()))?;
+        let source_path = std::fs::canonicalize(backup_dir.join(&file_name)).map_err(|err| {
+            AppError::InvalidInput(format!("local backup snapshot not found: {err}"))
+        })?;
         if !source_path.starts_with(&backup_dir) {
             return Err(AppError::InvalidInput(
                 "backup snapshot path is outside the local backup directory".to_string(),
@@ -2422,14 +3125,15 @@ impl Database {
         let safety_name = format!("pre-restore-{stamp}.sqlite");
         let safety_path = unique_path(&backup_dir, &safety_name);
         let safety_path_text = safety_path.to_string_lossy().to_string();
-        self.conn.execute("VACUUM INTO ?", [safety_path_text.as_str()])?;
+        self.conn
+            .execute("VACUUM INTO ?", [safety_path_text.as_str()])?;
 
-        let db_parent = self
-            .db_path
-            .parent()
-            .ok_or_else(|| AppError::Internal("database path has no parent directory".to_string()))?;
+        let db_parent = self.db_path.parent().ok_or_else(|| {
+            AppError::Internal("database path has no parent directory".to_string())
+        })?;
         let replacement_path = unique_path(db_parent, &format!(".restore-{stamp}.sqlite"));
-        std::fs::copy(&source_path, &replacement_path).map_err(|err| AppError::Internal(err.to_string()))?;
+        std::fs::copy(&source_path, &replacement_path)
+            .map_err(|err| AppError::Internal(err.to_string()))?;
 
         let crypto_key = self.crypto_key;
         let db_path = self.db_path.clone();
@@ -2439,7 +3143,8 @@ impl Database {
 
         let install_result = (|| -> AppResult<()> {
             remove_sqlite_file_set(&db_path)?;
-            std::fs::rename(&replacement_path, &db_path).map_err(|err| AppError::Internal(err.to_string()))?;
+            std::fs::rename(&replacement_path, &db_path)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
             Ok(())
         })();
 
@@ -2457,7 +3162,10 @@ impl Database {
             "backup.restored",
             "backup",
             Some(log.id),
-            &format!("{} restored; safety snapshot {}", log.file_name, safety_path_text),
+            &format!(
+                "{} restored; safety snapshot {}",
+                log.file_name, safety_path_text
+            ),
         )?;
 
         Ok(RestoreBackupResult {
@@ -2501,7 +3209,9 @@ impl Database {
             )
             .optional()?;
         let temp_message_count = self.scalar_count("SELECT COUNT(*) FROM temp_email_messages")?;
-        let retry_queue_count = self.scalar_count("SELECT COUNT(*) FROM retry_queue WHERE status IN ('pending', 'failed')")?;
+        let retry_queue_count = self.scalar_count(
+            "SELECT COUNT(*) FROM retry_queue WHERE status IN ('pending', 'failed')",
+        )?;
         let latest_account_refresh_at = self
             .conn
             .query_row(
@@ -2538,14 +3248,18 @@ impl Database {
     pub fn clear_local_data(&self, input: ClearLocalDataInput) -> AppResult<ClearLocalDataResult> {
         self.require_unlocked()?;
         if input.confirm.trim() != "CLEAR LOCAL DATA" {
-            return Err(AppError::InvalidInput("type CLEAR LOCAL DATA to confirm local data cleanup".to_string()));
+            return Err(AppError::InvalidInput(
+                "type CLEAR LOCAL DATA to confirm local data cleanup".to_string(),
+            ));
         }
         let clear_mail_cache = input.clear_mail_cache.unwrap_or(false);
         let clear_temp_mail_cache = input.clear_temp_mail_cache.unwrap_or(false);
         let clear_attachments = input.clear_attachments.unwrap_or(false);
         let clear_exports = input.clear_exports.unwrap_or(false);
         if !clear_mail_cache && !clear_temp_mail_cache && !clear_attachments && !clear_exports {
-            return Err(AppError::InvalidInput("select at least one local data category to clear".to_string()));
+            return Err(AppError::InvalidInput(
+                "select at least one local data category to clear".to_string(),
+            ));
         }
 
         let mut deleted_messages = 0_i64;
@@ -2555,10 +3269,12 @@ impl Database {
 
         if clear_mail_cache {
             deleted_messages = self.scalar_count("SELECT COUNT(*) FROM retained_mail_messages")?;
-            self.conn.execute("DELETE FROM retained_mail_messages", [])?;
+            self.conn
+                .execute("DELETE FROM retained_mail_messages", [])?;
         }
         if clear_temp_mail_cache {
-            deleted_temp_messages = self.scalar_count("SELECT COUNT(*) FROM temp_email_messages")?;
+            deleted_temp_messages =
+                self.scalar_count("SELECT COUNT(*) FROM temp_email_messages")?;
             self.conn.execute("DELETE FROM temp_email_messages", [])?;
         }
         if clear_attachments {
@@ -2625,7 +3341,10 @@ impl Database {
         })
     }
 
-    pub fn list_automation_runs_query(&self, query: AutomationRunQuery) -> AppResult<Vec<AutomationRun>> {
+    pub fn list_automation_runs_query(
+        &self,
+        query: AutomationRunQuery,
+    ) -> AppResult<Vec<AutomationRun>> {
         self.require_unlocked()?;
         let filter = AutomationRunFilter::from_query(query)?;
         let search_like = format!("%{}%", filter.search);
@@ -2667,7 +3386,8 @@ impl Database {
             && input.older_than_days.is_none()
         {
             return Err(AppError::InvalidInput(
-                "choose a filter or enable clear_all before clearing automation history".to_string(),
+                "choose a filter or enable clear_all before clearing automation history"
+                    .to_string(),
             ));
         }
         let search_like = format!("%{}%", filter.search);
@@ -2694,7 +3414,12 @@ impl Database {
                 older_interval
             ],
         )?;
-        self.audit("automation_runs.cleared", "automation", None, &format!("{} run(s)", deleted))?;
+        self.audit(
+            "automation_runs.cleared",
+            "automation",
+            None,
+            &format!("{} run(s)", deleted),
+        )?;
         Ok(JobResult {
             success: true,
             message: format!("Cleared {} automation run(s)", deleted),
@@ -2705,7 +3430,8 @@ impl Database {
 
     pub fn list_retry_queue(&self, query: RetryQueueQuery) -> AppResult<Vec<RetryQueueItem>> {
         self.require_unlocked()?;
-        let status = normalize_retry_value(query.status.as_deref(), &["pending", "failed"], "status")?;
+        let status =
+            normalize_retry_value(query.status.as_deref(), &["pending", "failed"], "status")?;
         let task_type = normalize_retry_value(
             query.task_type.as_deref(),
             &[
@@ -2764,7 +3490,8 @@ impl Database {
             match self.execute_retry_item(&item) {
                 Ok(()) => {
                     completed += 1;
-                    self.conn.execute("DELETE FROM retry_queue WHERE id = ?", [item.id])?;
+                    self.conn
+                        .execute("DELETE FROM retry_queue WHERE id = ?", [item.id])?;
                     self.audit(
                         "retry.completed",
                         "retry",
@@ -2828,11 +3555,23 @@ impl Database {
         let run_count = runs.len() as i64;
         let successful_run_count = runs.iter().filter(|run| run.status == "success").count() as i64;
         let failed_run_count = runs.iter().filter(|run| run.status == "failed").count() as i64;
-        let scheduled_run_count = runs.iter().filter(|run| run.trigger_type == "schedule").count() as i64;
-        let manual_run_count = runs.iter().filter(|run| run.trigger_type == "manual").count() as i64;
+        let scheduled_run_count = runs
+            .iter()
+            .filter(|run| run.trigger_type == "schedule")
+            .count() as i64;
+        let manual_run_count = runs
+            .iter()
+            .filter(|run| run.trigger_type == "manual")
+            .count() as i64;
         let average_duration_ms = average_i64(runs.iter().map(|run| run.duration_ms), run_count);
-        let retry_pending_count = retry_items.iter().filter(|item| item.status == "pending").count() as i64;
-        let retry_failed_count = retry_items.iter().filter(|item| item.status == "failed").count() as i64;
+        let retry_pending_count = retry_items
+            .iter()
+            .filter(|item| item.status == "pending")
+            .count() as i64;
+        let retry_failed_count = retry_items
+            .iter()
+            .filter(|item| item.status == "failed")
+            .count() as i64;
         let retry_due_count = retry_items
             .iter()
             .filter(|item| item.status == "pending" && item.due_now)
@@ -2880,7 +3619,12 @@ impl Database {
                 1,
             );
         }
-        error_buckets.sort_by(|left, right| right.count.cmp(&left.count).then_with(|| left.category.cmp(&right.category)));
+        error_buckets.sort_by(|left, right| {
+            right
+                .count
+                .cmp(&left.count)
+                .then_with(|| left.category.cmp(&right.category))
+        });
         error_buckets.truncate(8);
 
         Ok(AutomationObservability {
@@ -2902,7 +3646,11 @@ impl Database {
         })
     }
 
-    pub fn list_refresh_logs(&self, account_id: Option<i64>, limit: Option<i64>) -> AppResult<Vec<RefreshLog>> {
+    pub fn list_refresh_logs(
+        &self,
+        account_id: Option<i64>,
+        limit: Option<i64>,
+    ) -> AppResult<Vec<RefreshLog>> {
         self.require_unlocked()?;
         let limit = limit.unwrap_or(100).clamp(1, 500);
         let mut stmt = self.conn.prepare(
@@ -2932,46 +3680,94 @@ impl Database {
         });
         match &retry_result {
             Ok(result) if result.refreshed + result.failed > 0 => {
-                let _ = self.record_job_result("retry", "schedule", retry_started_at, &retry_result);
+                let _ =
+                    self.record_job_result("retry", "schedule", retry_started_at, &retry_result);
                 self.audit("scheduler.retry", "scheduler", None, &result.message)?;
             }
             Ok(_) => {}
-            Err(err) => self.audit("scheduler.retry_failed", "scheduler", None, &err.to_string())?,
+            Err(err) => self.audit(
+                "scheduler.retry_failed",
+                "scheduler",
+                None,
+                &err.to_string(),
+            )?,
         }
 
         if settings.scheduler_refresh_enabled
-            && self.scheduler_due("scheduler_last_refresh_at", settings.scheduler_refresh_interval_minutes, now)?
+            && self.scheduler_due(
+                "scheduler_last_refresh_at",
+                settings.scheduler_refresh_interval_minutes,
+                now,
+            )?
         {
-            match self.refresh_accounts_with_trigger(RefreshInput {
-                account_id: None,
-                folder: Some("all".to_string()),
-                top: Some(settings.scheduler_refresh_top.clamp(1, 50) as usize),
-            }, "schedule") {
-                Ok(result) => self.audit("scheduler.refresh", "scheduler", None, &result.message)?,
-                Err(err) => self.audit("scheduler.refresh_failed", "scheduler", None, &err.to_string())?,
+            match self.refresh_accounts_with_trigger(
+                RefreshInput {
+                    account_id: None,
+                    folder: Some("all".to_string()),
+                    top: Some(
+                        settings
+                            .scheduler_refresh_top
+                            .clamp(1, providers::MAIL_REFRESH_MAX_TOP as i64)
+                            as usize,
+                    ),
+                },
+                "schedule",
+            ) {
+                Ok(result) => {
+                    self.audit("scheduler.refresh", "scheduler", None, &result.message)?
+                }
+                Err(err) => self.audit(
+                    "scheduler.refresh_failed",
+                    "scheduler",
+                    None,
+                    &err.to_string(),
+                )?,
             }
             self.set_config("scheduler_last_refresh_at", &now.to_rfc3339())?;
         }
 
         if settings.forwarding_enabled
-            && self.scheduler_due("scheduler_last_forwarding_at", settings.forwarding_interval_minutes, now)?
+            && self.scheduler_due(
+                "scheduler_last_forwarding_at",
+                settings.forwarding_interval_minutes,
+                now,
+            )?
         {
-            match self.run_forwarding_job_with_trigger(Some(ForwardingInput {
-                account_id: None,
-                limit: Some(50),
-            }), "schedule") {
-                Ok(result) => self.audit("scheduler.forwarding", "scheduler", None, &result.message)?,
-                Err(err) => self.audit("scheduler.forwarding_failed", "scheduler", None, &err.to_string())?,
+            match self.run_forwarding_job_with_trigger(
+                Some(ForwardingInput {
+                    account_id: None,
+                    limit: Some(50),
+                }),
+                "schedule",
+            ) {
+                Ok(result) => {
+                    self.audit("scheduler.forwarding", "scheduler", None, &result.message)?
+                }
+                Err(err) => self.audit(
+                    "scheduler.forwarding_failed",
+                    "scheduler",
+                    None,
+                    &err.to_string(),
+                )?,
             }
             self.set_config("scheduler_last_forwarding_at", &now.to_rfc3339())?;
         }
 
         if settings.backup_enabled
-            && self.scheduler_due("scheduler_last_backup_at", settings.backup_interval_minutes, now)?
+            && self.scheduler_due(
+                "scheduler_last_backup_at",
+                settings.backup_interval_minutes,
+                now,
+            )?
         {
             match self.run_backup_job_with_trigger("schedule") {
                 Ok(result) => self.audit("scheduler.backup", "scheduler", None, &result.message)?,
-                Err(err) => self.audit("scheduler.backup_failed", "scheduler", None, &err.to_string())?,
+                Err(err) => self.audit(
+                    "scheduler.backup_failed",
+                    "scheduler",
+                    None,
+                    &err.to_string(),
+                )?,
             }
             self.set_config("scheduler_last_backup_at", &now.to_rfc3339())?;
         }
@@ -3029,7 +3825,10 @@ impl Database {
         collect_rows(rows)
     }
 
-    pub fn import_temp_emails(&self, input: ImportTempEmailsInput) -> AppResult<ImportAccountsResult> {
+    pub fn import_temp_emails(
+        &self,
+        input: ImportTempEmailsInput,
+    ) -> AppResult<ImportAccountsResult> {
         self.require_unlocked()?;
         let provider = normalize_temp_provider(&input.provider)?;
         if provider == "cloudflare" {
@@ -3037,7 +3836,12 @@ impl Database {
         }
         let mut imported = 0_usize;
         let mut skipped = 0_usize;
-        for line in input.raw.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')) {
+        for line in input
+            .raw
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        {
             let parts = split_legacy_line(line);
             let Some(raw_email) = parts.first() else {
                 skipped += 1;
@@ -3051,7 +3855,11 @@ impl Database {
                 id: 0,
                 email,
                 provider: provider.clone(),
-                channel_id: if provider == "cloudflare" { input.channel_id } else { None },
+                channel_id: if provider == "cloudflare" {
+                    input.channel_id
+                } else {
+                    None
+                },
                 provider_token: String::new(),
                 provider_account_id: String::new(),
                 provider_password: String::new(),
@@ -3067,8 +3875,17 @@ impl Database {
                 skipped += 1;
             }
         }
-        self.audit("temp_email.imported", "temp_email", None, &format!("{imported} imported"))?;
-        Ok(ImportAccountsResult { imported, skipped })
+        self.audit(
+            "temp_email.imported",
+            "temp_email",
+            None,
+            &format!("{imported} imported"),
+        )?;
+        Ok(ImportAccountsResult {
+            imported,
+            skipped,
+            accounts: Vec::new(),
+        })
     }
 
     pub fn generate_temp_email(&self, input: GenerateTempEmailInput) -> AppResult<TempEmail> {
@@ -3084,18 +3901,27 @@ impl Database {
         let settings = self.get_settings()?;
         let credential = providers::generate_temp_email(&settings, &input, channel.as_ref())?;
         self.upsert_temp_email_credential(&credential)?;
-        self.audit("temp_email.generated", "temp_email", None, &credential.email)?;
+        self.audit(
+            "temp_email.generated",
+            "temp_email",
+            None,
+            &credential.email,
+        )?;
         self.list_temp_emails()?
             .into_iter()
             .find(|item| item.email == credential.email)
             .ok_or_else(|| AppError::Internal("generated temp email not found".to_string()))
     }
 
-    pub fn generate_cloudflare_batch(&self, input: GenerateCloudflareBatchInput) -> AppResult<ImportAccountsResult> {
+    pub fn generate_cloudflare_batch(
+        &self,
+        input: GenerateCloudflareBatchInput,
+    ) -> AppResult<ImportAccountsResult> {
         self.require_unlocked()?;
         let count = input.count.clamp(1, 200);
         let tags = normalize_temp_tags(input.tags.unwrap_or_default());
-        let tags_json = serde_json::to_string(&tags).map_err(|err| AppError::Internal(err.to_string()))?;
+        let tags_json =
+            serde_json::to_string(&tags).map_err(|err| AppError::Internal(err.to_string()))?;
         self.cloudflare_channel_credential(input.channel_id)?;
         let prefix = input
             .prefix
@@ -3128,8 +3954,17 @@ impl Database {
                 Err(_) => skipped += 1,
             }
         }
-        self.audit("temp_email.cloudflare_batch_generated", "temp_email", None, &format!("{imported} generated"))?;
-        Ok(ImportAccountsResult { imported, skipped })
+        self.audit(
+            "temp_email.cloudflare_batch_generated",
+            "temp_email",
+            None,
+            &format!("{imported} generated"),
+        )?;
+        Ok(ImportAccountsResult {
+            imported,
+            skipped,
+            accounts: Vec::new(),
+        })
     }
 
     pub fn refresh_temp_email_messages(&self, email: String) -> AppResult<JobResult> {
@@ -3150,7 +3985,8 @@ impl Database {
         self.require_unlocked()?;
         let email = normalize_email(&input.email)?;
         let tags = normalize_temp_tags(input.tags);
-        let tags_json = serde_json::to_string(&tags).map_err(|err| AppError::Internal(err.to_string()))?;
+        let tags_json =
+            serde_json::to_string(&tags).map_err(|err| AppError::Internal(err.to_string()))?;
         let changed = self.conn.execute(
             "
             UPDATE temp_emails
@@ -3178,9 +4014,18 @@ impl Database {
             None
         };
         let _ = providers::delete_temp_remote(&credential, channel.as_ref());
-        self.conn.execute("DELETE FROM temp_email_messages WHERE email_address = ?", [credential.email.as_str()])?;
-        self.conn.execute("DELETE FROM temp_emails WHERE id = ?", [credential.id])?;
-        self.audit("temp_email.deleted", "temp_email", Some(credential.id), &credential.email)?;
+        self.conn.execute(
+            "DELETE FROM temp_email_messages WHERE email_address = ?",
+            [credential.email.as_str()],
+        )?;
+        self.conn
+            .execute("DELETE FROM temp_emails WHERE id = ?", [credential.id])?;
+        self.audit(
+            "temp_email.deleted",
+            "temp_email",
+            Some(credential.id),
+            &credential.email,
+        )?;
         Ok(())
     }
 
@@ -3216,29 +4061,46 @@ impl Database {
         collect_rows(rows)
     }
 
-    pub fn upsert_cloudflare_channel(&self, input: UpsertCloudflareChannelInput) -> AppResult<CloudflareChannel> {
+    pub fn upsert_cloudflare_channel(
+        &self,
+        input: UpsertCloudflareChannelInput,
+    ) -> AppResult<CloudflareChannel> {
         self.require_unlocked()?;
         let name = input.name.trim();
         let worker_domain = input.worker_domain.trim().trim_end_matches('/').to_string();
         if name.is_empty() || worker_domain.is_empty() {
-            return Err(AppError::InvalidInput("Cloudflare channel name and worker domain are required".to_string()));
+            return Err(AppError::InvalidInput(
+                "Cloudflare channel name and worker domain are required".to_string(),
+            ));
         }
         let domains = serialize_domain_list(&input.email_domains);
-        let admin_password_enc = match input.admin_password.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        let admin_password_enc = match input
+            .admin_password
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             Some(secret) => self.encrypt_optional_secret(secret)?,
             None => String::new(),
         };
 
         if input.is_default {
-            self.conn.execute("UPDATE cloudflare_channels SET is_default = 0", [])?;
+            self.conn
+                .execute("UPDATE cloudflare_channels SET is_default = 0", [])?;
         }
 
         let channel_id = if let Some(id) = input.id {
             let existing_password: String = self
                 .conn
-                .query_row("SELECT admin_password_enc FROM cloudflare_channels WHERE id = ?", [id], |row| row.get(0))
+                .query_row(
+                    "SELECT admin_password_enc FROM cloudflare_channels WHERE id = ?",
+                    [id],
+                    |row| row.get(0),
+                )
                 .optional()?
-                .ok_or_else(|| AppError::InvalidInput("Cloudflare channel not found".to_string()))?;
+                .ok_or_else(|| {
+                    AppError::InvalidInput("Cloudflare channel not found".to_string())
+                })?;
             let next_password = if admin_password_enc.is_empty() {
                 existing_password
             } else {
@@ -3286,7 +4148,12 @@ impl Database {
                 [channel_id],
             )?;
         }
-        self.audit("cloudflare_channel.saved", "cloudflare_channel", Some(channel_id), name)?;
+        self.audit(
+            "cloudflare_channel.saved",
+            "cloudflare_channel",
+            Some(channel_id),
+            name,
+        )?;
         self.list_cloudflare_channels()?
             .into_iter()
             .find(|channel| channel.id == channel_id)
@@ -3305,8 +4172,14 @@ impl Database {
                 "Cloudflare channel is still referenced by temp emails".to_string(),
             ));
         }
-        self.conn.execute("DELETE FROM cloudflare_channels WHERE id = ?", [channel_id])?;
-        self.audit("cloudflare_channel.deleted", "cloudflare_channel", Some(channel_id), "")?;
+        self.conn
+            .execute("DELETE FROM cloudflare_channels WHERE id = ?", [channel_id])?;
+        self.audit(
+            "cloudflare_channel.deleted",
+            "cloudflare_channel",
+            Some(channel_id),
+            "",
+        )?;
         Ok(())
     }
 
@@ -3633,6 +4506,13 @@ impl Database {
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS workspace_key_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                purpose TEXT NOT NULL DEFAULT '',
+                key_fingerprint TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE INDEX IF NOT EXISTS idx_accounts_group ON accounts(group_id);
             CREATE INDEX IF NOT EXISTS idx_messages_account_folder ON retained_mail_messages(account_id, folder);
             CREATE INDEX IF NOT EXISTS idx_messages_received ON retained_mail_messages(received_at_sort DESC);
@@ -3646,6 +4526,7 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_retry_queue_status_due ON retry_queue(status, next_attempt_at, created_at);
             CREATE INDEX IF NOT EXISTS idx_retry_queue_key ON retry_queue(task_type, account_id, message_id, channel, action, status);
             CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_workspace_key_records_created ON workspace_key_records(created_at DESC);
             ",
         )?;
         self.ensure_default_data()?;
@@ -3661,8 +4542,14 @@ impl Database {
     fn ensure_account_columns(&self) -> AppResult<()> {
         let columns = table_columns(&self.conn, "accounts")?;
         for (name, ddl) in [
-            ("imap_host", "ALTER TABLE accounts ADD COLUMN imap_host TEXT DEFAULT ''"),
-            ("imap_port", "ALTER TABLE accounts ADD COLUMN imap_port INTEGER NOT NULL DEFAULT 993"),
+            (
+                "imap_host",
+                "ALTER TABLE accounts ADD COLUMN imap_host TEXT DEFAULT ''",
+            ),
+            (
+                "imap_port",
+                "ALTER TABLE accounts ADD COLUMN imap_port INTEGER NOT NULL DEFAULT 993",
+            ),
             (
                 "imap_password_enc",
                 "ALTER TABLE accounts ADD COLUMN imap_password_enc TEXT NOT NULL DEFAULT ''",
@@ -3710,7 +4597,10 @@ impl Database {
     fn ensure_group_columns(&self) -> AppResult<()> {
         let columns = table_columns(&self.conn, "groups")?;
         for (name, ddl) in [
-            ("proxy_url", "ALTER TABLE groups ADD COLUMN proxy_url TEXT DEFAULT ''"),
+            (
+                "proxy_url",
+                "ALTER TABLE groups ADD COLUMN proxy_url TEXT DEFAULT ''",
+            ),
             (
                 "fallback_proxy_url_1",
                 "ALTER TABLE groups ADD COLUMN fallback_proxy_url_1 TEXT DEFAULT ''",
@@ -3777,7 +4667,10 @@ impl Database {
 
     fn ensure_message_columns(&self) -> AppResult<()> {
         let columns = table_columns(&self.conn, "retained_mail_messages")?;
-        for (name, ddl) in [("raw_mime", "ALTER TABLE retained_mail_messages ADD COLUMN raw_mime BLOB")] {
+        for (name, ddl) in [(
+            "raw_mime",
+            "ALTER TABLE retained_mail_messages ADD COLUMN raw_mime BLOB",
+        )] {
             if !columns.iter().any(|column| column == name) {
                 self.conn.execute(ddl, [])?;
             }
@@ -3808,14 +4701,14 @@ impl Database {
         self.conn.execute(
             "
             INSERT OR IGNORE INTO groups (id, name, description, color, sort_order, is_system)
-            VALUES (1, 'Default', 'Default mailbox group', '#3b82f6', 0, 1)
+            VALUES (1, 'Default', 'Default mailbox group', '#d97757', 0, 1)
             ",
             [],
         )?;
         for (name, color) in [
-            ("Core", "#2563eb"),
-            ("Warmup", "#16a34a"),
-            ("Issue", "#dc2626"),
+            ("Core", "#d97757"),
+            ("Warmup", "#8a7a70"),
+            ("Issue", "#c05f42"),
         ] {
             self.conn.execute(
                 "INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)",
@@ -3834,7 +4727,9 @@ impl Database {
 
     fn get_config(&self, key: &str) -> AppResult<Option<String>> {
         self.conn
-            .query_row("SELECT value FROM app_config WHERE key = ?", [key], |row| row.get(0))
+            .query_row("SELECT value FROM app_config WHERE key = ?", [key], |row| {
+                row.get(0)
+            })
             .optional()
             .map_err(AppError::from)
     }
@@ -3871,6 +4766,196 @@ impl Database {
             crypto::encrypt_text(value, crypto_key)?
         };
         self.set_config(key, &encrypted)
+    }
+
+    fn migrate_legacy_password_key(&mut self, old_key: &[u8; 32]) -> AppResult<()> {
+        let workspace_key = crypto::random_workspace_key();
+        let runtime_key = crypto::derive_workspace_key(&workspace_key)?;
+        let accounts = self.reencrypt_account_secrets(old_key, &runtime_key)?;
+        let temp_emails = self.reencrypt_temp_email_secrets(old_key, &runtime_key)?;
+        let cloudflare_channels = self.reencrypt_cloudflare_channel_secrets(old_key, &runtime_key)?;
+        let config_secrets = self.reencrypt_config_secrets(old_key, &runtime_key)?;
+
+        let hash = crypto::hash_password(DEFAULT_LOGIN_PASSWORD)?;
+        let salt = crypto::random_salt();
+        let password_key = crypto::derive_key(DEFAULT_LOGIN_PASSWORD, &salt);
+        let workspace_key_enc = crypto::encrypt_text(&workspace_key, &password_key)?;
+
+        let tx = self.conn.transaction()?;
+        for (id, password, client_id, refresh_token, imap_password) in accounts {
+            tx.execute(
+                "
+                UPDATE accounts
+                SET password_enc = ?, client_id_enc = ?, refresh_token_enc = ?, imap_password_enc = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                ",
+                params![password, client_id, refresh_token, imap_password, id],
+            )?;
+        }
+        for (id, provider_token, provider_password) in temp_emails {
+            tx.execute(
+                "
+                UPDATE temp_emails
+                SET provider_token_enc = ?, provider_password_enc = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                ",
+                params![provider_token, provider_password, id],
+            )?;
+        }
+        for (id, admin_password) in cloudflare_channels {
+            tx.execute(
+                "UPDATE cloudflare_channels SET admin_password_enc = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                params![admin_password, id],
+            )?;
+        }
+        for (key, value) in config_secrets {
+            tx.execute(
+                "
+                INSERT INTO app_config (key, value, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+                ",
+                params![key, value],
+            )?;
+        }
+        tx.execute(
+            "
+            INSERT INTO app_config (key, value, updated_at)
+            VALUES ('password_hash', ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+            ",
+            [hash.as_str()],
+        )?;
+        tx.execute(
+            "
+            INSERT INTO app_config (key, value, updated_at)
+            VALUES ('crypto_salt', ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+            ",
+            [salt.as_str()],
+        )?;
+        tx.execute(
+            "
+            INSERT INTO app_config (key, value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+            ",
+            params![WORKSPACE_KEY_CONFIG, workspace_key_enc],
+        )?;
+        tx.commit()?;
+
+        self.crypto_key = Some(runtime_key);
+        self.audit(
+            "app.workspace_key_migrated",
+            "settings",
+            None,
+            "legacy local password replaced by workspace key",
+        )?;
+        Ok(())
+    }
+
+    fn reencrypt_config_secrets(
+        &self,
+        old_key: &[u8; 32],
+        new_key: &[u8; 32],
+    ) -> AppResult<Vec<(String, String)>> {
+        let mut values = Vec::new();
+        for key in CONFIG_SECRET_KEYS {
+            if let Some(value) = self.get_config(key)? {
+                values.push((
+                    (*key).to_string(),
+                    reencrypt_secret_value(&value, old_key, new_key)?,
+                ));
+            }
+        }
+        Ok(values)
+    }
+
+    fn reencrypt_account_secrets(
+        &self,
+        old_key: &[u8; 32],
+        new_key: &[u8; 32],
+    ) -> AppResult<Vec<(i64, String, String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT id, password_enc, client_id_enc, refresh_token_enc, imap_password_enc
+            FROM accounts
+            ",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+        let mut values = Vec::new();
+        for row in rows {
+            let (id, password, client_id, refresh_token, imap_password) = row?;
+            values.push((
+                id,
+                reencrypt_secret_value(&password, old_key, new_key)?,
+                reencrypt_secret_value(&client_id, old_key, new_key)?,
+                reencrypt_secret_value(&refresh_token, old_key, new_key)?,
+                reencrypt_secret_value(&imap_password, old_key, new_key)?,
+            ));
+        }
+        Ok(values)
+    }
+
+    fn reencrypt_temp_email_secrets(
+        &self,
+        old_key: &[u8; 32],
+        new_key: &[u8; 32],
+    ) -> AppResult<Vec<(i64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT id, provider_token_enc, provider_password_enc
+            FROM temp_emails
+            ",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut values = Vec::new();
+        for row in rows {
+            let (id, provider_token, provider_password) = row?;
+            values.push((
+                id,
+                reencrypt_secret_value(&provider_token, old_key, new_key)?,
+                reencrypt_secret_value(&provider_password, old_key, new_key)?,
+            ));
+        }
+        Ok(values)
+    }
+
+    fn reencrypt_cloudflare_channel_secrets(
+        &self,
+        old_key: &[u8; 32],
+        new_key: &[u8; 32],
+    ) -> AppResult<Vec<(i64, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, admin_password_enc FROM cloudflare_channels")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut values = Vec::new();
+        for row in rows {
+            let (id, admin_password) = row?;
+            values.push((
+                id,
+                reencrypt_secret_value(&admin_password, old_key, new_key)?,
+            ));
+        }
+        Ok(values)
     }
 
     fn get_config_bool(&self, key: &str, default: bool) -> AppResult<bool> {
@@ -3938,7 +5023,9 @@ impl Database {
         let mut descendants = Vec::new();
         let mut stack = vec![group_id];
         while let Some(parent_id) = stack.pop() {
-            let mut stmt = self.conn.prepare("SELECT id FROM groups WHERE parent_id = ?")?;
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id FROM groups WHERE parent_id = ?")?;
             let rows = stmt.query_map([parent_id], |row| row.get::<_, i64>(0))?;
             for row in rows {
                 let id = row?;
@@ -3953,9 +5040,11 @@ impl Database {
         let descendants = self.group_descendant_ids(group_id)?;
         let mut max_level = current_level;
         for id in descendants {
-            let level = self
-                .conn
-                .query_row("SELECT level FROM groups WHERE id = ?", [id], |row| row.get::<_, i64>(0))?;
+            let level =
+                self.conn
+                    .query_row("SELECT level FROM groups WHERE id = ?", [id], |row| {
+                        row.get::<_, i64>(0)
+                    })?;
             max_level = max_level.max(level);
         }
         Ok(max_level - current_level)
@@ -4103,8 +5192,10 @@ impl Database {
         aliases: Vec<String>,
     ) -> AppResult<()> {
         let aliases = self.normalize_account_aliases(account_id, primary_email, aliases)?;
-        self.conn
-            .execute("DELETE FROM account_aliases WHERE account_id = ?", [account_id])?;
+        self.conn.execute(
+            "DELETE FROM account_aliases WHERE account_id = ?",
+            [account_id],
+        )?;
         for alias in aliases {
             self.conn.execute(
                 "INSERT INTO account_aliases (account_id, alias_email) VALUES (?, ?)",
@@ -4115,8 +5206,10 @@ impl Database {
     }
 
     fn replace_account_tags(&self, account_id: i64, tag_ids: Vec<i64>) -> AppResult<()> {
-        self.conn
-            .execute("DELETE FROM account_tags WHERE account_id = ?", [account_id])?;
+        self.conn.execute(
+            "DELETE FROM account_tags WHERE account_id = ?",
+            [account_id],
+        )?;
         for tag_id in tag_ids {
             self.conn.execute(
                 "INSERT OR IGNORE INTO account_tags (account_id, tag_id) VALUES (?, ?)",
@@ -4127,24 +5220,26 @@ impl Database {
     }
 
     fn project_group_ids(&self, project_id: i64) -> AppResult<Vec<i64>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT group_id FROM project_group_scopes WHERE project_id = ? ORDER BY group_id")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT group_id FROM project_group_scopes WHERE project_id = ? ORDER BY group_id",
+        )?;
         let rows = stmt.query_map([project_id], |row| row.get::<_, i64>(0))?;
         collect_rows(rows)
     }
 
     fn project_tag_ids(&self, project_id: i64) -> AppResult<Vec<i64>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT tag_id FROM project_tag_scopes WHERE project_id = ? ORDER BY tag_id")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT tag_id FROM project_tag_scopes WHERE project_id = ? ORDER BY tag_id",
+        )?;
         let rows = stmt.query_map([project_id], |row| row.get::<_, i64>(0))?;
         collect_rows(rows)
     }
 
     fn replace_project_group_scope(&self, project_id: i64, group_ids: Vec<i64>) -> AppResult<()> {
-        self.conn
-            .execute("DELETE FROM project_group_scopes WHERE project_id = ?", [project_id])?;
+        self.conn.execute(
+            "DELETE FROM project_group_scopes WHERE project_id = ?",
+            [project_id],
+        )?;
         for group_id in group_ids {
             self.conn.execute(
                 "INSERT OR IGNORE INTO project_group_scopes (project_id, group_id) VALUES (?, ?)",
@@ -4155,8 +5250,10 @@ impl Database {
     }
 
     fn replace_project_tag_scope(&self, project_id: i64, tag_ids: Vec<i64>) -> AppResult<()> {
-        self.conn
-            .execute("DELETE FROM project_tag_scopes WHERE project_id = ?", [project_id])?;
+        self.conn.execute(
+            "DELETE FROM project_tag_scopes WHERE project_id = ?",
+            [project_id],
+        )?;
         for tag_id in tag_ids {
             self.conn.execute(
                 "INSERT OR IGNORE INTO project_tag_scopes (project_id, tag_id) VALUES (?, ?)",
@@ -4176,7 +5273,9 @@ impl Database {
             GROUP BY status
             ",
         )?;
-        let rows = stmt.query_map([project_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?;
+        let rows = stmt.query_map([project_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
         for row in rows {
             let (status, count) = row?;
             stats.total += count;
@@ -4232,14 +5331,20 @@ impl Database {
         let mut stmt = self.conn.prepare(&sql)?;
         let mut accounts = if scope_mode == "groups" {
             let params = rusqlite::params_from_iter(group_ids.iter());
-            let rows = stmt.query_map(params, |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
+            let rows = stmt.query_map(params, |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
             collect_rows(rows)
         } else if scope_mode == "tags" {
             let params = rusqlite::params_from_iter(tag_ids.iter());
-            let rows = stmt.query_map(params, |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
+            let rows = stmt.query_map(params, |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
             collect_rows(rows)
         } else {
-            let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
             collect_rows(rows)
         }?;
         if use_alias_email {
@@ -4252,7 +5357,10 @@ impl Database {
         Ok(accounts)
     }
 
-    fn project_account_ids(&self, project_id: i64) -> AppResult<Vec<(i64, Option<i64>, String, String)>> {
+    fn project_account_ids(
+        &self,
+        project_id: i64,
+    ) -> AppResult<Vec<(i64, Option<i64>, String, String)>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, account_id, normalized_email, status FROM project_accounts WHERE project_id = ?",
         )?;
@@ -4317,7 +5425,13 @@ impl Database {
         if let Some(account_id) = account_id_override {
             after.account_id = Some(account_id);
         }
-        self.insert_project_event(&before, action, Some(&before.status), Some(next_status), detail)?;
+        self.insert_project_event(
+            &before,
+            action,
+            Some(&before.status),
+            Some(next_status),
+            detail,
+        )?;
         Ok(after)
     }
 
@@ -4357,8 +5471,7 @@ impl Database {
                    a.refresh_token_enc, COALESCE(a.imap_host, ''), a.imap_port, a.imap_password_enc,
                    COALESCE(a.proxy_url, ''), COALESCE(a.fallback_proxy_url_1, ''),
                    COALESCE(a.fallback_proxy_url_2, ''), COALESCE(g.proxy_url, ''),
-                   COALESCE(g.fallback_proxy_url_1, ''), COALESCE(g.fallback_proxy_url_2, ''),
-                   COALESCE(a.provider_sync_state, '')
+                   COALESCE(g.fallback_proxy_url_1, ''), COALESCE(g.fallback_proxy_url_2, '')
             FROM accounts a
             LEFT JOIN groups g ON g.id = a.group_id
             WHERE a.status = 'active' AND (?1 IS NULL OR a.id = ?1)
@@ -4383,7 +5496,6 @@ impl Database {
                 row.get::<_, String>(13)?,
                 row.get::<_, String>(14)?,
                 row.get::<_, String>(15)?,
-                row.get::<_, String>(16)?,
             ))
         })?;
 
@@ -4406,11 +5518,12 @@ impl Database {
                 group_proxy,
                 group_proxy_1,
                 group_proxy_2,
-                provider_sync_state,
             ) = row?;
-            let mut proxy_chain = proxy_chain_from_values(&[&account_proxy, &account_proxy_1, &account_proxy_2])?;
+            let mut proxy_chain =
+                proxy_chain_from_values(&[&account_proxy, &account_proxy_1, &account_proxy_2])?;
             if proxy_chain.is_empty() {
-                proxy_chain = proxy_chain_from_values(&[&group_proxy, &group_proxy_1, &group_proxy_2])?;
+                proxy_chain =
+                    proxy_chain_from_values(&[&group_proxy, &group_proxy_1, &group_proxy_2])?;
             }
             credentials.push(AccountCredentials {
                 id,
@@ -4423,7 +5536,6 @@ impl Database {
                 imap_host,
                 imap_port,
                 imap_password: crypto::decrypt_text(&imap_password, key)?,
-                provider_sync_state,
                 proxy_chain,
             });
         }
@@ -4477,7 +5589,11 @@ impl Database {
         Ok(())
     }
 
-    fn upsert_provider_messages(&self, account_id: i64, messages: &[ProviderMessage]) -> AppResult<()> {
+    fn upsert_provider_messages(
+        &self,
+        account_id: i64,
+        messages: &[ProviderMessage],
+    ) -> AppResult<()> {
         for message in messages {
             self.conn.execute(
                 "
@@ -4528,39 +5644,12 @@ impl Database {
         Ok(())
     }
 
-    fn delete_cached_provider_messages(&self, account_id: i64, provider_message_ids: &[String]) -> AppResult<()> {
-        for message_id in provider_message_ids {
-            self.conn.execute(
-                "DELETE FROM retained_mail_messages WHERE account_id = ? AND provider_message_id = ?",
-                params![account_id, message_id],
-            )?;
-        }
-        Ok(())
-    }
-
-    fn save_gmail_history_id(&self, account_id: i64, history_id: &str) -> AppResult<()> {
-        let current = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(provider_sync_state, '') FROM accounts WHERE id = ?",
-                [account_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
-            .unwrap_or_default();
-        let mut state = serde_json::from_str::<serde_json::Value>(&current).unwrap_or_else(|_| serde_json::json!({}));
-        if !state.is_object() {
-            state = serde_json::json!({});
-        }
-        state["gmail_history_id"] = serde_json::json!(history_id.trim());
-        self.conn.execute(
-            "UPDATE accounts SET provider_sync_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            params![state.to_string(), account_id],
-        )?;
-        Ok(())
-    }
-
-    fn cached_imap_raw_mime(&self, account_id: i64, message_id: &str, folder: Option<&str>) -> AppResult<Vec<u8>> {
+    fn cached_imap_raw_mime(
+        &self,
+        account_id: i64,
+        message_id: &str,
+        folder: Option<&str>,
+    ) -> AppResult<Vec<u8>> {
         let raw_mime: Option<Vec<u8>> = match folder {
             Some(folder) => self
                 .conn
@@ -4593,7 +5682,8 @@ impl Database {
                 .optional()?
                 .flatten(),
         };
-        let raw_mime = raw_mime.ok_or_else(|| AppError::InvalidInput("cached IMAP message not found".to_string()))?;
+        let raw_mime = raw_mime
+            .ok_or_else(|| AppError::InvalidInput("cached IMAP message not found".to_string()))?;
         if raw_mime.is_empty() {
             return Err(AppError::InvalidInput(
                 "cached IMAP raw MIME is missing; refresh the account before downloading this attachment".to_string(),
@@ -4602,7 +5692,12 @@ impl Database {
         Ok(raw_mime)
     }
 
-    fn cached_message_attachments(&self, account_id: i64, message_id: &str, folder: Option<&str>) -> AppResult<Vec<AttachmentInfo>> {
+    fn cached_message_attachments(
+        &self,
+        account_id: i64,
+        message_id: &str,
+        folder: Option<&str>,
+    ) -> AppResult<Vec<AttachmentInfo>> {
         let attachments_json: Option<String> = match folder {
             Some(folder) => self
                 .conn
@@ -4635,11 +5730,17 @@ impl Database {
                 .optional()?
                 .flatten(),
         };
-        let attachments_json = attachments_json.ok_or_else(|| AppError::InvalidInput("cached message not found".to_string()))?;
+        let attachments_json = attachments_json
+            .ok_or_else(|| AppError::InvalidInput("cached message not found".to_string()))?;
         Ok(parse_attachments_json(&attachments_json))
     }
 
-    fn mark_account_refresh_success(&self, account_id: i64, email: &str, count: usize) -> AppResult<()> {
+    fn mark_account_refresh_success(
+        &self,
+        account_id: i64,
+        email: &str,
+        count: usize,
+    ) -> AppResult<()> {
         self.conn.execute(
             "
             UPDATE accounts
@@ -4661,7 +5762,12 @@ impl Database {
         Ok(())
     }
 
-    fn mark_account_refresh_failed(&self, account_id: i64, email: &str, error: &str) -> AppResult<()> {
+    fn mark_account_refresh_failed(
+        &self,
+        account_id: i64,
+        email: &str,
+        error: &str,
+    ) -> AppResult<()> {
         self.conn.execute(
             "
             UPDATE accounts
@@ -4694,11 +5800,17 @@ impl Database {
             ORDER BY sort_order ASC, email ASC
             ",
         )?;
-        let rows = stmt.query_map([account_id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
+        let rows = stmt.query_map([account_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
         collect_rows(rows)
     }
 
-    fn forwarding_candidates(&self, account_id: i64, limit: usize) -> AppResult<Vec<ForwardContent>> {
+    fn forwarding_candidates(
+        &self,
+        account_id: i64,
+        limit: usize,
+    ) -> AppResult<Vec<ForwardContent>> {
         let mut stmt = self.conn.prepare(
             "
             SELECT a.email, m.provider_message_id, m.subject, m.sender, m.received_at,
@@ -4724,7 +5836,12 @@ impl Database {
         collect_rows(rows)
     }
 
-    fn forward_success_exists(&self, account_id: i64, message_id: &str, channel: &str) -> AppResult<bool> {
+    fn forward_success_exists(
+        &self,
+        account_id: i64,
+        message_id: &str,
+        channel: &str,
+    ) -> AppResult<bool> {
         let exists = self
             .conn
             .query_row(
@@ -4778,14 +5895,21 @@ impl Database {
         Ok(())
     }
 
-    fn forwarding_channel_circuits(&self, settings: &Settings) -> AppResult<Vec<ForwardingChannelCircuit>> {
+    fn forwarding_channel_circuits(
+        &self,
+        settings: &Settings,
+    ) -> AppResult<Vec<ForwardingChannelCircuit>> {
         ["smtp", "telegram", "wecom"]
             .iter()
             .map(|channel| self.forwarding_channel_circuit(channel, settings))
             .collect()
     }
 
-    fn forwarding_channel_circuit(&self, channel: &str, settings: &Settings) -> AppResult<ForwardingChannelCircuit> {
+    fn forwarding_channel_circuit(
+        &self,
+        channel: &str,
+        settings: &Settings,
+    ) -> AppResult<ForwardingChannelCircuit> {
         let configured = automation::configured_forward_channels(settings)
             .iter()
             .any(|configured_channel| *configured_channel == channel);
@@ -4940,9 +6064,9 @@ impl Database {
         match item.task_type.as_str() {
             "mail_mark" => {
                 let payload = parse_retry_payload::<MailRetryPayload>(&item.payload_json)?;
-                let is_read = payload
-                    .is_read
-                    .ok_or_else(|| AppError::InvalidInput("mail mark retry is missing read state".to_string()))?;
+                let is_read = payload.is_read.ok_or_else(|| {
+                    AppError::InvalidInput("mail mark retry is missing read state".to_string())
+                })?;
                 self.retry_remote_mark_message(&payload, is_read)
             }
             "mail_delete" => {
@@ -4979,7 +6103,15 @@ impl Database {
         let next_attempt_at = if exhausted {
             None
         } else {
-            Some((Utc::now() + ChronoDuration::minutes(retry_delay_minutes_for_error(&item.task_type, attempts, error))).to_rfc3339())
+            Some(
+                (Utc::now()
+                    + ChronoDuration::minutes(retry_delay_minutes_for_error(
+                        &item.task_type,
+                        attempts,
+                        error,
+                    )))
+                .to_rfc3339(),
+            )
         };
         self.conn.execute(
             "
@@ -4997,7 +6129,12 @@ impl Database {
         Ok(())
     }
 
-    fn enqueue_mail_retry(&self, target: &MailMessageRef, is_read: bool, error: &str) -> AppResult<()> {
+    fn enqueue_mail_retry(
+        &self,
+        target: &MailMessageRef,
+        is_read: bool,
+        error: &str,
+    ) -> AppResult<()> {
         let action = if is_read { "mark_read" } else { "mark_unread" };
         self.enqueue_retry_item(
             "mail_mark",
@@ -5088,7 +6225,11 @@ impl Database {
             "backup_job",
             None,
             "",
-            if target.trim().is_empty() { "webdav" } else { target.trim() },
+            if target.trim().is_empty() {
+                "webdav"
+            } else {
+                target.trim()
+            },
             "backup",
             "backup",
             serde_json::json!({
@@ -5098,7 +6239,11 @@ impl Database {
         )
     }
 
-    fn enqueue_temp_refresh_retry(&self, credential: &TempEmailCredential, error: &str) -> AppResult<()> {
+    fn enqueue_temp_refresh_retry(
+        &self,
+        credential: &TempEmailCredential,
+        error: &str,
+    ) -> AppResult<()> {
         self.enqueue_retry_item(
             "temp_refresh",
             None,
@@ -5128,7 +6273,11 @@ impl Database {
         let payload_json = serde_json::to_string(&payload)
             .map_err(|err| AppError::Internal(format!("serialize retry payload failed: {err}")))?;
         let max_attempts = retry_max_attempts_for_error(task_type, error);
-        let next_attempt_at = Some((Utc::now() + ChronoDuration::minutes(retry_delay_minutes_for_error(task_type, 1, error))).to_rfc3339());
+        let next_attempt_at = Some(
+            (Utc::now()
+                + ChronoDuration::minutes(retry_delay_minutes_for_error(task_type, 1, error)))
+            .to_rfc3339(),
+        );
         let account_key = account_id.unwrap_or(-1);
         let existing = self
             .conn
@@ -5162,7 +6311,14 @@ impl Database {
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 ",
-                params![account_email, payload_json, error, max_attempts, next_attempt_at, id],
+                params![
+                    account_email,
+                    payload_json,
+                    error,
+                    max_attempts,
+                    next_attempt_at,
+                    id
+                ],
             )?;
         } else {
             self.conn.execute(
@@ -5282,7 +6438,12 @@ impl Database {
         Ok(())
     }
 
-    fn scheduler_due(&self, key: &str, interval_minutes: i64, now: DateTime<Utc>) -> AppResult<bool> {
+    fn scheduler_due(
+        &self,
+        key: &str,
+        interval_minutes: i64,
+        now: DateTime<Utc>,
+    ) -> AppResult<bool> {
         if interval_minutes <= 0 {
             return Ok(false);
         }
@@ -5429,16 +6590,25 @@ impl Database {
         if let Some(channel_id) = channel_id {
             let exists = self
                 .conn
-                .query_row("SELECT 1 FROM cloudflare_channels WHERE id = ?", [channel_id], |row| row.get::<_, i64>(0))
+                .query_row(
+                    "SELECT 1 FROM cloudflare_channels WHERE id = ?",
+                    [channel_id],
+                    |row| row.get::<_, i64>(0),
+                )
                 .optional()?;
             if exists.is_none() {
-                return Err(AppError::InvalidInput("Cloudflare channel not found".to_string()));
+                return Err(AppError::InvalidInput(
+                    "Cloudflare channel not found".to_string(),
+                ));
             }
         }
         Ok(())
     }
 
-    fn cloudflare_channel_credential(&self, channel_id: Option<i64>) -> AppResult<CloudflareChannelCredential> {
+    fn cloudflare_channel_credential(
+        &self,
+        channel_id: Option<i64>,
+    ) -> AppResult<CloudflareChannelCredential> {
         let sql = if channel_id.is_some() {
             "
             SELECT id, name, worker_domain, COALESCE(email_domains, ''),
@@ -5461,7 +6631,9 @@ impl Database {
                 .query_row(sql, [channel_id], cloudflare_channel_row)
                 .optional()?
         } else {
-            self.conn.query_row(sql, [], cloudflare_channel_row).optional()?
+            self.conn
+                .query_row(sql, [], cloudflare_channel_row)
+                .optional()?
         }
         .ok_or_else(|| AppError::InvalidInput("Cloudflare channel not found".to_string()))?;
         Ok(CloudflareChannelCredential {
@@ -5544,7 +6716,12 @@ impl Database {
         collect_rows(rows)
     }
 
-    fn write_export_file(&self, category: &str, file_name: &str, bytes: &[u8]) -> AppResult<(String, i64)> {
+    fn write_export_file(
+        &self,
+        category: &str,
+        file_name: &str,
+        bytes: &[u8],
+    ) -> AppResult<(String, i64)> {
         let dir = exports_dir(&self.db_path)?.join(safe_file_name(category));
         std::fs::create_dir_all(&dir).map_err(|err| AppError::Internal(err.to_string()))?;
         let path = unique_path(&dir, &safe_file_name(file_name));
@@ -5563,48 +6740,48 @@ impl Database {
         }
         require_provider_capability(&account, "mark_read", "mark read/unread")?;
         match mail_provider_adapter(&account)? {
-            MailProviderAdapter::Graph => providers::mark_graph_message_read(&account, &target.provider_message_id, is_read),
-            MailProviderAdapter::Imap => providers::mark_imap_message_read(&account, &target.folder, &target.provider_message_id, is_read),
-            MailProviderAdapter::Gmail => providers::mark_gmail_message_read(&account, &target.provider_message_id, is_read),
+            MailProviderAdapter::Graph => {
+                providers::mark_graph_message_read(&account, &target.provider_message_id, is_read)
+            }
+            MailProviderAdapter::Imap => providers::mark_imap_message_read(
+                &account,
+                &target.folder,
+                &target.provider_message_id,
+                is_read,
+            ),
         }
     }
 
-    fn refresh_account_credential(&self, account: &AccountCredentials, folder: &str, top: usize) -> AppResult<usize> {
+    fn refresh_account_credential(
+        &self,
+        account: &AccountCredentials,
+        folder: &str,
+        top: usize,
+    ) -> AppResult<usize> {
         require_provider_capability(account, "read_mail", "mail refresh")?;
         match mail_provider_adapter(account)? {
-            MailProviderAdapter::Graph => providers::fetch_graph_messages(account, folder, top).and_then(|(next_refresh_token, messages)| {
-                if !next_refresh_token.is_empty() && next_refresh_token != account.refresh_token {
-                    self.save_refresh_token(account.id, &next_refresh_token)?;
-                }
-                self.upsert_provider_messages(account.id, &messages)?;
-                Ok(messages.len())
-            }),
-            MailProviderAdapter::Imap => providers::fetch_imap_messages(account, folder, top).and_then(|messages| {
-                self.upsert_provider_messages(account.id, &messages)?;
-                Ok(messages.len())
-            }),
-            MailProviderAdapter::Gmail => providers::fetch_gmail_messages(
-                account,
-                folder,
-                top,
-                gmail_history_id_from_state(&account.provider_sync_state).as_deref(),
-            )
-            .and_then(|result| {
-                if !result.refresh_token.is_empty() && result.refresh_token != account.refresh_token {
-                    self.save_refresh_token(account.id, &result.refresh_token)?;
-                }
-                self.delete_cached_provider_messages(account.id, &result.replace_message_ids)?;
-                self.delete_cached_provider_messages(account.id, &result.deleted_message_ids)?;
-                self.upsert_provider_messages(account.id, &result.messages)?;
-                if let Some(history_id) = result.history_id.as_deref().filter(|value| !value.trim().is_empty()) {
-                    self.save_gmail_history_id(account.id, history_id)?;
-                }
-                Ok(result.messages.len())
-            }),
+            MailProviderAdapter::Graph => providers::fetch_graph_messages(account, folder, top)
+                .and_then(|(next_refresh_token, messages)| {
+                    if !next_refresh_token.is_empty() && next_refresh_token != account.refresh_token
+                    {
+                        self.save_refresh_token(account.id, &next_refresh_token)?;
+                    }
+                    self.upsert_provider_messages(account.id, &messages)?;
+                    Ok(messages.len())
+                }),
+            MailProviderAdapter::Imap => providers::fetch_imap_messages(account, folder, top)
+                .and_then(|messages| {
+                    self.upsert_provider_messages(account.id, &messages)?;
+                    Ok(messages.len())
+                }),
         }
     }
 
-    fn retry_remote_mark_message(&self, payload: &MailRetryPayload, is_read: bool) -> AppResult<()> {
+    fn retry_remote_mark_message(
+        &self,
+        payload: &MailRetryPayload,
+        is_read: bool,
+    ) -> AppResult<()> {
         let target = MailMessageRef {
             id: 0,
             account_id: payload.account_id,
@@ -5626,9 +6803,14 @@ impl Database {
         }
         require_provider_delete_capability(&account)?;
         match mail_provider_adapter(&account)? {
-            MailProviderAdapter::Graph => providers::delete_graph_message(&account, &target.provider_message_id),
-            MailProviderAdapter::Imap => providers::delete_imap_message(&account, &target.folder, &target.provider_message_id),
-            MailProviderAdapter::Gmail => providers::delete_gmail_message(&account, &target.provider_message_id),
+            MailProviderAdapter::Graph => {
+                providers::delete_graph_message(&account, &target.provider_message_id)
+            }
+            MailProviderAdapter::Imap => providers::delete_imap_message(
+                &account,
+                &target.folder,
+                &target.provider_message_id,
+            ),
         }
     }
 
@@ -5675,7 +6857,7 @@ impl Database {
             .next()
             .ok_or_else(|| AppError::InvalidInput("account not found".to_string()))?;
         let folder = normalize_mail_folder(&payload.folder);
-        let top = payload.top.clamp(1, 50);
+        let top = payload.top.clamp(1, providers::MAIL_REFRESH_MAX_TOP);
         match self.refresh_account_credential(&account, &folder, top) {
             Ok(count) => {
                 self.mark_account_refresh_success(account.id, &account.email, count)?;
@@ -5716,7 +6898,10 @@ impl Database {
         }
     }
 
-    fn refresh_temp_email_credential(&self, credential: &TempEmailCredential) -> AppResult<JobResult> {
+    fn refresh_temp_email_credential(
+        &self,
+        credential: &TempEmailCredential,
+    ) -> AppResult<JobResult> {
         let settings = self.get_settings()?;
         let channel = if credential.provider == "cloudflare" {
             Some(self.cloudflare_channel_credential(credential.channel_id)?)
@@ -5737,7 +6922,12 @@ impl Database {
             [credential.id],
         )?;
         self.clear_temp_refresh_retry(&credential.email)?;
-        self.audit("temp_email.refreshed", "temp_email", Some(credential.id), &credential.email)?;
+        self.audit(
+            "temp_email.refreshed",
+            "temp_email",
+            Some(credential.id),
+            &credential.email,
+        )?;
         Ok(JobResult {
             success: true,
             message: format!("Refreshed {} temp message(s)", messages.len()),
@@ -5746,7 +6936,11 @@ impl Database {
         })
     }
 
-    fn mark_temp_email_refresh_failed(&self, credential: &TempEmailCredential, error: &str) -> AppResult<()> {
+    fn mark_temp_email_refresh_failed(
+        &self,
+        credential: &TempEmailCredential,
+        error: &str,
+    ) -> AppResult<()> {
         self.conn.execute(
             "
             UPDATE temp_emails
@@ -5804,7 +6998,11 @@ impl Database {
     }
 
     fn clear_backup_retry(&self, target: &str) -> AppResult<()> {
-        let message_id = if target.trim().is_empty() { "webdav" } else { target.trim() };
+        let message_id = if target.trim().is_empty() {
+            "webdav"
+        } else {
+            target.trim()
+        };
         self.conn.execute(
             "
             DELETE FROM retry_queue
@@ -5830,7 +7028,11 @@ impl Database {
         Ok(())
     }
 
-    fn forwarding_retry_content(&self, account_id: i64, message_id: &str) -> AppResult<ForwardContent> {
+    fn forwarding_retry_content(
+        &self,
+        account_id: i64,
+        message_id: &str,
+    ) -> AppResult<ForwardContent> {
         self.conn
             .query_row(
                 "
@@ -5858,13 +7060,24 @@ impl Database {
             .ok_or_else(|| AppError::InvalidInput("forwarding retry message not found".to_string()))
     }
 
-    fn audit(&self, action: &str, resource_type: &str, resource_id: Option<i64>, detail: &str) -> AppResult<()> {
+    fn audit(
+        &self,
+        action: &str,
+        resource_type: &str,
+        resource_id: Option<i64>,
+        detail: &str,
+    ) -> AppResult<()> {
         self.conn.execute(
             "
             INSERT INTO audit_logs (action, resource_type, resource_id, detail)
             VALUES (?, ?, ?, ?)
             ",
-            params![action, resource_type, resource_id.map(|id| id.to_string()), detail],
+            params![
+                action,
+                resource_type,
+                resource_id.map(|id| id.to_string()),
+                detail
+            ],
         )?;
         Ok(())
     }
@@ -5891,10 +7104,29 @@ fn resolve_db_path() -> PathBuf {
 fn validate_password(password: &str) -> AppResult<()> {
     if password.len() < 8 {
         return Err(AppError::InvalidInput(
-            "local app password must be at least 8 characters".to_string(),
+            "login password must be at least 8 characters".to_string(),
         ));
     }
     Ok(())
+}
+
+fn validate_login_username(username: &str) -> AppResult<()> {
+    if username.trim().eq_ignore_ascii_case(DEFAULT_LOGIN_USERNAME) {
+        return Ok(());
+    }
+    Err(AppError::Unauthorized)
+}
+
+fn reencrypt_secret_value(
+    value: &str,
+    old_key: &[u8; 32],
+    new_key: &[u8; 32],
+) -> AppResult<String> {
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    let plaintext = crypto::decrypt_text(value, old_key)?;
+    crypto::encrypt_text(&plaintext, new_key)
 }
 
 fn normalize_message_ids(ids: &[i64]) -> AppResult<Vec<i64>> {
@@ -5906,7 +7138,9 @@ fn normalize_message_ids(ids: &[i64]) -> AppResult<Vec<i64>> {
         }
     }
     if normalized.is_empty() {
-        return Err(AppError::InvalidInput("select at least one message".to_string()));
+        return Err(AppError::InvalidInput(
+            "select at least one message".to_string(),
+        ));
     }
     Ok(normalized)
 }
@@ -5928,16 +7162,13 @@ fn normalize_oauth_provider(value: Option<&str>) -> AppResult<Option<String>> {
     match providers::normalize_mail_provider_id(&provider) {
         Some("graph") => Ok(Some("graph".to_string())),
         Some("imap") => Ok(Some("imap".to_string())),
-        Some("gmail") => Ok(Some("gmail".to_string())),
-        _ => Err(AppError::InvalidInput(format!("unsupported OAuth provider: {provider}"))),
+        Some("gmail") => Err(AppError::InvalidInput(
+            "Gmail OAuth is disabled; use IMAP app password".to_string(),
+        )),
+        _ => Err(AppError::InvalidInput(format!(
+            "unsupported OAuth provider: {provider}"
+        ))),
     }
-}
-
-fn gmail_history_id_from_state(state: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(state)
-        .ok()
-        .and_then(|value| value.get("gmail_history_id").and_then(serde_json::Value::as_str).map(str::to_string))
-        .filter(|value| !value.trim().is_empty())
 }
 
 fn oauth_account_type(provider: &str) -> String {
@@ -5951,12 +7182,18 @@ fn exchange_oauth_code_for_provider(
     client_id: &str,
     redirect_uri: &str,
     code_or_url: &str,
-    code_verifier: Option<&str>,
+    _code_verifier: Option<&str>,
 ) -> AppResult<providers::OAuthTokenResponse> {
     match provider {
-        "gmail" => providers::exchange_google_code(client_id, redirect_uri, code_or_url, code_verifier),
-        "graph" | "imap" => providers::exchange_microsoft_code(client_id, redirect_uri, code_or_url, Some(provider)),
-        value => Err(AppError::InvalidInput(format!("unsupported OAuth provider: {value}"))),
+        "gmail" => Err(AppError::InvalidInput(
+            "Gmail OAuth is disabled; use IMAP app password".to_string(),
+        )),
+        "graph" | "imap" => {
+            providers::exchange_microsoft_code(client_id, redirect_uri, code_or_url, Some(provider))
+        }
+        value => Err(AppError::InvalidInput(format!(
+            "unsupported OAuth provider: {value}"
+        ))),
     }
 }
 
@@ -5965,11 +7202,17 @@ fn normalize_read_state(value: Option<&str>) -> AppResult<String> {
         "" | "all" => Ok("all".to_string()),
         "read" => Ok("read".to_string()),
         "unread" => Ok("unread".to_string()),
-        _ => Err(AppError::InvalidInput("read_state must be all, read, or unread".to_string())),
+        _ => Err(AppError::InvalidInput(
+            "read_state must be all, read, or unread".to_string(),
+        )),
     }
 }
 
-fn normalize_automation_value(value: Option<&str>, allowed: &[&str], field: &str) -> AppResult<String> {
+fn normalize_automation_value(
+    value: Option<&str>,
+    allowed: &[&str],
+    field: &str,
+) -> AppResult<String> {
     let normalized = value.unwrap_or("all").trim().to_ascii_lowercase();
     if normalized.is_empty() || normalized == "all" {
         return Ok(String::new());
@@ -6007,12 +7250,12 @@ fn normalize_theme_setting(value: &str) -> String {
 fn normalize_accent_color(value: &str) -> String {
     let trimmed = value.trim();
     let Some(hex) = trimmed.strip_prefix('#') else {
-        return "#2563eb".to_string();
+        return "#d97757".to_string();
     };
     if hex.len() == 6 && hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
         format!("#{hex}")
     } else {
-        "#2563eb".to_string()
+        "#d97757".to_string()
     }
 }
 
@@ -6022,10 +7265,19 @@ fn automation_job_summary(runs: &[AutomationRun], job_type: &str) -> AutomationJ
         .filter(|run| run.job_type == job_type)
         .collect::<Vec<_>>();
     let total = matching.len() as i64;
-    let success = matching.iter().filter(|run| run.status == "success").count() as i64;
+    let success = matching
+        .iter()
+        .filter(|run| run.status == "success")
+        .count() as i64;
     let failed = matching.iter().filter(|run| run.status == "failed").count() as i64;
-    let scheduled = matching.iter().filter(|run| run.trigger_type == "schedule").count() as i64;
-    let manual = matching.iter().filter(|run| run.trigger_type == "manual").count() as i64;
+    let scheduled = matching
+        .iter()
+        .filter(|run| run.trigger_type == "schedule")
+        .count() as i64;
+    let manual = matching
+        .iter()
+        .filter(|run| run.trigger_type == "manual")
+        .count() as i64;
     let average_duration_ms = average_i64(matching.iter().map(|run| run.duration_ms), total);
     let latest = matching.first();
     AutomationJobSummary {
@@ -6046,8 +7298,14 @@ fn retry_task_summary(items: &[RetryQueueItem], task_type: &str) -> RetryTaskSum
         .iter()
         .filter(|item| item.task_type == task_type)
         .collect::<Vec<_>>();
-    let pending = matching.iter().filter(|item| item.status == "pending").count() as i64;
-    let failed = matching.iter().filter(|item| item.status == "failed").count() as i64;
+    let pending = matching
+        .iter()
+        .filter(|item| item.status == "pending")
+        .count() as i64;
+    let failed = matching
+        .iter()
+        .filter(|item| item.status == "failed")
+        .count() as i64;
     let due = matching
         .iter()
         .filter(|item| item.status == "pending" && item.due_now)
@@ -6097,9 +7355,17 @@ fn push_error_bucket(
     if category == "none" || message.trim().is_empty() || count <= 0 {
         return;
     }
-    if let Some(bucket) = buckets.iter_mut().find(|bucket| bucket.category == category) {
+    if let Some(bucket) = buckets
+        .iter_mut()
+        .find(|bucket| bucket.category == category)
+    {
         bucket.count += count;
-        if at.is_some_and(|value| bucket.latest_at.as_deref().is_none_or(|current| timestamp_is_newer(value, current))) {
+        if at.is_some_and(|value| {
+            bucket
+                .latest_at
+                .as_deref()
+                .is_none_or(|current| timestamp_is_newer(value, current))
+        }) {
             bucket.latest_message = message.to_string();
             bucket.latest_at = at.map(str::to_string);
         }
@@ -6131,7 +7397,10 @@ fn latest_failure_detail(
 }
 
 fn compare_timestamps(left: &str, right: &str) -> std::cmp::Ordering {
-    match (parse_scheduler_timestamp(left), parse_scheduler_timestamp(right)) {
+    match (
+        parse_scheduler_timestamp(left),
+        parse_scheduler_timestamp(right),
+    ) {
         (Some(left), Some(right)) => left.cmp(&right),
         _ => left.cmp(right),
     }
@@ -6334,7 +7603,12 @@ fn retry_job_message(completed: usize, failed: usize, errors: &[String]) -> Stri
     if failed == 0 {
         return format!("Retried {} item(s)", completed);
     }
-    let preview = errors.iter().take(3).cloned().collect::<Vec<_>>().join("; ");
+    let preview = errors
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("; ");
     if errors.len() > 3 {
         format!("Retried {completed} item(s), {failed} failed: {preview}; ...")
     } else {
@@ -6346,7 +7620,12 @@ fn mail_action_message(action: &str, changed: usize, failed: usize, errors: &[St
     if failed == 0 {
         return format!("{action} {changed} message(s)");
     }
-    let preview = errors.iter().take(3).cloned().collect::<Vec<_>>().join("; ");
+    let preview = errors
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("; ");
     if errors.len() > 3 {
         format!("{action} {changed} local message(s), {failed} remote sync failed: {preview}; ...")
     } else {
@@ -6419,7 +7698,11 @@ fn render_mail_export_html(title: &str, rows: &[ExportMailMessageRow]) -> String
     html.push_str("</div>");
     for row in rows {
         html.push_str("<article><h2>");
-        html.push_str(&html_escape(if row.subject.is_empty() { "(no subject)" } else { &row.subject }));
+        html.push_str(&html_escape(if row.subject.is_empty() {
+            "(no subject)"
+        } else {
+            &row.subject
+        }));
         html.push_str("</h2><div class=\"meta\">");
         for (label, value) in [
             ("Local ID", row.id.to_string()),
@@ -6430,7 +7713,10 @@ fn render_mail_export_html(title: &str, rows: &[ExportMailMessageRow]) -> String
             ("To", row.recipients.clone()),
             ("Cc", row.cc.clone()),
             ("Received", row.received_at.clone()),
-            ("Status", if row.is_read { "Read" } else { "Unread" }.to_string()),
+            (
+                "Status",
+                if row.is_read { "Read" } else { "Unread" }.to_string(),
+            ),
             ("Body type", row.body_type.clone()),
         ] {
             html.push_str("<span>");
@@ -6440,7 +7726,9 @@ fn render_mail_export_html(title: &str, rows: &[ExportMailMessageRow]) -> String
             html.push_str("</strong>");
         }
         html.push_str("</div><pre>");
-        html.push_str(&html_escape(row.body.as_deref().unwrap_or(&row.body_preview)));
+        html.push_str(&html_escape(
+            row.body.as_deref().unwrap_or(&row.body_preview),
+        ));
         html.push_str("</pre>");
         if !row.attachments.is_empty() {
             html.push_str("<h3>Attachments</h3><ul>");
@@ -6469,7 +7757,9 @@ fn normalize_email(value: &str) -> AppResult<String> {
 }
 
 fn normalize_proxy_option(value: Option<&str>) -> AppResult<Option<String>> {
-    value.map(|item| normalize_proxy_value(Some(item))).transpose()
+    value
+        .map(|item| normalize_proxy_value(Some(item)))
+        .transpose()
 }
 
 fn normalize_proxy_value(value: Option<&str>) -> AppResult<String> {
@@ -6507,7 +7797,9 @@ fn normalize_temp_provider(value: &str) -> AppResult<String> {
         "gptmail" => Ok("gptmail".to_string()),
         "duckmail" => Ok("duckmail".to_string()),
         "cloudflare" => Ok("cloudflare".to_string()),
-        _ => Err(AppError::InvalidInput("temp email provider must be gptmail, duckmail, or cloudflare".to_string())),
+        _ => Err(AppError::InvalidInput(
+            "temp email provider must be gptmail, duckmail, or cloudflare".to_string(),
+        )),
     }
 }
 
@@ -6543,16 +7835,27 @@ fn random_temp_suffix(index: usize) -> String {
 
 fn split_legacy_line(value: &str) -> Vec<String> {
     if value.contains("----") {
-        value.split("----").map(|part| part.trim().to_string()).collect()
+        value
+            .split("----")
+            .map(|part| part.trim().to_string())
+            .collect()
     } else {
-        value.split(',').map(|part| part.trim().to_string()).collect()
+        value
+            .split(',')
+            .map(|part| part.trim().to_string())
+            .collect()
     }
 }
 
 fn parse_domain_list(value: &str) -> Vec<String> {
     value
         .split([',', '\n', ';'])
-        .map(|item| item.trim().trim_start_matches('@').trim_end_matches('.').to_ascii_lowercase())
+        .map(|item| {
+            item.trim()
+                .trim_start_matches('@')
+                .trim_end_matches('.')
+                .to_ascii_lowercase()
+        })
         .filter(|item| !item.is_empty())
         .fold(Vec::new(), |mut domains, item| {
             if !domains.contains(&item) {
@@ -6582,7 +7885,9 @@ fn temp_message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TempEmailM
     })
 }
 
-fn cloudflare_channel_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, String, String, String, String, bool, bool)> {
+fn cloudflare_channel_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(i64, String, String, String, String, bool, bool)> {
     Ok((
         row.get(0)?,
         row.get(1)?,
@@ -6633,11 +7938,21 @@ fn parse_mail_search(value: &str) -> ParsedMailSearch {
             continue;
         }
         match key.as_str() {
-            "subject" | "sub" => search.terms.push(MailSearchTerm::Subject(raw_value.to_string())),
-            "from" | "sender" => search.terms.push(MailSearchTerm::Sender(raw_value.to_string())),
-            "to" | "recipient" | "recipients" | "cc" => search.terms.push(MailSearchTerm::Recipient(raw_value.to_string())),
-            "body" | "content" | "text" => search.terms.push(MailSearchTerm::Body(raw_value.to_string())),
-            "id" | "message" | "message_id" => search.terms.push(MailSearchTerm::ProviderId(raw_value.to_string())),
+            "subject" | "sub" => search
+                .terms
+                .push(MailSearchTerm::Subject(raw_value.to_string())),
+            "from" | "sender" => search
+                .terms
+                .push(MailSearchTerm::Sender(raw_value.to_string())),
+            "to" | "recipient" | "recipients" | "cc" => search
+                .terms
+                .push(MailSearchTerm::Recipient(raw_value.to_string())),
+            "body" | "content" | "text" => search
+                .terms
+                .push(MailSearchTerm::Body(raw_value.to_string())),
+            "id" | "message" | "message_id" => search
+                .terms
+                .push(MailSearchTerm::ProviderId(raw_value.to_string())),
             "folder" | "mailbox" => search.folder = Some(normalize_mail_folder(raw_value)),
             "is" | "status" => match raw_value.to_ascii_lowercase().as_str() {
                 "read" => search.read_state = Some("read".to_string()),
@@ -6645,8 +7960,12 @@ fn parse_mail_search(value: &str) -> ParsedMailSearch {
                 _ => search.terms.push(MailSearchTerm::Any(token.to_string())),
             },
             "has" => match raw_value.to_ascii_lowercase().as_str() {
-                "attachment" | "attachments" | "file" | "files" => search.has_attachments = Some(true),
-                "noattachment" | "noattachments" | "nofile" | "nofiles" => search.has_attachments = Some(false),
+                "attachment" | "attachments" | "file" | "files" => {
+                    search.has_attachments = Some(true)
+                }
+                "noattachment" | "noattachments" | "nofile" | "nofiles" => {
+                    search.has_attachments = Some(false)
+                }
                 _ => search.terms.push(MailSearchTerm::Any(token.to_string())),
             },
             _ => search.terms.push(MailSearchTerm::Any(token.to_string())),
@@ -6677,7 +7996,11 @@ fn tokenize_search(value: &str) -> Vec<String> {
     tokens
 }
 
-fn append_mail_search_terms(sql: &mut String, values: &mut Vec<SqlValue>, terms: &[MailSearchTerm]) {
+fn append_mail_search_terms(
+    sql: &mut String,
+    values: &mut Vec<SqlValue>,
+    terms: &[MailSearchTerm],
+) {
     for term in terms {
         match term {
             MailSearchTerm::Any(value) => {
@@ -6723,19 +8046,41 @@ fn repeat_placeholders(count: usize) -> String {
 }
 
 fn mail_sort_clause(sort_by: Option<&str>, sort_order: Option<&str>) -> AppResult<String> {
-    let order = match sort_order.unwrap_or("desc").trim().to_ascii_lowercase().as_str() {
+    let order = match sort_order
+        .unwrap_or("desc")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "" | "desc" => "DESC",
         "asc" => "ASC",
-        value => return Err(AppError::InvalidInput(format!("unsupported mail sort_order: {value}"))),
+        value => {
+            return Err(AppError::InvalidInput(format!(
+                "unsupported mail sort_order: {value}"
+            )))
+        }
     };
-    let clause = match sort_by.unwrap_or("date").trim().to_ascii_lowercase().as_str() {
-        "" | "date" | "received" | "received_at" => format!("m.received_at_sort {order}, m.id {order}"),
+    let clause = match sort_by
+        .unwrap_or("date")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "" | "date" | "received" | "received_at" => {
+            format!("m.received_at_sort {order}, m.id {order}")
+        }
         "subject" => format!("LOWER(m.subject) {order}, m.received_at_sort DESC, m.id DESC"),
         "sender" | "from" => format!("LOWER(m.sender) {order}, m.received_at_sort DESC, m.id DESC"),
         "read" | "status" => format!("m.is_read {order}, m.received_at_sort DESC, m.id DESC"),
-        "attachments" | "files" => format!("m.has_attachments {order}, m.received_at_sort DESC, m.id DESC"),
+        "attachments" | "files" => {
+            format!("m.has_attachments {order}, m.received_at_sort DESC, m.id DESC")
+        }
         "folder" => format!("m.folder {order}, m.received_at_sort DESC, m.id DESC"),
-        value => return Err(AppError::InvalidInput(format!("unsupported mail sort_by: {value}"))),
+        value => {
+            return Err(AppError::InvalidInput(format!(
+                "unsupported mail sort_by: {value}"
+            )))
+        }
     };
     Ok(clause)
 }
@@ -6750,7 +8095,6 @@ fn preview_secret(value: &str) -> String {
 enum MailProviderAdapter {
     Graph,
     Imap,
-    Gmail,
 }
 
 fn mail_provider_adapter(account: &AccountCredentials) -> AppResult<MailProviderAdapter> {
@@ -6758,20 +8102,26 @@ fn mail_provider_adapter(account: &AccountCredentials) -> AppResult<MailProvider
     let account_type = account.account_type.to_ascii_lowercase();
     match provider.as_str() {
         "graph" | "outlook" => return Ok(MailProviderAdapter::Graph),
-        "gmail" => return Ok(MailProviderAdapter::Gmail),
+        "gmail" => return Ok(MailProviderAdapter::Imap),
         "imap" | "imap_custom" | "qq" | "netease_163" => return Ok(MailProviderAdapter::Imap),
         _ => {}
     }
     match account_type.as_str() {
         "outlook" | "graph" => Ok(MailProviderAdapter::Graph),
-        "gmail" => Ok(MailProviderAdapter::Gmail),
+        "gmail" => Ok(MailProviderAdapter::Imap),
         "imap" => Ok(MailProviderAdapter::Imap),
-        _ if !account.client_id.is_empty() && !account.refresh_token.is_empty() => Ok(MailProviderAdapter::Graph),
+        _ if !account.client_id.is_empty() && !account.refresh_token.is_empty() => {
+            Ok(MailProviderAdapter::Graph)
+        }
         _ => Ok(MailProviderAdapter::Imap),
     }
 }
 
-fn require_provider_capability(account: &AccountCredentials, capability: &str, action: &str) -> AppResult<()> {
+fn require_provider_capability(
+    account: &AccountCredentials,
+    capability: &str,
+    action: &str,
+) -> AppResult<()> {
     if account_provider_supports_capability(account, capability) {
         return Ok(());
     }
@@ -6782,7 +8132,9 @@ fn require_provider_capability(account: &AccountCredentials, capability: &str, a
 }
 
 fn require_provider_delete_capability(account: &AccountCredentials) -> AppResult<()> {
-    if account_provider_supports_capability(account, "trash") || account_provider_supports_capability(account, "remote_delete") {
+    if account_provider_supports_capability(account, "trash")
+        || account_provider_supports_capability(account, "remote_delete")
+    {
         return Ok(());
     }
     Err(AppError::InvalidInput(format!(
@@ -6842,7 +8194,8 @@ fn dir_stats(dir: &Path) -> AppResult<(usize, i64)> {
 fn collect_dir_stats(dir: &Path, files: &mut usize, bytes: &mut i64) -> AppResult<()> {
     for entry in std::fs::read_dir(dir).map_err(|err| AppError::Internal(err.to_string()))? {
         let entry = entry.map_err(|err| AppError::Internal(err.to_string()))?;
-        let metadata = std::fs::symlink_metadata(entry.path()).map_err(|err| AppError::Internal(err.to_string()))?;
+        let metadata = std::fs::symlink_metadata(entry.path())
+            .map_err(|err| AppError::Internal(err.to_string()))?;
         if metadata.file_type().is_dir() {
             collect_dir_stats(&entry.path(), files, bytes)?;
         } else {
@@ -6863,9 +8216,12 @@ fn remove_dir_contents(dir: &Path) -> AppResult<(usize, i64)> {
         let entry = entry.map_err(|err| AppError::Internal(err.to_string()))?;
         let path = entry.path();
         if !path.starts_with(&root) {
-            return Err(AppError::Internal("refusing to remove path outside local data directory".to_string()));
+            return Err(AppError::Internal(
+                "refusing to remove path outside local data directory".to_string(),
+            ));
         }
-        let metadata = std::fs::symlink_metadata(&path).map_err(|err| AppError::Internal(err.to_string()))?;
+        let metadata =
+            std::fs::symlink_metadata(&path).map_err(|err| AppError::Internal(err.to_string()))?;
         if metadata.file_type().is_dir() {
             std::fs::remove_dir_all(&path).map_err(|err| AppError::Internal(err.to_string()))?;
         } else {
@@ -7026,14 +8382,19 @@ struct ZipCentralEntry {
 
 fn write_zip_bundle(path: &Path, files: &[(String, Vec<u8>)]) -> AppResult<i64> {
     if files.is_empty() {
-        return Err(AppError::InvalidInput("zip bundle requires at least one file".to_string()));
+        return Err(AppError::InvalidInput(
+            "zip bundle requires at least one file".to_string(),
+        ));
     }
     let mut data = Vec::new();
     let mut central_entries = Vec::new();
     for (name, bytes) in files {
         let name_bytes = name.as_bytes();
         let name_len = zip_u16(name_bytes.len(), "zip file name is too long")?;
-        let size = zip_u32(bytes.len(), "attachment is too large for a standard ZIP bundle")?;
+        let size = zip_u32(
+            bytes.len(),
+            "attachment is too large for a standard ZIP bundle",
+        )?;
         let offset = zip_u32(data.len(), "zip bundle is too large")?;
         let crc = crc32(bytes);
 
@@ -7060,7 +8421,10 @@ fn write_zip_bundle(path: &Path, files: &[(String, Vec<u8>)]) -> AppResult<i64> 
     }
 
     let central_offset_usize = data.len();
-    let central_offset = zip_u32(central_offset_usize, "zip central directory offset is too large")?;
+    let central_offset = zip_u32(
+        central_offset_usize,
+        "zip central directory offset is too large",
+    )?;
     for entry in &central_entries {
         let name_len = zip_u16(entry.name.len(), "zip file name is too long")?;
         push_u32(&mut data, 0x0201_4b50);
@@ -7083,7 +8447,10 @@ fn write_zip_bundle(path: &Path, files: &[(String, Vec<u8>)]) -> AppResult<i64> 
         data.extend_from_slice(&entry.name);
     }
 
-    let central_size = zip_u32(data.len() - central_offset_usize, "zip central directory is too large")?;
+    let central_size = zip_u32(
+        data.len() - central_offset_usize,
+        "zip central directory is too large",
+    )?;
     let entry_count = zip_u16(central_entries.len(), "zip bundle has too many files")?;
     push_u32(&mut data, 0x0605_4b50);
     push_u16(&mut data, 0);
@@ -7144,7 +8511,9 @@ fn normalize_project_key(value: &str) -> String {
 fn validate_project_status(value: &str) -> AppResult<()> {
     match value {
         "toClaim" | "claimed" | "success" | "failed" | "removed" => Ok(()),
-        _ => Err(AppError::InvalidInput(format!("invalid project account status: {value}"))),
+        _ => Err(AppError::InvalidInput(format!(
+            "invalid project account status: {value}"
+        ))),
     }
 }
 
@@ -7262,7 +8631,9 @@ fn mail_share_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MailS
     })
 }
 
-fn remote_sync_failure_from_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<RemoteSyncFailure>> {
+fn remote_sync_failure_from_message_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<Option<RemoteSyncFailure>> {
     let retry_id = row.get::<_, Option<i64>>(14)?;
     Ok(match retry_id {
         Some(retry_id) => Some(RemoteSyncFailure {
@@ -7284,20 +8655,22 @@ fn remote_sync_failure_from_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Re
 #[cfg(test)]
 mod project_tests {
     use super::{
-        attachment_dir, backup_dir, classify_error_category, exports_dir, gmail_history_id_from_state, normalize_oauth_provider,
+        attachment_dir, backup_dir, classify_error_category, exports_dir, normalize_oauth_provider,
         normalize_project_key, Database, MailMessageRef,
     };
+    use crate::crypto;
     use crate::error::AppError;
     use crate::import::ImportedAccount;
     use crate::models::{
         AccountBatchInput, AttachmentInfo, AutomationRunQuery, ClaimProjectAccountInput,
         ClearAutomationRunsInput, ClearLocalDataInput, CreateGroupInput, CreateMailShareInput,
-        CreateProjectInput, DeleteMailMessagesInput,
-        DownloadAllAttachmentsInput, DownloadAttachmentInput, ExportAccountSecretsInput, ExportAccountsInput, ExportMailMessagesInput,
-        ImportTempEmailsInput, MailMessageQuery, MarkMailMessagesInput, ProjectAccountActionInput, RefreshInput,
-        RestoreBackupInput, RevealAccountSecretsInput, RevokeMailShareInput, RetryQueueItemInput, RetryQueueQuery,
-        RetryQueueRunInput, UpdateAccountInput, UpdateGroupInput, UpdateGroupProxyInput,
-        UpdateTempEmailInput, Settings,
+        CreateProjectInput, DeleteMailMessagesInput, DownloadAllAttachmentsInput,
+        DownloadAttachmentInput, ExportAccountSecretsInput, ExportAccountsInput,
+        ExportMailMessagesInput, ImportTempEmailsInput, MailMessageQuery, MarkMailMessagesInput,
+        ProjectAccountActionInput, RefreshInput, RestoreBackupInput, RetryQueueItemInput,
+        RetryQueueQuery, RetryQueueRunInput, RevealAccountSecretsInput, RevokeMailShareInput,
+        LoginInput, Settings, UpdateAccountInput, UpdateGroupInput, UpdateGroupProxyInput,
+        UpdateTempEmailInput, GenerateWorkspaceKeyInput, UpdateWorkspaceKeyRecordInput,
     };
     use rusqlite::{params, Connection};
     use std::path::PathBuf;
@@ -7310,7 +8683,10 @@ mod project_tests {
 
     #[test]
     fn local_desktop_workflow_covers_core_e2e_paths() {
-        let root = std::env::temp_dir().join(format!("outlook-email-e2e-workflow-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "outlook-email-e2e-workflow-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).expect("create temp dir");
         let db_path = root.join("workflow.sqlite");
         let conn = Connection::open(&db_path).expect("open db");
@@ -7345,14 +8721,15 @@ mod project_tests {
             })
             .expect("refresh result");
         assert_eq!(refresh.failed, 1);
-        assert!(db
-            .list_retry_queue(RetryQueueQuery {
+        assert!(
+            db.list_retry_queue(RetryQueueQuery {
                 task_type: Some("refresh_account".to_string()),
                 ..RetryQueueQuery::default()
             })
             .expect("refresh retry")
             .len()
-            >= 1);
+                >= 1
+        );
 
         let message = db.create_demo_message(account.id).expect("demo message");
         let marked = db
@@ -7434,7 +8811,10 @@ mod project_tests {
 
     #[test]
     fn import_accounts_detects_mail_provider_presets() {
-        let root = std::env::temp_dir().join(format!("outlook-email-provider-import-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "outlook-email-provider-import-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).expect("create temp dir");
         let db_path = root.join("providers.sqlite");
         let conn = Connection::open(&db_path).expect("open db");
@@ -7465,9 +8845,9 @@ mod project_tests {
                 },
                 ImportedAccount {
                     email: "person@gmail.com".to_string(),
-                    password: String::new(),
-                    client_id: "gmail-client".to_string(),
-                    refresh_token: "gmail-refresh".to_string(),
+                    password: "gmail-app-password".to_string(),
+                    client_id: String::new(),
+                    refresh_token: String::new(),
                     remark: String::new(),
                     provider: Some("gmail".to_string()),
                 },
@@ -7477,7 +8857,10 @@ mod project_tests {
         .expect("import providers");
 
         let accounts = db.list_accounts().expect("list accounts");
-        let qq = accounts.iter().find(|account| account.email == "user@qq.com").expect("qq account");
+        let qq = accounts
+            .iter()
+            .find(|account| account.email == "user@qq.com")
+            .expect("qq account");
         assert_eq!(qq.provider, "qq");
         assert_eq!(qq.account_type, "imap");
         assert_eq!(qq.imap_host, "imap.qq.com");
@@ -7498,28 +8881,26 @@ mod project_tests {
             .find(|account| account.email == "person@gmail.com")
             .expect("gmail account");
         assert_eq!(gmail.provider, "gmail");
-        assert_eq!(gmail.account_type, "gmail");
-        assert_eq!(gmail.imap_host, "");
-        assert!(gmail.has_client_id);
-        assert!(gmail.has_refresh_token);
+        assert_eq!(gmail.account_type, "imap");
+        assert_eq!(gmail.imap_host, "imap.gmail.com");
+        assert!(gmail.has_imap_password);
+        assert!(!gmail.has_client_id);
+        assert!(!gmail.has_refresh_token);
     }
 
     #[test]
-    fn normalize_oauth_provider_accepts_google_aliases() {
-        assert_eq!(normalize_oauth_provider(Some("google")).expect("google"), Some("gmail".to_string()));
-        assert_eq!(normalize_oauth_provider(Some("outlook")).expect("outlook"), Some("graph".to_string()));
-        assert_eq!(normalize_oauth_provider(Some("imap")).expect("imap"), Some("imap".to_string()));
-        assert!(normalize_oauth_provider(Some("qq")).is_err());
-    }
-
-    #[test]
-    fn extracts_gmail_history_id_from_provider_sync_state() {
+    fn normalize_oauth_provider_rejects_google_aliases() {
+        assert!(normalize_oauth_provider(Some("google")).is_err());
+        assert!(normalize_oauth_provider(Some("gmail")).is_err());
         assert_eq!(
-            gmail_history_id_from_state(r#"{"gmail_history_id":"12345"}"#),
-            Some("12345".to_string())
+            normalize_oauth_provider(Some("outlook")).expect("outlook"),
+            Some("graph".to_string())
         );
-        assert_eq!(gmail_history_id_from_state("{}"), None);
-        assert_eq!(gmail_history_id_from_state("not-json"), None);
+        assert_eq!(
+            normalize_oauth_provider(Some("imap")).expect("imap"),
+            Some("imap".to_string())
+        );
+        assert!(normalize_oauth_provider(Some("qq")).is_err());
     }
 
     #[test]
@@ -7568,7 +8949,10 @@ mod project_tests {
             })
             .expect("success");
         assert_eq!(completed.status, "success");
-        assert_eq!(db.get_project(project.id).expect("project").stats.success, 1);
+        assert_eq!(
+            db.get_project(project.id).expect("project").stats.success,
+            1
+        );
     }
 
     #[test]
@@ -7593,7 +8977,7 @@ mod project_tests {
             )
             .expect("insert accounts");
         db.conn
-            .execute("INSERT INTO tags (id, name, color) VALUES (10, 'ProjectCore', '#2563eb'), (11, 'ProjectWarmup', '#16a34a')", [])
+            .execute("INSERT INTO tags (id, name, color) VALUES (10, 'ProjectCore', '#d97757'), (11, 'ProjectWarmup', '#8a7a70')", [])
             .expect("insert tags");
 
         db.update_account(UpdateAccountInput {
@@ -7682,15 +9066,23 @@ mod project_tests {
         assert_eq!(project.stats.total, 1);
         assert_eq!(project.stats.to_claim, 1);
 
-        let accounts = db.list_project_accounts(project.id).expect("project accounts");
+        let accounts = db
+            .list_project_accounts(project.id)
+            .expect("project accounts");
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].email, "core@example.com");
-        assert_eq!(db.list_accounts().expect("accounts")[0].tags[0].name, "ProjectCore");
+        assert_eq!(
+            db.list_accounts().expect("accounts")[0].tags[0].name,
+            "ProjectCore"
+        );
     }
 
     #[test]
     fn account_batch_updates_delete_and_selected_export() {
-        let root = std::env::temp_dir().join(format!("outlook-email-account-batch-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "outlook-email-account-batch-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).expect("create temp dir");
         let conn = Connection::open_in_memory().expect("open memory db");
         let mut db = Database {
@@ -7761,7 +9153,11 @@ mod project_tests {
         .expect("set forward");
         let forward_count: i64 = db
             .conn
-            .query_row("SELECT COUNT(*) FROM accounts WHERE forward_enabled = 1", [], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM accounts WHERE forward_enabled = 1",
+                [],
+                |row| row.get(0),
+            )
             .expect("forward count");
         assert_eq!(forward_count, 2);
 
@@ -7789,7 +9185,11 @@ mod project_tests {
         .expect("remove tags");
         let warmup_count: i64 = db
             .conn
-            .query_row("SELECT COUNT(*) FROM account_tags WHERE tag_id = 11", [], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM account_tags WHERE tag_id = 11",
+                [],
+                |row| row.get(0),
+            )
             .expect("warmup tag count");
         assert_eq!(warmup_count, 0);
 
@@ -7817,7 +9217,10 @@ mod project_tests {
 
     #[test]
     fn account_secrets_require_local_password() {
-        let root = std::env::temp_dir().join(format!("outlook-email-secret-export-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "outlook-email-secret-export-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).expect("create temp dir");
         let conn = Connection::open_in_memory().expect("open memory db");
         let mut db = Database {
@@ -7843,7 +9246,7 @@ mod project_tests {
         let secrets = db
             .reveal_account_secrets(RevealAccountSecretsInput {
                 account_id: 1,
-                password: "local-password".to_string(),
+                password: "admin123".to_string(),
             })
             .expect("reveal secrets");
         assert_eq!(secrets.password, "account-password");
@@ -7859,7 +9262,7 @@ mod project_tests {
 
         let bad_confirm = db.export_account_secrets(ExportAccountSecretsInput {
             account_ids: vec![1],
-            password: "local-password".to_string(),
+            password: "admin123".to_string(),
             confirm: "EXPORT".to_string(),
         });
         assert!(matches!(bad_confirm, Err(AppError::InvalidInput(_))));
@@ -7874,7 +9277,7 @@ mod project_tests {
         let exported = db
             .export_account_secrets(ExportAccountSecretsInput {
                 account_ids: vec![1],
-                password: "local-password".to_string(),
+                password: "admin123".to_string(),
                 confirm: "EXPORT ACCOUNT SECRETS".to_string(),
             })
             .expect("export account secrets");
@@ -7884,6 +9287,142 @@ mod project_tests {
         assert!(csv.contains("account-password"));
         assert!(csv.contains("client-id-value"));
         assert!(csv.contains("refresh-token-value"));
+    }
+
+    #[test]
+    fn legacy_password_key_migrates_to_default_login_and_workspace_key() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: None,
+        };
+        db.initialize_schema().expect("schema");
+        db.ensure_default_data().expect("defaults");
+
+        let legacy_password = "old-local-password";
+        let legacy_salt = crypto::random_salt();
+        let legacy_hash = crypto::hash_password(legacy_password).expect("hash");
+        let legacy_key = crypto::derive_key(legacy_password, &legacy_salt);
+        db.set_config("password_hash", &legacy_hash).expect("hash config");
+        db.set_config("crypto_salt", &legacy_salt).expect("salt config");
+        db.crypto_key = Some(legacy_key);
+        db.import_accounts(
+            vec![ImportedAccount {
+                email: "legacy@example.com".to_string(),
+                password: "legacy-password".to_string(),
+                client_id: "legacy-client".to_string(),
+                refresh_token: "legacy-refresh".to_string(),
+                remark: String::new(),
+                provider: None,
+            }],
+            Some(1),
+        )
+        .expect("legacy import");
+        db.lock();
+
+        db.login(LoginInput {
+            username: "admin".to_string(),
+            password: legacy_password.to_string(),
+        })
+        .expect("legacy login migrates");
+        assert!(db.get_config("workspace_key_enc").expect("workspace key").is_some());
+        assert!(crypto::verify_password(
+            "admin123",
+            &db.get_config("password_hash").expect("password hash").unwrap()
+        )
+        .expect("verify default password"));
+
+        let secrets = db
+            .reveal_account_secrets(RevealAccountSecretsInput {
+                account_id: 1,
+                password: "admin123".to_string(),
+            })
+            .expect("reveal migrated secrets");
+        assert_eq!(secrets.password, "legacy-password");
+        assert_eq!(secrets.client_id, "legacy-client");
+
+        db.lock();
+        assert!(matches!(
+            db.login(LoginInput {
+                username: "admin".to_string(),
+                password: legacy_password.to_string(),
+            }),
+            Err(AppError::Unauthorized)
+        ));
+        db.login(LoginInput {
+            username: "admin".to_string(),
+            password: "admin123".to_string(),
+        })
+        .expect("default login after migration");
+    }
+
+    #[test]
+    fn workspace_key_records_generate_once_and_list_metadata_only() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([9; 32]),
+        };
+        db.initialize_schema().expect("schema");
+
+        let generated = db
+            .generate_workspace_key(GenerateWorkspaceKeyInput {
+                purpose: "测试用途".to_string(),
+            })
+            .expect("generate workspace key");
+        assert_eq!(generated.record.purpose, "测试用途");
+        assert!(!generated.workspace_key.is_empty());
+        assert_eq!(
+            generated.record.key_fingerprint,
+            crypto::workspace_key_fingerprint(&generated.workspace_key)
+        );
+
+        let listed = db.list_workspace_key_records().expect("list workspace keys");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].purpose, "测试用途");
+        assert_eq!(listed[0].key_fingerprint, generated.record.key_fingerprint);
+
+        db.delete_workspace_key_record(listed[0].id)
+            .expect("delete workspace key record");
+        assert!(db.list_workspace_key_records().expect("list").is_empty());
+
+        let first = db
+            .generate_workspace_key(GenerateWorkspaceKeyInput {
+                purpose: String::new(),
+            })
+            .expect("default purpose 1");
+        assert_eq!(first.record.purpose, "密钥_1");
+
+        let second = db
+            .generate_workspace_key(GenerateWorkspaceKeyInput {
+                purpose: "   ".to_string(),
+            })
+            .expect("default purpose 2");
+        assert_eq!(second.record.purpose, "密钥_2");
+
+        let custom = db
+            .generate_workspace_key(GenerateWorkspaceKeyInput {
+                purpose: "自定义用途".to_string(),
+            })
+            .expect("custom purpose");
+        assert_eq!(custom.record.purpose, "自定义用途");
+
+        let third = db
+            .generate_workspace_key(GenerateWorkspaceKeyInput {
+                purpose: String::new(),
+            })
+            .expect("default purpose 3");
+        assert_eq!(third.record.purpose, "密钥_3");
+
+        let updated = db
+            .update_workspace_key_record(UpdateWorkspaceKeyRecordInput {
+                id: third.record.id,
+                purpose: "更新后的用途".to_string(),
+            })
+            .expect("update workspace key purpose");
+        assert_eq!(updated.purpose, "更新后的用途");
     }
 
     #[test]
@@ -7937,7 +9476,10 @@ mod project_tests {
                 vec!["Alias@One.com", "alias-one@example.com", "ALIAS@ONE.COM"],
             ))
             .expect("update aliases");
-        assert_eq!(updated.aliases, vec!["alias@one.com", "alias-one@example.com"]);
+        assert_eq!(
+            updated.aliases,
+            vec!["alias@one.com", "alias-one@example.com"]
+        );
 
         let listed = db
             .list_accounts()
@@ -7945,12 +9487,17 @@ mod project_tests {
             .into_iter()
             .find(|account| account.id == 1)
             .expect("listed account");
-        assert_eq!(listed.aliases, vec!["alias@one.com", "alias-one@example.com"]);
+        assert_eq!(
+            listed.aliases,
+            vec!["alias@one.com", "alias-one@example.com"]
+        );
 
-        let primary_conflict = db.update_account(account_input(1, "one@example.com", vec!["two@example.com"]));
+        let primary_conflict =
+            db.update_account(account_input(1, "one@example.com", vec!["two@example.com"]));
         assert!(matches!(primary_conflict, Err(AppError::InvalidInput(_))));
 
-        let alias_conflict = db.update_account(account_input(2, "two@example.com", vec!["alias@one.com"]));
+        let alias_conflict =
+            db.update_account(account_input(2, "two@example.com", vec!["alias@one.com"]));
         assert!(matches!(alias_conflict, Err(AppError::InvalidInput(_))));
     }
 
@@ -8006,7 +9553,10 @@ mod project_tests {
             aliases: None,
         })
         .expect("set account proxy");
-        assert_eq!(db.list_accounts().expect("accounts")[0].mail_retention_days, 90);
+        assert_eq!(
+            db.list_accounts().expect("accounts")[0].mail_retention_days,
+            90
+        );
 
         let overridden = db.account_credentials(Some(1)).expect("credentials");
         assert_eq!(
@@ -8093,7 +9643,9 @@ mod project_tests {
         db.delete_group(child.id).expect("delete child");
         let account_group = db
             .conn
-            .query_row("SELECT group_id FROM accounts WHERE id = 1", [], |row| row.get::<_, Option<i64>>(0))
+            .query_row("SELECT group_id FROM accounts WHERE id = 1", [], |row| {
+                row.get::<_, Option<i64>>(0)
+            })
             .expect("account group");
         assert_eq!(account_group, None);
         let promoted = db.get_group(grandchild.id).expect("promoted grandchild");
@@ -8136,7 +9688,10 @@ mod project_tests {
             refresh_token: None,
             imap_password: None,
             tag_ids: None,
-            aliases: Some(vec!["alias@example.com".to_string(), "second@example.com".to_string()]),
+            aliases: Some(vec![
+                "alias@example.com".to_string(),
+                "second@example.com".to_string(),
+            ]),
         })
         .expect("set alias");
 
@@ -8153,7 +9708,9 @@ mod project_tests {
             .expect("create project");
         assert!(project.use_alias_email);
 
-        let accounts = db.list_project_accounts(project.id).expect("project accounts");
+        let accounts = db
+            .list_project_accounts(project.id)
+            .expect("project accounts");
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].email, "alias@example.com");
         assert_eq!(accounts[0].normalized_email, "alias@example.com");
@@ -8193,10 +9750,11 @@ mod project_tests {
             })
             .expect("mark");
         assert_eq!(marked.refreshed, 1);
-        assert!(db
-            .list_messages(Some(1), Some("all".to_string()))
-            .expect("messages")[0]
-            .is_read);
+        assert!(
+            db.list_messages(Some(1), Some("all".to_string()))
+                .expect("messages")[0]
+                .is_read
+        );
 
         let deleted = db
             .delete_mail_messages(DeleteMailMessagesInput {
@@ -8248,7 +9806,9 @@ mod project_tests {
             .list_messages_query(MailMessageQuery {
                 account_id: Some(1),
                 folder: Some("all".to_string()),
-                search: Some("from:alice subject:\"Reset Password\" is:unread has:attachment".to_string()),
+                search: Some(
+                    "from:alice subject:\"Reset Password\" is:unread has:attachment".to_string(),
+                ),
                 read_state: None,
                 has_attachments: None,
                 sort_by: Some("date".to_string()),
@@ -8290,14 +9850,20 @@ mod project_tests {
             })
             .expect("sort messages");
         assert_eq!(
-            sorted.into_iter().map(|message| message.subject).collect::<Vec<_>>(),
+            sorted
+                .into_iter()
+                .map(|message| message.subject)
+                .collect::<Vec<_>>(),
             vec!["Alpha notice", "Beta invoice", "Reset Password"]
         );
     }
 
     #[test]
     fn exports_mail_html_and_accounts_csv() {
-        let root = std::env::temp_dir().join(format!("outlook-email-export-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "outlook-email-export-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).expect("create temp dir");
         let conn = Connection::open_in_memory().expect("open memory db");
         let mut db = Database {
@@ -8346,7 +9912,8 @@ mod project_tests {
 
     #[test]
     fn creates_lists_and_revokes_local_mail_shares() {
-        let root = std::env::temp_dir().join(format!("outlook-email-share-test-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("outlook-email-share-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create temp dir");
         let conn = Connection::open_in_memory().expect("open memory db");
         let mut db = Database {
@@ -8414,14 +9981,22 @@ mod project_tests {
                 [expired.id],
             )
             .expect("expire share");
-        let shares = db.list_mail_share_records(Some(10)).expect("shares after expire");
-        let expired = shares.iter().find(|item| item.id == expired.id).expect("expired share");
+        let shares = db
+            .list_mail_share_records(Some(10))
+            .expect("shares after expire");
+        let expired = shares
+            .iter()
+            .find(|item| item.id == expired.id)
+            .expect("expired share");
         assert_eq!(expired.status, "expired");
     }
 
     #[test]
     fn reports_and_clears_local_retention_data() {
-        let root = std::env::temp_dir().join(format!("outlook-email-retention-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "outlook-email-retention-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).expect("create temp dir");
         let conn = Connection::open_in_memory().expect("open memory db");
         let mut db = Database {
@@ -8509,7 +10084,10 @@ mod project_tests {
 
     #[test]
     fn downloads_imap_attachment_from_cached_raw_mime() {
-        let root = std::env::temp_dir().join(format!("outlook-email-imap-attachment-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "outlook-email-imap-attachment-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).expect("create temp dir");
         let conn = Connection::open_in_memory().expect("open memory db");
         let mut db = Database {
@@ -8576,7 +10154,10 @@ mod project_tests {
             .expect("download attachment");
 
         assert_eq!(result.file_name, "note.txt");
-        assert_eq!(std::fs::read(&result.path).expect("read attachment"), b"Hello IMAP attachment");
+        assert_eq!(
+            std::fs::read(&result.path).expect("read attachment"),
+            b"Hello IMAP attachment"
+        );
 
         let raw = db.get_mail_raw_content(10).expect("read raw content");
         assert_eq!(raw.message_id, 10);
@@ -8594,7 +10175,9 @@ mod project_tests {
         assert!(bundle.file_name.ends_with(".zip"));
         let zip = std::fs::read(&bundle.path).expect("read zip bundle");
         assert!(zip.starts_with(b"PK\x03\x04"));
-        assert!(zip.windows(b"note.txt".len()).any(|window| window == b"note.txt"));
+        assert!(zip
+            .windows(b"note.txt".len())
+            .any(|window| window == b"note.txt"));
         assert!(zip
             .windows(b"Hello IMAP attachment".len())
             .any(|window| window == b"Hello IMAP attachment"));
@@ -8668,7 +10251,10 @@ mod project_tests {
             })
             .expect("clear failed");
         assert_eq!(cleared.refreshed, 1);
-        assert_eq!(db.list_automation_runs(Some(10)).expect("remaining").len(), 1);
+        assert_eq!(
+            db.list_automation_runs(Some(10)).expect("remaining").len(),
+            1
+        );
     }
 
     #[test]
@@ -8699,7 +10285,7 @@ mod project_tests {
             })
             .expect("save fallback theme");
         assert_eq!(saved.appearance_theme, "default");
-        assert_eq!(saved.accent_color, "#2563eb");
+        assert_eq!(saved.accent_color, "#d97757");
     }
 
     #[test]
@@ -8796,22 +10382,31 @@ mod project_tests {
     #[test]
     fn classifies_provider_specific_credential_errors() {
         assert_eq!(
-            classify_error_category("Gmail list messages failed: HTTP 401 {\"error\":\"invalid_grant\"}"),
+            classify_error_category(
+                "IMAP login failed: NO [AUTHENTICATIONFAILED] invalid Gmail app password"
+            ),
             "auth"
         );
         assert_eq!(
-            classify_error_category("Gmail mark message failed: HTTP 403 insufficientPermissions: missing gmail.modify scope"),
+            classify_error_category(
+                "Gmail IMAP requires an app password; enable IMAP and save it as the IMAP password"
+            ),
             "auth"
         );
         assert_eq!(
-            classify_error_category("IMAP login failed: NO [AUTHENTICATIONFAILED] invalid QQ 授权码"),
+            classify_error_category(
+                "IMAP login failed: NO [AUTHENTICATIONFAILED] invalid QQ 授权码"
+            ),
             "auth"
         );
         assert_eq!(
             classify_error_category("163 客户端授权密码错误，请不要使用网页登录密码"),
             "auth"
         );
-        assert_eq!(classify_error_category("Gmail list messages failed: HTTP 429 rate limit"), "rate_limit");
+        assert_eq!(
+            classify_error_category("Gmail list messages failed: HTTP 429 rate limit"),
+            "rate_limit"
+        );
     }
 
     #[test]
@@ -9126,7 +10721,10 @@ mod project_tests {
             })
             .expect("update temp email");
         assert_eq!(updated.email, "tagged@example.com");
-        assert_eq!(updated.tags, vec!["Warmup".to_string(), "Client A".to_string()]);
+        assert_eq!(
+            updated.tags,
+            vec!["Warmup".to_string(), "Client A".to_string()]
+        );
         let listed = db.list_temp_emails().expect("list temp emails");
         assert_eq!(listed[0].tags, updated.tags);
     }
@@ -9222,7 +10820,10 @@ mod project_tests {
 
     #[test]
     fn restores_database_from_local_backup_snapshot() {
-        let root = std::env::temp_dir().join(format!("outlook-email-restore-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "outlook-email-restore-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).expect("create temp dir");
         let db_path = root.join("test.sqlite");
         let conn = Connection::open(&db_path).expect("open file db");
@@ -9257,7 +10858,10 @@ mod project_tests {
                 [],
             )
             .expect("insert second account");
-        assert_eq!(db.list_accounts().expect("accounts before restore").len(), 2);
+        assert_eq!(
+            db.list_accounts().expect("accounts before restore").len(),
+            2
+        );
 
         let result = db
             .restore_backup(RestoreBackupInput {

@@ -9,13 +9,32 @@ export type ParsedAccount = {
   provider: string;
 };
 
-export function parseAccountRows(raw: string): ParsedAccount[] {
+export type ParseAccountRowsOptions = {
+  defaultProvider?: string | null;
+};
+
+export function parseAccountRows(raw: string, options: ParseAccountRowsOptions = {}): ParsedAccount[] {
+  const defaultProvider = normalizeDefaultProvider(options.defaultProvider);
   return raw
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith("#"))
-    .map((line) => parseParts(splitLine(line)))
+    .map((line) => parseParts(splitLine(line), defaultProvider))
     .filter((row): row is ParsedAccount => row !== null);
+}
+
+export function rawWithDefaultProvider(raw: string, provider?: string | null): string {
+  const defaultProvider = normalizeDefaultProvider(provider);
+  if (!defaultProvider) return raw;
+
+  return raw
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) return line;
+      return `provider=${defaultProvider}----${line}`;
+    })
+    .join("\n");
 }
 
 function splitLine(line: string): string[] {
@@ -23,13 +42,13 @@ function splitLine(line: string): string[] {
   return delimiter ? line.split(delimiter) : [line];
 }
 
-function parseParts(parts: string[]): ParsedAccount | null {
+function parseParts(parts: string[], defaultProvider = ""): ParsedAccount | null {
   const trimmedParts = parts.map((part) => part.trim());
   const explicitProvider = findExplicitProvider(trimmedParts);
   const positionalParts = trimmedParts.filter((part) => !isProviderAssignment(part));
-  let provider = explicitProvider;
+  let provider = defaultProvider || explicitProvider;
 
-  if (positionalParts.length >= 2 && isProviderToken(positionalParts[0]) && positionalParts[1].includes("@")) {
+  if (!provider && positionalParts.length >= 2 && isProviderToken(positionalParts[0]) && positionalParts[1].includes("@")) {
     provider = positionalParts[0];
     positionalParts.shift();
   }
@@ -52,6 +71,12 @@ function parseParts(parts: string[]): ParsedAccount | null {
     remark,
     provider: detectedProvider
   };
+}
+
+function normalizeDefaultProvider(value?: string | null) {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed || trimmed === "auto") return "";
+  return normalizeAccountProviderId(trimmed);
 }
 
 function findExplicitProvider(parts: string[]) {

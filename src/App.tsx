@@ -1,4 +1,4 @@
-import {
+﻿import {
   Activity,
   Archive,
   CheckCircle2,
@@ -15,6 +15,8 @@ import {
   Loader2,
   Lock,
   Mail,
+  Menu,
+  Minus,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -23,6 +25,7 @@ import {
   Search,
   Settings as SettingsIcon,
   Share2,
+  Square,
   Tags,
   Trash2,
   Upload,
@@ -37,8 +40,10 @@ import { api } from "./api";
 import { Toast } from "./components/Toast";
 import type { ToastMessage } from "./components/Toast";
 import { buildSandboxedEmailHtml } from "./lib/emailHtml";
+import { formatMessageListPreview } from "./lib/mailPreview";
 import { extractVerificationCode } from "./lib/verificationCode";
-import { parseAccountRows } from "./lib/importParser";
+import { parseAccountRows, rawWithDefaultProvider } from "./lib/importParser";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import {
   accountProviderDefinition,
   accountProviderLabel,
@@ -80,7 +85,9 @@ import type {
   Tag,
   TempEmail,
   TempEmailMessage,
-  CloudflareChannel
+  CloudflareChannel,
+  UpdateLoginPasswordInput,
+  WorkspaceKeyRecord
 } from "./types";
 
 type View = "mail" | "accounts" | "refresh" | "automation" | "temp" | "projects" | "settings";
@@ -95,17 +102,20 @@ type AccountCredentialFilter = "all" | "outlook" | "gmail" | "qq" | "netease_163
 type OAuthAuthUrlRequest = { client_id: string; redirect_uri: string; login_hint?: string; provider?: string; code_verifier?: string };
 type OAuthTokenExchangeRequest = { account_id?: number; client_id: string; redirect_uri: string; code_or_url: string; provider?: string; code_verifier?: string };
 
-const colors = ["#111827", "#374151", "#4b5563", "#64748b", "#0f172a", "#52525b"];
-const mailPageSize = 100;
+const claudeAccent = "#d97757";
+const colors = ["#111111", "#d97757", "#8a7a70", "#4a4a45", "#c05f42", "#e0a17f"];
+const mailPageSize = 25;
 const mailSearchDebounceMs = 450;
 const defaultGraphClientId = "6daa9f56-5e67-4cb6-ae52-ef89ef912d36";
 const defaultOAuthRedirectUri = "http://localhost:8080";
+const loginWindowSize = { width: 600, height: 600, minWidth: 600, minHeight: 600 };
+const workspaceWindowSize = { width: 1360, height: 860, minWidth: 1100, minHeight: 720 };
 const themePresets = [
-  { id: "default", label: "默认", rail: "#111827", railText: "#f8fafc", surface: "#ffffff", subtle: "#f8fafc" },
-  { id: "graphite", label: "石墨", rail: "#242833", railText: "#f8fafc", surface: "#ffffff", subtle: "#f6f7f9" },
-  { id: "ocean", label: "海蓝", rail: "#0f3b57", railText: "#f4fbff", surface: "#ffffff", subtle: "#f2f8fb" },
-  { id: "forest", label: "森林", rail: "#173b2f", railText: "#f4fff8", surface: "#ffffff", subtle: "#f3faf6" },
-  { id: "rose", label: "玫瑰", rail: "#4a1f32", railText: "#fff7fb", surface: "#ffffff", subtle: "#fff7fa" }
+  { id: "default", label: "默认", rail: "#111111", railText: "#f8f6f1", surface: "#ffffff", subtle: "#faf9f5" },
+  { id: "graphite", label: "石墨", rail: "#1f1f1d", railText: "#f8f6f1", surface: "#ffffff", subtle: "#f7f6f2" },
+  { id: "ocean", label: "纸张", rail: "#2d2926", railText: "#f6f7f9", surface: "#ffffff", subtle: "#f6f7f9" },
+  { id: "forest", label: "晨雾", rail: "#26231f", railText: "#faf7f2", surface: "#ffffff", subtle: "#f6f4ee" },
+  { id: "rose", label: "暖灰", rail: "#181716", railText: "#faf8f3", surface: "#ffffff", subtle: "#f8f7f3" }
 ];
 
 type SkinStyle = CSSProperties & Record<`--${string}`, string>;
@@ -128,7 +138,32 @@ function buildSkin(settings: Settings | null): { className: string; style: SkinS
 }
 
 function normalizeAccent(value?: string) {
-  return /^#[0-9a-fA-F]{6}$/.test(value ?? "") ? value! : "#2563eb";
+  const normalized = /^#[0-9a-fA-F]{6}$/.test(value ?? "") ? value! : claudeAccent;
+  return normalized.toLowerCase() === "#2563eb" ? claudeAccent : normalized;
+}
+
+type TauriRuntimeWindow = Window & { __TAURI_INTERNALS__?: unknown };
+
+function isTauriRuntime() {
+  return typeof window !== "undefined" && Boolean((window as TauriRuntimeWindow).__TAURI_INTERNALS__);
+}
+
+async function applyAuthWindowMode(unlocked: boolean) {
+  if (!isTauriRuntime()) return;
+  const target = unlocked ? workspaceWindowSize : loginWindowSize;
+  const appWindow = getCurrentWindow();
+
+  if (await appWindow.isMaximized().catch(() => false)) {
+    await appWindow.unmaximize().catch(() => undefined);
+  }
+
+  await appWindow.setDecorations(unlocked).catch(() => undefined);
+  await appWindow.setResizable(true).catch(() => undefined);
+  await appWindow.setMaxSize(null).catch(() => undefined);
+
+  await appWindow.setMinSize(new LogicalSize(target.minWidth, target.minHeight));
+  await appWindow.setSize(new LogicalSize(target.width, target.height));
+  await appWindow.center();
 }
 
 function searchTokens(value: string) {
@@ -202,6 +237,7 @@ function App() {
   const [cloudflareChannels, setCloudflareChannels] = useState<CloudflareChannel[]>([]);
   const [forwardingLogs, setForwardingLogs] = useState<ForwardingLog[]>([]);
   const [backupLogs, setBackupLogs] = useState<BackupLog[]>([]);
+  const [workspaceKeyRecords, setWorkspaceKeyRecords] = useState<WorkspaceKeyRecord[]>([]);
   const [mailShareRecords, setMailShareRecords] = useState<MailShareRecord[]>([]);
   const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
   const [retryQueue, setRetryQueue] = useState<RetryQueueItem[]>([]);
@@ -223,12 +259,14 @@ function App() {
     sortOrder: "desc"
   });
   const [mailPage, setMailPage] = useState(0);
+  const [mailTotalCount, setMailTotalCount] = useState(0);
   const [selectedMessageIds, setSelectedMessageIds] = useState<number[]>([]);
   const [view, setView] = useState<View>("mail");
   const [railExpanded, setRailExpanded] = useState(false);
   const [railMenuOpen, setRailMenuOpen] = useState(false);
   const railMenuRef = useRef<HTMLDivElement | null>(null);
   const [busy, setBusy] = useState(false);
+  const [busyMessage, setBusyMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastMessage | null>(null);
@@ -286,8 +324,19 @@ function App() {
     page = mailPage,
     options: { preservePreview?: boolean } = {}
   ) {
-    const nextMessages = await api.listMessages(accountId, nextFolder, buildMailQuery(accountId, nextFolder, filters, page));
+    const query = buildMailQuery(accountId, nextFolder, filters, page);
+    const countQuery = { ...query, limit: undefined, offset: undefined };
+    const [nextMessages, nextTotalCount] = await Promise.all([
+      api.listMessages(accountId, nextFolder, query),
+      api.countMessages(accountId, nextFolder, countQuery)
+    ]);
+    if (page > 0 && nextMessages.length === 0 && nextTotalCount > 0) {
+      const lastPage = Math.max(0, Math.ceil(nextTotalCount / mailPageSize) - 1);
+      setMailPage(lastPage);
+      return loadMailboxMessages(accountId, nextFolder, filters, lastPage, options);
+    }
     setMessages(nextMessages);
+    setMailTotalCount(nextTotalCount);
     setSelectedMessageId((current) => {
       if (!options.preservePreview) return undefined;
       return nextMessages.some((message) => message.id === current) ? current : undefined;
@@ -316,8 +365,19 @@ function App() {
     setAccounts(nextAccounts);
     const firstAccountId = accountId === null ? nextAccounts[0]?.id : accountId ?? nextAccounts[0]?.id;
     setSelectedAccountId(firstAccountId);
-    const nextMessages = await api.listMessages(firstAccountId, nextFolder, buildMailQuery(firstAccountId, nextFolder, filters, page));
+    const query = buildMailQuery(firstAccountId, nextFolder, filters, page);
+    const countQuery = { ...query, limit: undefined, offset: undefined };
+    const [nextMessages, nextTotalCount] = await Promise.all([
+      api.listMessages(firstAccountId, nextFolder, query),
+      api.countMessages(firstAccountId, nextFolder, countQuery)
+    ]);
+    if (page > 0 && nextMessages.length === 0 && nextTotalCount > 0) {
+      const lastPage = Math.max(0, Math.ceil(nextTotalCount / mailPageSize) - 1);
+      setMailPage(lastPage);
+      return loadWorkspace(accountId, nextFolder, filters, lastPage, options);
+    }
     setMessages(nextMessages);
+    setMailTotalCount(nextTotalCount);
     setSelectedMessageId((current) => {
       if (!options.preservePreview) return undefined;
       return nextMessages.some((message) => message.id === current) ? current : undefined;
@@ -341,6 +401,7 @@ function App() {
       nextSettings,
       nextForwardingLogs,
       nextBackupLogs,
+      nextWorkspaceKeyRecords,
       nextAutomationRuns,
       nextRetryQueue,
       nextRefreshLogs,
@@ -351,6 +412,7 @@ function App() {
       api.getSettings(),
       api.listForwardingLogs(80),
       api.listBackupLogs(40),
+      api.listWorkspaceKeyRecords(),
       api.listAutomationRuns({}, 80),
       api.listRetryQueue({}, 80),
       api.listRefreshLogs(null, 100),
@@ -361,6 +423,7 @@ function App() {
     setSettings(nextSettings);
     setForwardingLogs(nextForwardingLogs);
     setBackupLogs(nextBackupLogs);
+    setWorkspaceKeyRecords(nextWorkspaceKeyRecords);
     setAutomationRuns(nextAutomationRuns);
     setRetryQueue(nextRetryQueue);
     setRefreshLogs(nextRefreshLogs);
@@ -383,6 +446,11 @@ function App() {
   useEffect(() => {
     loadStatus().catch((err) => setError(readError(err)));
   }, []);
+
+  useEffect(() => {
+    if (!status) return;
+    applyAuthWindowMode(status.unlocked).catch(() => undefined);
+  }, [status?.unlocked]);
 
   useEffect(() => {
     if (!status?.unlocked) return;
@@ -414,8 +482,9 @@ function App() {
     setToast({ id: Date.now(), message });
   }
 
-  async function runAction(action: () => Promise<void>, success?: string) {
+  async function runAction(action: () => Promise<void>, success?: string, loadingMessage = "处理中...") {
     setBusy(true);
+    setBusyMessage(loadingMessage);
     setError(null);
     setNotice(null);
     try {
@@ -425,23 +494,47 @@ function App() {
       setError(readError(err));
     } finally {
       setBusy(false);
+      setBusyMessage("");
     }
   }
 
   async function importAccounts(raw: string, groupId: number | null) {
     setBusy(true);
+    setBusyMessage("正在导入账号...");
     setError(null);
     setNotice(null);
     try {
-      await api.importAccounts({ raw, group_id: groupId });
-      await loadWorkspace(selectedAccountId, folder);
+      const result = await api.importAccounts({ raw, group_id: groupId });
+      const importedAccounts = result.accounts ?? [];
+      let refreshSucceeded = 0;
+      let refreshFailed = 0;
+      for (let index = 0; index < importedAccounts.length; index += 1) {
+        const account = importedAccounts[index];
+        setBusyMessage(`正在刷新导入账号 ${index + 1}/${importedAccounts.length}：${account.email}`);
+        try {
+          const refreshResult = await api.runRefreshJob(account.id, "all", 0);
+          if (refreshResult.success) refreshSucceeded += 1;
+          else refreshFailed += 1;
+        } catch {
+          refreshFailed += 1;
+        }
+      }
+      const focusAccountId = importedAccounts[0]?.id ?? selectedAccountId;
+      setMailPage(0);
+      await loadWorkspace(focusAccountId, folder, mailFilters, 0);
       await loadStatus();
-      setNotice("账号已导入");
+      await loadAutomation();
+      setNotice(
+        importedAccounts.length > 0
+          ? `账号已导入 ${result.imported} 个，刷新成功 ${refreshSucceeded} 个，失败 ${refreshFailed} 个`
+          : `账号已导入 ${result.imported} 个`
+      );
     } catch (err) {
       setError(readError(err));
       throw err;
     } finally {
       setBusy(false);
+      setBusyMessage("");
     }
   }
 
@@ -491,14 +584,14 @@ function App() {
 
   if (!status.initialized || !status.unlocked) {
     return (
-      <LockScreen
+      <LoginScreen
         initialized={status.initialized}
         busy={busy}
         error={error}
-        onSubmit={(password) =>
+        onSubmit={(username, password) =>
           runAction(async () => {
-            setStatus(status.initialized ? await api.unlock(password) : await api.initialize(password));
-          })
+            setStatus(await api.login({ username, password }));
+          }, undefined, "正在登录...")
         }
       />
     );
@@ -506,6 +599,7 @@ function App() {
 
   return (
     <div className={`${railExpanded ? "appShell railExpanded" : "appShell"} ${skin.className}`} style={skin.style}>
+      {busy && <GlobalLoadingOverlay message={busyMessage || "处理中..."} />}
       <aside className={railExpanded ? "rail expanded" : "rail"}>
         <div className="railHeader">
           <span className="brandName">OutlookEmail</span>
@@ -631,8 +725,8 @@ function App() {
             <p>{status.account_count} 个账号 · {status.message_count} 封缓存邮件</p>
           </div>
           <div className="topActions">
-            {notice && <span className="notice">{notice}</span>}
-            {error && <span className="errorText">{error}</span>}
+            {notice && <span className="notice" title={notice}>{notice}</span>}
+            {error && <span className="errorText" title={error}>{error}</span>}
           </div>
         </header>
 
@@ -650,7 +744,7 @@ function App() {
             folder={folder}
             filters={mailFilters}
             page={mailPage}
-            hasNextPage={messages.length === mailPageSize}
+            totalCount={mailTotalCount}
             busy={busy}
             onGroupChange={(groupId) => {
               setSelectedGroupId(groupId);
@@ -681,13 +775,17 @@ function App() {
               })
             }
             onRefreshCurrentAccount={() =>
-              runAction(async () => {
-                if (!selectedAccountId) return;
-                const result = await api.runRefreshJob(selectedAccountId);
-                setNotice(formatResultMessage(result.message));
-                await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
-                await loadStatus();
-              })
+              runAction(
+                async () => {
+                  if (!selectedAccountId) return;
+                  const result = await api.runRefreshJob(selectedAccountId);
+                  setNotice(formatResultMessage(result.message));
+                  await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
+                  await loadStatus();
+                },
+                undefined,
+                "正在刷新当前账号邮件..."
+              )
             }
             onMessageSelect={setSelectedMessageId}
             onMessageClose={() => setSelectedMessageId(undefined)}
@@ -707,7 +805,8 @@ function App() {
             }
             onPageChange={(nextPage) =>
               runAction(async () => {
-                const page = Math.max(0, nextPage);
+                const lastPage = Math.max(0, Math.ceil(mailTotalCount / mailPageSize) - 1);
+                const page = Math.min(Math.max(0, nextPage), lastPage);
                 setMailPage(page);
                 await loadMailboxMessages(selectedAccountId, folder, mailFilters, page);
               })
@@ -913,22 +1012,30 @@ function App() {
             schedulerStatus={schedulerStatus}
             busy={busy}
             onRefreshAccount={(accountId) =>
-              runAction(async () => {
-                const result = await api.runRefreshJob(accountId);
-                setNotice(formatResultMessage(result.message));
-                await loadWorkspace(accountId, folder, mailFilters, mailPage);
-                await loadAutomation();
-                await loadStatus();
-              })
+              runAction(
+                async () => {
+                  const result = await api.runRefreshJob(accountId);
+                  setNotice(formatResultMessage(result.message));
+                  await loadWorkspace(accountId, folder, mailFilters, mailPage);
+                  await loadAutomation();
+                  await loadStatus();
+                },
+                undefined,
+                "正在刷新账号邮件..."
+              )
             }
             onRefreshAll={() =>
-              runAction(async () => {
-                const result = await api.runRefreshJob(undefined);
-                setNotice(formatResultMessage(result.message));
-                await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
-                await loadAutomation();
-                await loadStatus();
-              })
+              runAction(
+                async () => {
+                  const result = await api.runRefreshJob(undefined);
+                  setNotice(formatResultMessage(result.message));
+                  await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
+                  await loadAutomation();
+                  await loadStatus();
+                },
+                undefined,
+                "正在刷新全部账号邮件..."
+              )
             }
             onRunRetryQueue={() =>
               runAction(async () => {
@@ -1145,6 +1252,7 @@ function App() {
             settings={settings}
             forwardingLogs={forwardingLogs}
             backupLogs={backupLogs}
+            workspaceKeyRecords={workspaceKeyRecords}
             automationRuns={automationRuns}
             retryQueue={retryQueue}
             localRetention={localRetention}
@@ -1156,6 +1264,32 @@ function App() {
                 await loadAutomation();
               }, "设置已保存")
             }
+            onUpdateLoginPassword={async (input) => {
+              let succeeded = false;
+              await runAction(
+                async () => {
+                  await api.updateLoginPassword(input);
+                  succeeded = true;
+                },
+                "登录密码已更新",
+                "正在修改登录密码..."
+              );
+              return succeeded;
+            }}
+            onGenerateWorkspaceKey={(purpose) => api.generateWorkspaceKey({ purpose })}
+            onUpdateWorkspaceKeyRecord={async (recordId, purpose) => {
+              const updated = await api.updateWorkspaceKeyRecord({ id: recordId, purpose });
+              setWorkspaceKeyRecords(await api.listWorkspaceKeyRecords());
+              return updated;
+            }}
+            onRefreshWorkspaceKeyRecords={async () => {
+              setWorkspaceKeyRecords(await api.listWorkspaceKeyRecords());
+            }}
+            onShowToast={showToast}
+            onDeleteWorkspaceKeyRecord={async (recordId) => {
+              await api.deleteWorkspaceKeyRecord(recordId);
+              setWorkspaceKeyRecords(await api.listWorkspaceKeyRecords());
+            }}
             onRunForwarding={() =>
               runAction(async () => {
                 const result = await api.runForwardingJob({ limit: 50 });
@@ -1243,7 +1377,59 @@ function App() {
   );
 }
 
-function LockScreen({
+function LoginWindowChrome() {
+  const appWindow = isTauriRuntime() ? getCurrentWindow() : null;
+  const [maximized, setMaximized] = useState(false);
+
+  useEffect(() => {
+    if (!appWindow) return;
+    let disposed = false;
+
+    appWindow.isMaximized().then((value) => {
+      if (!disposed) setMaximized(value);
+    });
+
+    const unlistenPromise = appWindow.onResized(() => {
+      appWindow.isMaximized().then((value) => {
+        if (!disposed) setMaximized(value);
+      });
+    });
+
+    return () => {
+      disposed = true;
+      unlistenPromise.then((unlisten) => unlisten()).catch(() => undefined);
+    };
+  }, [appWindow]);
+
+  if (!appWindow) return null;
+
+  return (
+    <header className="loginChrome">
+      <button type="button" className="loginChromeButton" aria-label="菜单">
+        <Menu size={16} strokeWidth={2.1} />
+      </button>
+      <div className="loginChromeDrag" data-tauri-drag-region />
+      <div className="loginChromeControls">
+        <button type="button" className="loginChromeButton" aria-label="最小化" onClick={() => appWindow.minimize()}>
+          <Minus size={14} strokeWidth={2.1} />
+        </button>
+        <button
+          type="button"
+          className="loginChromeButton"
+          aria-label={maximized ? "还原" : "最大化"}
+          onClick={() => appWindow.toggleMaximize()}
+        >
+          {maximized ? <Copy size={13} strokeWidth={2.1} /> : <Square size={12} strokeWidth={2.1} />}
+        </button>
+        <button type="button" className="loginChromeButton loginChromeClose" aria-label="关闭" onClick={() => appWindow.close()}>
+          <X size={14} strokeWidth={2.1} />
+        </button>
+      </div>
+    </header>
+  );
+}
+
+function LoginScreen({
   initialized,
   busy,
   error,
@@ -1252,41 +1438,73 @@ function LockScreen({
   initialized: boolean;
   busy: boolean;
   error: string | null;
-  onSubmit: (password: string) => void;
+  onSubmit: (username: string, password: string) => void;
 }) {
-  const [password, setPassword] = useState("");
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("admin123");
+
+  useEffect(() => {
+    setUsername("admin");
+    setPassword("admin123");
+  }, [initialized]);
+
   return (
-    <div className="lockScreen">
-      <form
-        className="lockPanel"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onSubmit(password);
-        }}
-      >
-        <div className="lockIcon">
-          <KeyRound size={28} />
+    <div className="loginShell">
+      <LoginWindowChrome />
+      <div className="lockScreen">
+        <form
+          className="lockPanel"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSubmit(username, password);
+          }}
+        >
+        <div className="lockMark" aria-hidden="true">
+          <span />
         </div>
-        <h1>{initialized ? "解锁工作区" : "创建本地工作区"}</h1>
-        <p>
-          {initialized
-            ? "输入本地应用密码，用于解密敏感设置并打开邮箱工作区。"
-            : "设置至少 8 位本地密码，用于保护 SQLite 中加密保存的邮箱凭据。"}
-        </p>
-        <input
-          className="input"
-          type="password"
-          minLength={8}
-          value={password}
-          placeholder="本地应用密码"
-          onChange={(event) => setPassword(event.target.value)}
-        />
+        <div className="lockCopy">
+          <h1>OutlookEmail</h1>
+        </div>
+        <label className="lockField">
+          <span>账号</span>
+          <input
+            className="input"
+            value={username}
+            autoComplete="username"
+            placeholder="admin"
+            onChange={(event) => setUsername(event.target.value)}
+          />
+        </label>
+        <label className="lockField">
+          <span>密码</span>
+          <input
+            className="input"
+            type="password"
+            minLength={8}
+            value={password}
+            autoComplete={initialized ? "current-password" : "new-password"}
+            placeholder="admin123"
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </label>
         {error && <div className="formError">{error}</div>}
-        <button className="button primary fullWidth" disabled={busy || password.length < 8}>
-          {busy ? <Loader2 className="spin" size={16} /> : <Lock size={16} />}
-          {initialized ? "解锁" : "创建工作区"}
+        <button className="button primary" disabled={busy || !username.trim() || password.length < 8}>
+          {busy && <Loader2 className="spin" size={16} />}
+          登录
         </button>
-      </form>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function GlobalLoadingOverlay({ message }: { message: string }) {
+  return (
+    <div className="globalLoadingOverlay" role="status" aria-live="polite">
+      <div className="globalLoadingPanel">
+        <Loader2 className="spin" size={24} />
+        <strong>{message}</strong>
+      </div>
     </div>
   );
 }
@@ -1304,7 +1522,7 @@ function MailWorkspace({
   folder,
   filters,
   page,
-  hasNextPage,
+  totalCount,
   busy,
   onGroupChange,
   onAccountSelect,
@@ -1345,7 +1563,7 @@ function MailWorkspace({
   folder: string;
   filters: MailFilters;
   page: number;
-  hasNextPage: boolean;
+  totalCount: number;
   busy: boolean;
   onGroupChange: (groupId: number | "all") => void;
   onAccountSelect: (accountId: number) => void;
@@ -1374,7 +1592,10 @@ function MailWorkspace({
   onRetryRemoteFailure: (retryId: number) => void;
   onDismissRemoteFailure: (retryId: number) => void;
 }) {
+  const totalPages = Math.max(1, Math.ceil(totalCount / mailPageSize));
+  const lastPage = totalPages - 1;
   const [draftFilters, setDraftFilters] = useState(filters);
+  const [pageInput, setPageInput] = useState(String(page + 1));
   const [downloadingAttachmentId, setDownloadingAttachmentId] = useState<string | null>(null);
   const [downloadingAllAttachments, setDownloadingAllAttachments] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -1492,6 +1713,10 @@ function MailWorkspace({
   }, [filters]);
 
   useEffect(() => {
+    setPageInput(String(page + 1));
+  }, [page]);
+
+  useEffect(() => {
     return () => {
       if (searchApplyTimerRef.current !== null) {
         window.clearTimeout(searchApplyTimerRef.current);
@@ -1564,6 +1789,13 @@ function MailWorkspace({
     }, mailSearchDebounceMs);
   }
 
+  function commitPageInput() {
+    const parsed = Number.parseInt(pageInput, 10);
+    const targetPage = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), totalPages) - 1 : page;
+    setPageInput(String(targetPage + 1));
+    if (targetPage !== page) onPageChange(targetPage);
+  }
+
   function treeDepthStyle(depth: number): CSSProperties {
     return { "--tree-indent": `${depth * 16}px` } as CSSProperties;
   }
@@ -1586,11 +1818,10 @@ function MailWorkspace({
         style={treeDepthStyle(depth)}
         onClick={() => onAccountSelect(account.id)}
       >
-        <span className="mailAvatar">{account.email.slice(0, 2).toUpperCase()}</span>
         <span className="mailTreeText">
           <strong>{account.email}</strong>
           <span className="mailTreeMeta">
-            <ProviderBadge provider={account.provider} compact />
+            <ProviderBadge provider={account.provider} compact showMark={false} />
             <small>{formatStatus(account.last_refresh_status)} · {account.message_count} 封邮件</small>
           </span>
         </span>
@@ -1819,7 +2050,7 @@ function MailWorkspace({
                     {formatRemoteFailureAction(message.remote_sync_failure.action)} 远端同步失败
                   </span>
                 )}
-                <span className="preview">{message.body_preview}</span>
+                <span className="preview">{formatMessageListPreview(message)}</span>
               </span>
             </button>
             <div className="messageRowEnd">
@@ -1885,12 +2116,35 @@ function MailWorkspace({
             <button className="button compact secondary" onClick={onSelectVisibleMessages}>
               选择本页
             </button>
-            <span>第 {page + 1} 页</span>
+            <span className="pagerSummary">
+              共 {totalCount} 封 · 第 {page + 1} / {totalPages} 页
+            </span>
+            <button className="button compact secondary" disabled={page === 0} onClick={() => onPageChange(0)}>
+              第一页
+            </button>
             <button className="button compact secondary" disabled={page === 0} onClick={() => onPageChange(page - 1)}>
               上一页
             </button>
-            <button className="button compact secondary" disabled={!hasNextPage} onClick={() => onPageChange(page + 1)}>
+            <label className="pageJump">
+              <span>跳至</span>
+              <input
+                className="input pageJumpInput"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={pageInput}
+                onChange={(event) => setPageInput(event.target.value)}
+                onBlur={commitPageInput}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") commitPageInput();
+                }}
+              />
+            </label>
+            <button className="button compact secondary" disabled={page >= lastPage} onClick={() => onPageChange(page + 1)}>
               下一页
+            </button>
+            <button className="button compact secondary" disabled={page >= lastPage} onClick={() => onPageChange(lastPage)}>
+              最后一页
             </button>
           </div>
         )}
@@ -1948,6 +2202,9 @@ function MailWorkspace({
                 />
               )}
               <MailSharePanel records={visibleShareRecords} busy={busy} onRevoke={onRevokeMailShare} />
+              <div className="mailPreviewSubjectBlock">
+                <h2>{selectedMessage.subject || "（无主题）"}</h2>
+              </div>
               <MessageBody body={selectedMessage.body || selectedMessage.body_preview} bodyType={selectedMessage.body_type} />
               {rawError && <div className="inlineError">{rawError}</div>}
               {rawContent && (
@@ -2330,7 +2587,7 @@ function AccountsView({
             <span>邮箱</span>
             <span>分组</span>
             <span>状态</span>
-            <span>凭据</span>
+            <span>服务商</span>
             <span>操作</span>
           </div>
           {visibleAccounts.map((account) => (
@@ -2356,14 +2613,15 @@ function AccountsView({
               </span>
               <span className="accountText">
                 <strong>{account.email}</strong>
-                <span className="accountMetaLine">
-                  <ProviderBadge provider={account.provider} compact />
-                  {account.aliases.length > 0 && <small>{account.aliases.join(", ")}</small>}
-                </span>
+                {account.aliases.length > 0 && (
+                  <span className="accountMetaLine">
+                    <small>{account.aliases.join(", ")}</small>
+                  </span>
+                )}
               </span>
               <span>{account.group_name ?? "无"}</span>
               <span>{formatStatus(account.last_refresh_status)}</span>
-              <RefreshCredentialCell account={account} />
+              <ProviderBadge provider={account.provider} compact showMark={false} />
               <span className="rowActions accountRowActions">
                 <button
                   className="iconMini"
@@ -2699,6 +2957,55 @@ type OAuthAccountSaveDraft = {
   callback_url: string;
 };
 
+type ImportProviderChoice = "gmail" | "qq" | "netease_163";
+
+const importProviderHelp: Record<ImportProviderChoice, { prefix: string; linkText: string; suffix: string; url: string }> = {
+  gmail: {
+    prefix: "先在 Google 账号中创建",
+    linkText: "应用专用密码",
+    suffix: "，再粘贴到 password 字段。",
+    url: "https://myaccount.google.com/apppasswords"
+  },
+  qq: {
+    prefix: "先登录 QQ 邮箱，在 设置 > 账号安全 > 安全设置 > POP3/IMAP/SMTP 服务 中生成",
+    linkText: "授权码",
+    suffix: "，再粘贴到 password 字段。",
+    url: "https://wx.mail.qq.com/"
+  },
+  netease_163: {
+    prefix: "先",
+    linkText: "登录 163 邮箱",
+    suffix: "，在 设置 > POP3/SMTP/IMAP 中开启服务并生成客户端授权密码，再粘贴到 password 字段。",
+    url: "https://mail.163.com/"
+  }
+};
+
+const importProviderOptions: Array<{
+  value: ImportProviderChoice;
+  label: string;
+  description: string;
+  placeholder: string;
+}> = [
+  {
+    value: "gmail",
+    label: "Gmail",
+    description: "每行：Gmail 邮箱----Google 应用专用密码。",
+    placeholder: "your@gmail.com----abcdefghijklmnop"
+  },
+  {
+    value: "qq",
+    label: "QQ 邮箱",
+    description: "每行：QQ/Foxmail 邮箱----IMAP/SMTP 授权码。",
+    placeholder: "user@qq.com----imap-smtp-auth-code"
+  },
+  {
+    value: "netease_163",
+    label: "163 邮箱",
+    description: "每行：163 邮箱----客户端授权密码。",
+    placeholder: "user@163.com----client-auth-password"
+  }
+];
+
 function AccountImportDialog({
   groups,
   selectedGroupId,
@@ -2715,10 +3022,15 @@ function AccountImportDialog({
   const initialGroupId =
     selectedGroupId !== "all" && groups.some((group) => group.id === selectedGroupId) ? selectedGroupId : groups[0]?.id ?? null;
   const [raw, setRaw] = useState("");
+  const [importProvider, setImportProvider] = useState<ImportProviderChoice>("gmail");
   const [groupId, setGroupId] = useState<number | null>(initialGroupId);
   const [localBusy, setLocalBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
-  const parsedRows = useMemo(() => parseAccountRows(raw), [raw]);
+  const selectedImportOption = importProviderOptions.find((option) => option.value === importProvider) ?? importProviderOptions[0];
+  const selectedImportHelp = importProviderHelp[importProvider];
+  const selectedDefaultProvider = importProvider;
+  const parsedRows = useMemo(() => parseAccountRows(raw, { defaultProvider: selectedDefaultProvider }), [raw, selectedDefaultProvider]);
+  const importBlockReason = useMemo(() => outlookImportBlockReason(parsedRows), [parsedRows]);
   const providerPreview = useMemo(() => formatProviderPreview(parsedRows), [parsedRows]);
   const previewRows = useMemo(() => parsedRows.slice(0, 8), [parsedRows]);
   const hiddenPreviewCount = parsedRows.length - previewRows.length;
@@ -2733,18 +3045,31 @@ function AccountImportDialog({
 
   async function handleImport() {
     if (parsedRows.length === 0) {
-      setLocalError("请粘贴至少一行账号数据");
+      setLocalError("请粘贴至少一行账号");
+      return;
+    }
+    if (importBlockReason) {
+      setLocalError(importBlockReason);
       return;
     }
     setLocalBusy(true);
     setLocalError(null);
     try {
-      await onImport(raw, groupId);
+      await onImport(rawWithDefaultProvider(raw, selectedDefaultProvider), groupId);
       onClose();
     } catch (err) {
       setLocalError(readError(err));
     } finally {
       setLocalBusy(false);
+    }
+  }
+
+  async function openImportProviderHelpPage() {
+    setLocalError(null);
+    try {
+      await api.openExternalUrl(selectedImportHelp.url);
+    } catch (err) {
+      setLocalError(readError(err));
     }
   }
 
@@ -2769,10 +3094,34 @@ function AccountImportDialog({
         </div>
 
         <div className="oauthDialogBody">
+          <div className="formLine importTypeLine">
+            <label className="field importTypeField">
+              <span>类型：</span>
+              <select
+                className="select"
+                value={importProvider}
+                onChange={(event) => {
+                  setImportProvider(event.target.value as ImportProviderChoice);
+                  setLocalError(null);
+                }}
+              >
+                {importProviderOptions.map((option) => (
+                  <option value={option.value} key={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <section className="oauthAccountBox">
-            <h3>账号数据</h3>
-            <p>每行一条账号，支持邮箱、密码、client_id、refresh_token、备注和 provider 字段。</p>
-            <p className="oauthHint">QQ/163 导入行的 password 字段会保存为 IMAP 授权码或客户端授权密码；可用 provider=qq 或 provider=netease_163 显式指定服务商。</p>
+            <p className="oauthHint importProviderHelp">
+              {selectedImportHelp.prefix}{" "}
+              <button type="button" className="importHelpLink" onClick={openImportProviderHelpPage}>
+                {selectedImportHelp.linkText}
+              </button>
+              {selectedImportHelp.suffix}
+            </p>
+            <p>{selectedImportOption.description}</p>
             <textarea
               className="textarea importTextarea"
               value={raw}
@@ -2781,7 +3130,7 @@ function AccountImportDialog({
                 setRaw(event.target.value);
                 setLocalError(null);
               }}
-              placeholder="邮箱----密码----client_id----refresh_token----备注"
+              placeholder={selectedImportOption.placeholder}
             />
             <div className="formLine importDialogControls">
               <label className="field grow">
@@ -2829,14 +3178,14 @@ function AccountImportDialog({
               </div>
             )}
           </section>
-          {localError && <div className="formError">{localError}</div>}
+          {(localError || importBlockReason) && <div className="formError">{localError || importBlockReason}</div>}
         </div>
 
         <div className="oauthDialogFooter">
           <button className="button secondary" disabled={loading} onClick={onClose}>
             关闭
           </button>
-          <button className="button primary" disabled={loading || parsedRows.length === 0} onClick={handleImport}>
+          <button className="button primary" disabled={loading || parsedRows.length === 0 || Boolean(importBlockReason)} onClick={handleImport}>
             {localBusy ? <Loader2 className="spin" size={16} /> : <Download size={16} />}
             导入 {parsedRows.length || ""}
           </button>
@@ -2912,7 +3261,7 @@ function OAuthAccountSaveDialog({
   useEffect(() => {
     let cancelled = false;
     const clientId = activeClientId;
-    const codeVerifier = draft.provider === "gmail" ? createPkceVerifier() : "";
+    const codeVerifier = "";
 
     if (!clientId) {
       setAuthUrl("");
@@ -2958,7 +3307,6 @@ function OAuthAccountSaveDialog({
 
   function validateBase(requireCallback: boolean) {
     if (!activeClientId.trim()) return `请填写 ${selectedProvider.label} Client ID`;
-    if (draft.provider === "gmail" && !oauthCodeVerifier) return "请先生成 Gmail 授权链接";
     if (requireCallback && !draft.callback_url.trim()) return "请粘贴授权后的完整回调 URL";
     return null;
   }
@@ -3099,7 +3447,6 @@ function OAuthAccountSaveDialog({
                 服务商
                 <select className="select" value={draft.provider} onChange={(event) => updateDraft({ provider: event.target.value })}>
                   <option value="graph">Outlook</option>
-                  <option value="gmail">Gmail</option>
                 </select>
               </label>
               <label className="field grow">
@@ -3107,7 +3454,7 @@ function OAuthAccountSaveDialog({
                 <input
                   className="input"
                   value={draft.email}
-                  placeholder={draft.provider === "gmail" ? "your@gmail.com" : "your@outlook.com"}
+                  placeholder="your@outlook.com"
                   onChange={(event) => updateDraft({ email: event.target.value })}
                 />
               </label>
@@ -3126,7 +3473,7 @@ function OAuthAccountSaveDialog({
                 <input
                   className="input"
                   value={draft.client_id}
-                  placeholder={draft.provider === "graph" ? "留空使用默认 Client ID" : "Google OAuth Client ID"}
+                  placeholder="留空使用默认 Client ID"
                   onChange={(event) => updateDraft({ client_id: event.target.value })}
                 />
               </label>
@@ -4289,7 +4636,7 @@ function StatusPill({ status }: { status: string }) {
   return <span className={`statusPill status-${status}`}>{formatStatus(status)}</span>;
 }
 
-function ProviderBadge({ provider, compact = false }: { provider: string; compact?: boolean }) {
+function ProviderBadge({ provider, compact = false, showMark = true }: { provider: string; compact?: boolean; showMark?: boolean }) {
   const providerId = normalizeAccountProviderId(provider);
   const definition = accountProviderDefinition(providerId);
   return (
@@ -4297,7 +4644,7 @@ function ProviderBadge({ provider, compact = false }: { provider: string; compac
       className={`providerBadge provider-${providerId}${compact ? " compact" : ""}`}
       title={`${definition.label} · ${definition.credentialLabel} · ${providerCapabilitySummary(providerId)}`}
     >
-      <span className="providerBadgeMark">{providerBadgeCode(providerId)}</span>
+      {showMark && <span className="providerBadgeMark">{providerBadgeCode(providerId)}</span>}
       <span className="providerBadgeText">{definition.label}</span>
     </span>
   );
@@ -4326,13 +4673,10 @@ function isRefreshReady(account: Account) {
 
 function RefreshCredentialCell({ account }: { account: Account }) {
   const readiness = providerReadiness(account);
+  const text = readiness.status === "missing" ? readiness.detail : readiness.label;
   return (
     <span className={`credentialCell readiness-${readiness.status}`} title={readiness.detail}>
-      <ProviderBadge provider={account.provider} compact />
-      <span className="credentialDetail">
-        <span>{readiness.label}</span>
-        <small>{readiness.detail}</small>
-      </span>
+      {text}
     </span>
   );
 }
@@ -4561,7 +4905,7 @@ function AccountEditor({
 
   const redirectUri = settings?.oauth_redirect_uri || defaultOAuthRedirectUri;
   const selectedProvider = accountProviderDefinition(draft.provider);
-  const oauthLinkSupported = draft.provider === "graph" || draft.provider === "imap" || draft.provider === "gmail";
+  const oauthLinkSupported = draft.provider === "graph" || draft.provider === "imap";
 
   function updateProvider(provider: string) {
     const normalizedProvider = normalizeAccountProviderId(provider);
@@ -4671,57 +5015,59 @@ function AccountEditor({
           ))}
         </div>
       )}
-      <div className="formLine">
-        <input
-          className="input grow"
-          value={draft.client_id}
-          placeholder={`${selectedProvider.label} Client ID`}
-          onChange={(event) => setDraft({ ...draft, client_id: event.target.value })}
-        />
-        <button
-          className="button secondary"
-          disabled={!oauthLinkSupported || !draft.client_id.trim()}
-          onClick={() => {
-            const codeVerifier = draft.provider === "gmail" ? createPkceVerifier() : "";
-            onOauthCodeVerifierChange(codeVerifier);
-            onGenerateOAuthUrl({
-              client_id: draft.client_id,
-              redirect_uri: redirectUri,
-              login_hint: draft.email,
-              provider: draft.provider,
-              code_verifier: codeVerifier || undefined
-            });
-          }}
-        >
-          <KeyRound size={16} />
-          OAuth 链接
-        </button>
-      </div>
-      {oauthUrl && <textarea className="textarea compact" readOnly value={oauthUrl} />}
-      <div className="formLine">
-        <input
-          className="input grow"
-          value={oauthCallback}
-          placeholder="粘贴回调 URL 或授权码"
-          onChange={(event) => onOauthCallbackChange(event.target.value)}
-        />
-        <button
-          className="button secondary"
-          disabled={!oauthLinkSupported || !draft.client_id.trim() || !oauthCallback.trim() || (draft.provider === "gmail" && !oauthCodeVerifier)}
-          onClick={() =>
-            onExchangeOAuthToken({
-              account_id: account.id,
-              client_id: draft.client_id,
-              redirect_uri: redirectUri,
-              code_or_url: oauthCallback,
-              provider: draft.provider,
-              code_verifier: oauthCodeVerifier || undefined
-            })
-          }
-        >
-          保存 OAuth
-        </button>
-      </div>
+      {oauthLinkSupported && (
+        <>
+          <div className="formLine">
+            <input
+              className="input grow"
+              value={draft.client_id}
+              placeholder={`${selectedProvider.label} Client ID`}
+              onChange={(event) => setDraft({ ...draft, client_id: event.target.value })}
+            />
+            <button
+              className="button secondary"
+              disabled={!draft.client_id.trim()}
+              onClick={() => {
+                onOauthCodeVerifierChange("");
+                onGenerateOAuthUrl({
+                  client_id: draft.client_id,
+                  redirect_uri: redirectUri,
+                  login_hint: draft.email,
+                  provider: draft.provider
+                });
+              }}
+            >
+              <KeyRound size={16} />
+              OAuth 链接
+            </button>
+          </div>
+          {oauthUrl && <textarea className="textarea compact" readOnly value={oauthUrl} />}
+          <div className="formLine">
+            <input
+              className="input grow"
+              value={oauthCallback}
+              placeholder="粘贴回调 URL 或授权码"
+              onChange={(event) => onOauthCallbackChange(event.target.value)}
+            />
+            <button
+              className="button secondary"
+              disabled={!draft.client_id.trim() || !oauthCallback.trim()}
+              onClick={() =>
+                onExchangeOAuthToken({
+                  account_id: account.id,
+                  client_id: draft.client_id,
+                  redirect_uri: redirectUri,
+                  code_or_url: oauthCallback,
+                  provider: draft.provider,
+                  code_verifier: oauthCodeVerifier || undefined
+                })
+              }
+            >
+              保存 OAuth
+            </button>
+          </div>
+        </>
+      )}
       <div className="formLine">
         <input
           className="input grow"
@@ -5155,17 +5501,121 @@ function AutomationDashboardView({
   );
 }
 
+function WorkspaceKeyRevealDialog({
+  revealed,
+  busy,
+  onSave,
+  onClose,
+  onShowToast
+}: {
+  revealed: { recordId: number; purpose: string; workspace_key: string };
+  busy: boolean;
+  onSave: (recordId: number, purpose: string) => Promise<WorkspaceKeyRecord>;
+  onClose: () => void | Promise<void>;
+  onShowToast: (message: string) => void;
+}) {
+  const [purposeDraft, setPurposeDraft] = useState(revealed.purpose);
+  const [dialogError, setDialogError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setPurposeDraft(revealed.purpose);
+    setDialogError("");
+  }, [revealed.recordId, revealed.purpose]);
+
+  async function copyWorkspaceKey() {
+    try {
+      await writeTextToClipboard(revealed.workspace_key);
+      setDialogError("");
+      onShowToast("复制成功");
+    } catch {
+      setDialogError("复制失败，请手动复制密钥");
+    }
+  }
+
+  async function savePurpose() {
+    setDialogError("");
+    setSaving(true);
+    try {
+      await onSave(revealed.recordId, purposeDraft.trim());
+      onShowToast("密钥已保存");
+      await onClose();
+    } catch (err) {
+      setDialogError(readError(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const dialogBusy = busy || saving;
+
+  return (
+    <div className="oauthDialogBackdrop workspaceKeyDialogBackdrop">
+      <div className="oauthDialog workspaceKeyDialog" role="dialog" aria-modal="true" aria-labelledby="workspaceKeyDialogTitle">
+        <div className="oauthDialogHeader">
+          <div>
+            <span className="oauthDialogIcon">
+              <KeyRound size={18} />
+            </span>
+            <h2 id="workspaceKeyDialogTitle">工作区密钥已生成</h2>
+          </div>
+        </div>
+
+        <div className="oauthDialogBody workspaceKeyDialogBody">
+          <p className="workspaceKeyDialogHint">
+            请立即复制并妥善保存此密钥。保存并关闭后将无法再次查看完整内容，列表中仅保留用途和生成时间。
+          </p>
+          <button className="workspaceKeyCard" type="button" onClick={copyWorkspaceKey} title="点击复制密钥">
+            <span className="workspaceKeyCardValue">{revealed.workspace_key}</span>
+            <span className="workspaceKeyCardAction">
+              <Copy size={16} />
+              点击复制
+            </span>
+          </button>
+          {dialogError && <div className="formError">{dialogError}</div>}
+          <label className="field">
+            <span>用途（可选）</span>
+            <input
+              className="input"
+              placeholder="留空则自动命名为 密钥_1、密钥_2……"
+              value={purposeDraft}
+              onChange={(event) => {
+                setDialogError("");
+                setPurposeDraft(event.target.value);
+              }}
+            />
+          </label>
+        </div>
+
+        <div className="oauthDialogFooter workspaceKeyDialogFooter">
+          <button className="button primary" disabled={dialogBusy} onClick={savePurpose}>
+            {saving ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />}
+            保存
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SettingsView({
   status,
   settings,
   forwardingLogs,
   backupLogs,
+  workspaceKeyRecords,
   automationRuns,
   retryQueue,
   localRetention,
   schedulerStatus,
   busy,
   onSave,
+  onUpdateLoginPassword,
+  onGenerateWorkspaceKey,
+  onUpdateWorkspaceKeyRecord,
+  onRefreshWorkspaceKeyRecords,
+  onDeleteWorkspaceKeyRecord,
+  onShowToast,
   onRunForwarding,
   onRunBackup,
   onRestoreBackup,
@@ -5180,12 +5630,19 @@ function SettingsView({
   settings: Settings;
   forwardingLogs: ForwardingLog[];
   backupLogs: BackupLog[];
+  workspaceKeyRecords: WorkspaceKeyRecord[];
   automationRuns: AutomationRun[];
   retryQueue: RetryQueueItem[];
   localRetention: LocalRetentionSummary | null;
   schedulerStatus: SchedulerStatus | null;
   busy: boolean;
-  onSave: (settings: Settings) => void;
+  onSave: (settings: Settings) => void | Promise<void>;
+  onUpdateLoginPassword: (input: UpdateLoginPasswordInput) => Promise<boolean>;
+  onGenerateWorkspaceKey: (purpose: string) => Promise<{ record: WorkspaceKeyRecord; workspace_key: string }>;
+  onUpdateWorkspaceKeyRecord: (recordId: number, purpose: string) => Promise<WorkspaceKeyRecord>;
+  onRefreshWorkspaceKeyRecords: () => Promise<void> | void;
+  onDeleteWorkspaceKeyRecord: (recordId: number) => Promise<void> | void;
+  onShowToast: (message: string) => void;
   onRunForwarding: () => void;
   onRunBackup: () => void;
   onRestoreBackup: (backupLogId: number) => void;
@@ -5205,10 +5662,24 @@ function SettingsView({
     clear_exports: false,
     confirm: ""
   });
+  const [passwordDraft, setPasswordDraft] = useState({
+    current_password: "",
+    new_password: "",
+    confirm_password: ""
+  });
+  const [passwordError, setPasswordError] = useState("");
+  const [workspaceKeyError, setWorkspaceKeyError] = useState("");
+  const [workspaceKeyBusy, setWorkspaceKeyBusy] = useState(false);
+  const [revealedWorkspaceKey, setRevealedWorkspaceKey] = useState<{
+    recordId: number;
+    purpose: string;
+    workspace_key: string;
+  } | null>(null);
   useEffect(() => setDraft(settings), [settings]);
 
   const hasClearSelection =
     clearLocal.clear_mail_cache || clearLocal.clear_temp_mail_cache || clearLocal.clear_attachments || clearLocal.clear_exports;
+  const settingsChanged = useMemo(() => JSON.stringify(draft) !== JSON.stringify(settings), [draft, settings]);
 
   function setField<K extends keyof Settings>(key: K, value: Settings[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -5223,8 +5694,93 @@ function SettingsView({
     };
   }
 
+  async function saveLoginPassword() {
+    const currentPassword = passwordDraft.current_password;
+    const newPassword = passwordDraft.new_password;
+    if (!currentPassword) {
+      setPasswordError("请输入当前密码");
+      return;
+    }
+    if (newPassword.length < 8) {
+      setPasswordError("新密码至少 8 位");
+      return;
+    }
+    if (newPassword !== passwordDraft.confirm_password) {
+      setPasswordError("两次输入的新密码不一致");
+      return;
+    }
+    setPasswordError("");
+    const saved = await onUpdateLoginPassword({
+      current_password: currentPassword,
+      new_password: newPassword
+    });
+    if (saved) {
+      setPasswordDraft({
+        current_password: "",
+        new_password: "",
+        confirm_password: ""
+      });
+    }
+  }
+
+  async function generateWorkspaceKey() {
+    setWorkspaceKeyError("");
+    setWorkspaceKeyBusy(true);
+    try {
+      const result = await onGenerateWorkspaceKey("");
+      setRevealedWorkspaceKey({
+        recordId: result.record.id,
+        purpose: result.record.purpose,
+        workspace_key: result.workspace_key
+      });
+    } catch (err) {
+      setWorkspaceKeyError(readError(err));
+    } finally {
+      setWorkspaceKeyBusy(false);
+    }
+  }
+
+  async function closeWorkspaceKeyDialog() {
+    setRevealedWorkspaceKey(null);
+    await onRefreshWorkspaceKeyRecords();
+  }
+
+  async function deleteWorkspaceKeyRecord(recordId: number) {
+    if (!window.confirm("确认删除这条工作区密钥记录？删除后无法恢复密钥内容。")) return;
+    setWorkspaceKeyError("");
+    setWorkspaceKeyBusy(true);
+    try {
+      await onDeleteWorkspaceKeyRecord(recordId);
+      onShowToast("密钥已删除");
+    } catch (err) {
+      setWorkspaceKeyError(readError(err));
+    } finally {
+      setWorkspaceKeyBusy(false);
+    }
+  }
+
   return (
     <section className="settingsGrid">
+      {revealedWorkspaceKey && (
+        <WorkspaceKeyRevealDialog
+          revealed={revealedWorkspaceKey}
+          busy={busy || workspaceKeyBusy}
+          onSave={(recordId, purpose) => onUpdateWorkspaceKeyRecord(recordId, purpose)}
+          onClose={closeWorkspaceKeyDialog}
+          onShowToast={onShowToast}
+        />
+      )}
+      <div className="settingsSaveBar">
+        <div>
+          <strong>设置草稿</strong>
+          <span>{settingsChanged ? "有未保存修改" : "已保存"}</span>
+        </div>
+        <button className="button primary" disabled={busy || !settingsChanged} onClick={() => onSave(draft)}>
+          {busy ? <Loader2 className="spin" size={16} /> : <SettingsIcon size={16} />}
+          保存设置
+        </button>
+      </div>
+
       <div className="panel">
         <div className="panelHeader">
           <h2>外观</h2>
@@ -5238,7 +5794,7 @@ function SettingsView({
               onClick={() => setField("appearance_theme", preset.id)}
             >
               <span className="themePreview" style={{ background: preset.rail }}>
-                <i style={{ background: draft.accent_color }} />
+                <i style={{ background: normalizeAccent(draft.accent_color) }} />
               </span>
               <strong>{preset.label}</strong>
             </button>
@@ -5254,7 +5810,7 @@ function SettingsView({
             />
           </label>
           <div className="accentSwatches">
-            {["#2563eb", "#0f766e", "#7c3aed", "#be123c", "#ca8a04", "#111827"].map((accent) => (
+            {["#d97757", "#111111", "#8a7a70", "#c05f42", "#e0a17f", "#4a4a45"].map((accent) => (
               <button
                 key={accent}
                 className={normalizeAccent(draft.accent_color).toLowerCase() === accent ? "accentSwatch active" : "accentSwatch"}
@@ -5280,6 +5836,89 @@ function SettingsView({
         <SecretField label="DuckMail API 密钥" value={draft.duckmail_api_key} onChange={(value) => setField("duckmail_api_key", value)} />
       </div>
 
+      <div className="panel widePanel">
+        <div className="panelHeader">
+          <h2>工作区密钥</h2>
+          <KeyRound size={18} />
+        </div>
+        <p className="oauthHint">
+          随机生成 16 字节 workspace key（Base64 编码）。密钥仅在生成时显示一次，保存后无法再次查看；列表仅保留用途和生成时间。用途在生成弹窗中填写，留空时自动命名为 密钥_1、密钥_2……
+        </p>
+        <div className="workspaceKeyGenerateAction">
+          <button
+            className="button primary"
+            disabled={busy || workspaceKeyBusy || Boolean(revealedWorkspaceKey)}
+            onClick={generateWorkspaceKey}
+          >
+            {busy || workspaceKeyBusy ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
+            生成密钥
+          </button>
+        </div>
+        {workspaceKeyError && <div className="formError">{workspaceKeyError}</div>}
+
+        <div className="logTable workspaceKeyTable">
+          <div className="logHeader">
+            <span>用途</span>
+            <span>生成时间</span>
+            <span>操作</span>
+          </div>
+          {workspaceKeyRecords.map((record) => (
+            <div className="logRow" key={record.id}>
+              <span>{record.purpose}</span>
+              <span>{formatDate(record.created_at)}</span>
+              <span className="rowActions">
+                <button
+                  className="button danger workspaceKeyDeleteButton"
+                  title="删除密钥"
+                  disabled={busy || workspaceKeyBusy}
+                  onClick={() => deleteWorkspaceKeyRecord(record.id)}
+                >
+                  <Trash2 size={14} />
+                  删除
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+        {workspaceKeyRecords.length === 0 && <EmptyState icon={<KeyRound size={24} />} text="暂无工作区密钥记录。" />}
+      </div>
+
+      <div className="panel">
+        <div className="panelHeader">
+          <h2>登录密码</h2>
+          <Lock size={18} />
+        </div>
+        <SecretField
+          label="当前密码"
+          value={passwordDraft.current_password}
+          onChange={(value) => {
+            setPasswordError("");
+            setPasswordDraft((current) => ({ ...current, current_password: value }));
+          }}
+        />
+        <SecretField
+          label="新密码"
+          value={passwordDraft.new_password}
+          onChange={(value) => {
+            setPasswordError("");
+            setPasswordDraft((current) => ({ ...current, new_password: value }));
+          }}
+        />
+        <SecretField
+          label="确认新密码"
+          value={passwordDraft.confirm_password}
+          onChange={(value) => {
+            setPasswordError("");
+            setPasswordDraft((current) => ({ ...current, confirm_password: value }));
+          }}
+        />
+        {passwordError && <div className="formError">{passwordError}</div>}
+        <button className="button primary" disabled={busy} onClick={saveLoginPassword}>
+          {busy ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />}
+          修改密码
+        </button>
+      </div>
+
       <div className="panel">
         <div className="panelHeader">
           <h2>调度器</h2>
@@ -5301,10 +5940,10 @@ function SettingsView({
             onChange={(value) => setField("scheduler_refresh_interval_minutes", value)}
           />
           <NumberField
-            label="每账号邮件数"
+            label="默认刷新邮件数"
             value={draft.scheduler_refresh_top}
             min={1}
-            max={50}
+            max={1000}
             onChange={(value) => setField("scheduler_refresh_top", value)}
           />
         </div>
@@ -5490,10 +6129,6 @@ function SettingsView({
             </div>
           </>
         )}
-        <button className="button primary" disabled={busy} onClick={() => onSave(draft)}>
-          {busy ? <Loader2 className="spin" size={16} /> : <SettingsIcon size={16} />}
-          保存设置
-        </button>
       </div>
 
       <div className="panel widePanel">
@@ -5732,6 +6367,14 @@ function NumberField({
   max?: number;
   onChange: (value: number) => void;
 }) {
+  function parseValue(raw: string) {
+    const fallback = min || 1;
+    let parsed = Number(raw) || fallback;
+    if (min !== undefined) parsed = Math.max(min, parsed);
+    if (max !== undefined) parsed = Math.min(max, parsed);
+    return parsed;
+  }
+
   return (
     <label className="field grow">
       <span>{label}</span>
@@ -5741,7 +6384,7 @@ function NumberField({
         min={min}
         max={max}
         value={value}
-        onChange={(event) => onChange(Number(event.target.value) || min || 1)}
+        onChange={(event) => onChange(parseValue(event.target.value))}
       />
     </label>
   );
@@ -5901,7 +6544,8 @@ function formatDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat("zh-CN", {
-    month: "short",
+    year: "numeric",
+    month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit"
@@ -5984,11 +6628,14 @@ function formatProviderPreview(rows: Array<{ provider: string }>) {
     .join(" / ");
 }
 
-function createPkceVerifier() {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
-  const bytes = new Uint8Array(64);
-  window.crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+function outlookImportBlockReason(rows: Array<{ email: string; provider: string }>) {
+  const outlookDomains = accountProviderDefinition("graph").domains;
+  const outlookRow = rows.find((row) => {
+    const domain = row.email.trim().toLowerCase().split("@").pop() ?? "";
+    return normalizeAccountProviderId(row.provider) === "graph" || outlookDomains.includes(domain);
+  });
+  if (!outlookRow) return "";
+  return `Outlook/Microsoft 账号请使用授权页面添加，导入页不再支持导入${outlookRow.email ? `：${outlookRow.email}` : ""}`;
 }
 
 function parseTagText(value: string) {

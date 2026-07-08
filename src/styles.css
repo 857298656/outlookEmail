@@ -3,15 +3,18 @@
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
-  background: #fafafa;
-  color: #17202a;
-  --skin-rail: #111827;
-  --skin-rail-text: #f8fafc;
+  background: #f6f7f9;
+  color: #111111;
+  --skin-rail: #111111;
+  --skin-rail-text: #f8f6f1;
   --skin-surface: #ffffff;
-  --skin-subtle: #f8fafc;
-  --skin-accent: #2563eb;
-  --skin-accent-soft: #2563eb18;
-  --skin-accent-border: #2563eb40;
+  --skin-subtle: #faf9f5;
+  --skin-accent: #d97757;
+  --skin-accent-soft: #d977571c;
+  --skin-accent-border: #d9775740;
+  --skin-border: #e6ded3;
+  --skin-ink: #111111;
+  --skin-muted: #77746e;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -22,8 +25,8 @@
 
 body {
   margin: 0;
-  min-width: 1100px;
-  min-height: 720px;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   background: var(--skin-subtle);
 }
@@ -47,6 +50,8 @@ button:disabled {
 .appShell {
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
+  min-width: 1100px;
+  min-height: 720px;
   height: 100vh;
   background: var(--skin-subtle);
   transition: grid-template-columns 160ms ease;
@@ -54,6 +59,36 @@ button:disabled {
 
 .appShell.railExpanded {
   grid-template-columns: 208px minmax(0, 1fr);
+}
+
+.globalLoadingOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.24);
+}
+
+.globalLoadingPanel {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(520px, 100%);
+  padding: 14px 18px;
+  border: 1px solid #dbe3ed;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.22);
+  color: #17202a;
+}
+
+.globalLoadingPanel strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .rail {
@@ -118,7 +153,7 @@ button:disabled {
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #cbd5e1;
+  color: rgba(248, 246, 241, 0.72);
 }
 
 .rail:not(.expanded) .railHeaderToggle {
@@ -126,7 +161,7 @@ button:disabled {
 }
 
 .railHeaderToggle:hover {
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.12);
   color: var(--skin-rail-text);
 }
 
@@ -181,7 +216,7 @@ button:disabled {
 
 .railButton:hover,
 .railButton.active {
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .railSpacer {
@@ -208,7 +243,7 @@ button:disabled {
 
 .railAccountButton:hover,
 .railAccountButton.active {
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .railAvatar {
@@ -218,8 +253,8 @@ button:disabled {
   width: 36px;
   height: 36px;
   border-radius: 999px;
-  background: var(--skin-accent-soft);
-  color: var(--skin-accent);
+  background: rgba(217, 119, 87, 0.18);
+  color: #f2a07f;
   font-weight: 800;
 }
 
@@ -264,9 +299,9 @@ button:disabled {
   z-index: 20;
   width: 260px;
   padding: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 14px;
-  background: #2b2d31;
+  background: #201f1d;
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
 }
 
@@ -319,8 +354,13 @@ button:disabled {
   justify-content: space-between;
   gap: 20px;
   padding: 16px 24px;
-  border-bottom: 1px solid #d7dde4;
+  border-bottom: 1px solid var(--skin-border);
   background: var(--skin-surface);
+}
+
+.topBar > div:first-child {
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
 .topBar h1 {
@@ -331,15 +371,18 @@ button:disabled {
 
 .topBar p {
   margin: 4px 0 0;
-  color: #6b7280;
+  color: var(--skin-muted);
   font-size: 13px;
 }
 
 .topActions {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
+  justify-content: flex-end;
   gap: 12px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .workspaceGrid {
@@ -356,7 +399,7 @@ button:disabled {
 .pane {
   min-width: 0;
   min-height: 0;
-  border: 1px solid #dfe5ec;
+  border: 1px solid var(--skin-border);
   border-radius: 8px;
   overflow: auto;
   background: var(--skin-surface);
@@ -376,7 +419,7 @@ button:disabled {
   z-index: 1;
   height: 52px;
   padding: 0 16px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--skin-border);
   background: var(--skin-surface);
 }
 
@@ -444,20 +487,8 @@ button:disabled {
   gap: 10px;
   align-items: center;
   padding: 11px 14px;
-  border-bottom: 1px solid #edf0f3;
-  color: #17202a;
-}
-
-.mailAvatar {
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: var(--skin-accent-soft);
-  color: var(--skin-accent);
-  font-size: 12px;
-  font-weight: 700;
+  border-bottom: 1px solid var(--skin-border);
+  color: var(--skin-ink);
 }
 
 .accountText {
@@ -465,7 +496,6 @@ button:disabled {
 }
 
 .accountMetaLine,
-.credentialCell,
 .mailTreeMeta {
   display: flex;
   align-items: center;
@@ -474,8 +504,6 @@ button:disabled {
 }
 
 .accountMetaLine small,
-.credentialDetail > span,
-.credentialDetail > small,
 .mailTreeMeta small {
   min-width: 0;
   overflow: hidden;
@@ -484,29 +512,16 @@ button:disabled {
 }
 
 .credentialCell {
-  align-items: flex-start;
-  color: #475569;
-  font-size: 12px;
-}
-
-.credentialDetail {
-  display: grid;
-  gap: 2px;
   min-width: 0;
-}
-
-.credentialDetail > span {
   color: #334155;
+  font-size: 12px;
   font-weight: 700;
+  line-height: 1.35;
+  white-space: normal;
+  word-break: break-word;
 }
 
-.credentialDetail > small {
-  color: #64748b;
-  font-size: 11px;
-}
-
-.credentialCell.readiness-missing .credentialDetail > span,
-.credentialCell.readiness-missing .credentialDetail > small {
+.credentialCell.readiness-missing {
   color: #b45309;
 }
 
@@ -576,7 +591,7 @@ button:disabled {
 
 .mailTreeRow:hover,
 .mailTreeRow.active {
-  border-color: #cfd8e3;
+  border-color: var(--skin-accent-border);
   background: var(--skin-accent-soft);
 }
 
@@ -604,18 +619,10 @@ button:disabled {
 
 .mailTreeAccount {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
   min-height: 48px;
   padding: 7px 8px 7px calc(8px + var(--tree-indent, 0px));
-}
-
-.mailTreeAccount .mailAvatar {
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
-  font-size: 11px;
 }
 
 .mailTreeText {
@@ -791,9 +798,29 @@ button:disabled {
 }
 
 .pagerBar {
+  flex-wrap: wrap;
   justify-content: flex-end;
   border-top: 1px solid #edf0f3;
   border-bottom: 0;
+}
+
+.pagerSummary {
+  margin-right: auto;
+  white-space: nowrap;
+}
+
+.pageJump {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.pageJumpInput {
+  width: 68px;
+  height: 30px;
+  padding: 0 8px;
+  text-align: center;
 }
 
 .messageRow {
@@ -851,8 +878,9 @@ button:disabled {
 }
 
 .messageSubject {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
+  max-width: min(48%, 560px);
   overflow: hidden;
   color: #17202a;
   font-size: 13px;
@@ -862,6 +890,7 @@ button:disabled {
 }
 
 .messageLine .preview {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -960,7 +989,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid #dfe5ec;
+  border: 1px solid var(--skin-border);
   border-radius: 8px;
   background: #fff;
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
@@ -989,7 +1018,7 @@ button:disabled {
   justify-content: space-between;
   gap: 16px;
   padding-bottom: 18px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--skin-border);
 }
 
 .mailPreviewDialog .detailHeader {
@@ -1070,7 +1099,23 @@ button:disabled {
   flex-direction: column;
   gap: 18px;
   overflow: auto;
-  padding: 30px;
+  padding: 18px 30px 30px;
+}
+
+.mailPreviewSubjectBlock {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.mailPreviewSubjectBlock h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #111827;
+  font-size: 24px;
+  font-weight: 750;
+  line-height: 1.3;
 }
 
 .mailPreviewContent .messageBody,
@@ -1096,7 +1141,7 @@ button:disabled {
   width: 100%;
   min-height: 0;
   padding: 24px;
-  border: 1px solid #dfe5ec;
+  border: 1px solid var(--skin-border);
   border-radius: 8px;
   background: #fff;
 }
@@ -1234,7 +1279,7 @@ button:disabled {
   width: 100%;
   max-width: 760px;
   min-height: 360px;
-  border: 1px solid #dfe5ec;
+  border: 1px solid var(--skin-border);
   border-radius: 8px;
   background: #fff;
 }
@@ -1255,7 +1300,7 @@ button:disabled {
 .rawSourcePanel {
   max-width: 760px;
   margin: 16px 0;
-  border: 1px solid #dbe3ec;
+  border: 1px solid var(--skin-border);
   border-radius: 8px;
   background: #fff;
   overflow: hidden;
@@ -1267,8 +1312,8 @@ button:disabled {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
-  border-bottom: 1px solid #e5e7eb;
-  background: #f8fafc;
+  border-bottom: 1px solid var(--skin-border);
+  background: #f6f7f9;
 }
 
 .rawSourceHeader div {
@@ -1370,6 +1415,38 @@ button:disabled {
   grid-template-columns: 300px 320px minmax(320px, 0.9fr) minmax(360px, 1.1fr);
 }
 
+.settingsSaveBar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--skin-border);
+  border-radius: 8px;
+  background: var(--skin-surface);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+.settingsSaveBar > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settingsSaveBar strong {
+  color: #17202a;
+  font-size: 15px;
+}
+
+.settingsSaveBar span {
+  color: #64748b;
+  font-size: 12px;
+}
+
 .accountManagementGrid {
   grid-template-columns: 280px minmax(0, 1fr);
   align-items: stretch;
@@ -1390,7 +1467,7 @@ button:disabled {
 
 .panel {
   min-width: 0;
-  border: 1px solid #dfe5ec;
+  border: 1px solid var(--skin-border);
   border-radius: 8px;
   background: var(--skin-surface);
   padding: 18px;
@@ -1424,7 +1501,7 @@ button:disabled {
   width: min(860px, calc(100vw - 56px));
   max-height: calc(100vh - 56px);
   overflow: hidden;
-  border: 1px solid #dfe5ec;
+  border: 1px solid var(--skin-border);
   border-radius: 8px;
   background: #fff;
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
@@ -1440,7 +1517,7 @@ button:disabled {
 }
 
 .oauthDialogHeader {
-  border-bottom: 1px solid #eef2f7;
+  border-bottom: 1px solid var(--skin-border);
 }
 
 .oauthDialogHeader > div {
@@ -1480,6 +1557,11 @@ button:disabled {
 
 .importDialog {
   width: min(760px, calc(100vw - 56px));
+}
+
+.importDialog .oauthDialogBody {
+  gap: 0;
+  padding-top: 14px;
 }
 
 .groupSettingsDialog {
@@ -1676,6 +1758,24 @@ button:disabled {
   color: #64748b;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.importProviderHelp {
+  margin-bottom: 4px;
+}
+
+.importHelpLink {
+  display: inline;
+  border: 0;
+  background: transparent;
+  color: var(--skin-accent);
+  padding: 0;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.importHelpLink:hover {
+  color: #1d4ed8;
 }
 
 .oauthFieldGrid {
@@ -2122,9 +2222,11 @@ button:disabled {
   width: 100%;
   min-height: 180px;
   resize: vertical;
-  border: 1px solid #cfd8e3;
+  border: 1px solid var(--skin-border);
   border-radius: 8px;
   padding: 12px;
+  background: #fff;
+  color: var(--skin-ink);
 }
 
 .textarea.compact {
@@ -2136,11 +2238,19 @@ button:disabled {
 .input,
 .select {
   height: 38px;
-  border: 1px solid #cfd8e3;
+  border: 1px solid var(--skin-border);
   border-radius: 8px;
   background: #fff;
-  color: #17202a;
+  color: var(--skin-ink);
   padding: 0 11px;
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: var(--skin-accent);
+  box-shadow: 0 0 0 3px var(--skin-accent-soft);
+  outline: none;
 }
 
 .field {
@@ -2161,6 +2271,23 @@ button:disabled {
   margin-top: 12px;
 }
 
+.importTypeLine {
+  align-items: center;
+  margin: 0 0 14px;
+}
+
+.importTypeLine .importTypeField {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 240px;
+  margin-bottom: 0;
+}
+
+.importTypeLine .importTypeField .select {
+  min-width: 180px;
+}
+
 .themePresetGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2173,7 +2300,7 @@ button:disabled {
   align-items: center;
   gap: 10px;
   min-height: 52px;
-  border: 1px solid #dfe5ec;
+  border: 1px solid var(--skin-border);
   border-radius: 8px;
   background: var(--skin-surface);
   padding: 8px;
@@ -2224,7 +2351,7 @@ button:disabled {
 .accentPicker input[type="color"] {
   width: 48px;
   height: 32px;
-  border: 1px solid #dfe5ec;
+  border: 1px solid var(--skin-border);
   border-radius: 8px;
   padding: 2px;
   background: var(--skin-surface);
@@ -2239,7 +2366,7 @@ button:disabled {
   height: 28px;
   border: 2px solid #fff;
   border-radius: 999px;
-  box-shadow: 0 0 0 1px #cbd5e1;
+  box-shadow: 0 0 0 1px var(--skin-border);
 }
 
 .accentSwatch.active {
@@ -2268,18 +2395,19 @@ button:disabled {
 }
 
 .button.primary {
-  background: var(--skin-accent);
+  border-color: #111111;
+  background: #111111;
   color: #fff;
 }
 
 .button.primary:hover:not(:disabled) {
-  filter: brightness(0.9);
+  background: #25211e;
 }
 
 .button.secondary {
-  border-color: #cfd8e3;
+  border-color: var(--skin-border);
   background: var(--skin-surface);
-  color: #1f2937;
+  color: var(--skin-ink);
 }
 
 .button.secondary:hover:not(:disabled),
@@ -2507,7 +2635,7 @@ button:disabled {
 
 .accountInventoryPanel .tableHeader,
 .accountInventoryPanel .tableRow {
-  grid-template-columns: 32px minmax(220px, 1.2fr) minmax(120px, 0.6fr) 110px 150px 76px;
+  grid-template-columns: 32px minmax(220px, 1.2fr) minmax(120px, 0.6fr) 110px minmax(100px, 0.5fr) 76px;
 }
 
 .accountRowActions {
@@ -2752,6 +2880,107 @@ button:disabled {
   grid-template-columns: 150px minmax(190px, 1fr) 100px 100px minmax(240px, 1.4fr) 90px;
 }
 
+.workspaceKeyTable {
+  overflow-x: auto;
+}
+
+.workspaceKeyTable .logHeader,
+.workspaceKeyTable .logRow {
+  grid-template-columns: minmax(160px, 1fr) 148px 88px;
+  min-width: 420px;
+}
+
+.workspaceKeyTable .logHeader > span:first-child,
+.workspaceKeyTable .logRow > span:first-child {
+  text-align: left;
+}
+
+.workspaceKeyTable .logHeader > span:nth-child(2),
+.workspaceKeyTable .logRow > span:nth-child(2),
+.workspaceKeyTable .logHeader > span:last-child {
+  text-align: center;
+}
+
+.workspaceKeyTable .logRow > .rowActions {
+  justify-self: center;
+  overflow: visible;
+  white-space: nowrap;
+}
+
+.workspaceKeyDeleteButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.workspaceKeyGenerateAction {
+  margin: 14px 0 18px;
+}
+
+.workspaceKeyDialog {
+  width: min(640px, calc(100vw - 56px));
+}
+
+.workspaceKeyDialogBody {
+  gap: 18px;
+}
+
+.workspaceKeyDialogHint {
+  margin: 0;
+  color: #7c2d12;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.workspaceKeyDialogFooter {
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.workspaceKeyCard {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  padding: 22px 20px;
+  border: 1px solid #f0c9b8;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fffaf7 0%, #fff4ee 100%);
+  color: #111827;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.workspaceKeyCard:hover {
+  border-color: #e7a98f;
+  box-shadow: 0 10px 28px rgba(217, 119, 87, 0.14);
+  transform: translateY(-1px);
+}
+
+.workspaceKeyCardValue {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 22px;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.workspaceKeyCardAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #9a3412;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.monoText {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
 .retryQueueTable .logHeader,
 .retryQueueTable .logRow {
   grid-template-columns: 140px 120px 100px minmax(160px, 1fr) minmax(190px, 1.1fr) 90px 140px minmax(220px, 1.4fr) 80px;
@@ -2842,36 +3071,139 @@ code {
 .centerScreen {
   display: grid;
   place-items: center;
-  width: 100vw;
+  width: 100%;
+  min-height: 0;
+  padding: 0 24px 20px;
+  background: #f6f7f9;
+}
+
+.loginShell {
+  display: grid;
+  grid-template-rows: auto 1fr;
   height: 100vh;
-  background: #fafafa;
+  overflow: hidden;
+  background: #f6f7f9;
+}
+
+.loginChrome {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  height: 40px;
+  padding: 0 4px 0 10px;
+  background: #f6f7f9;
+}
+
+.loginChromeDrag {
+  height: 100%;
+}
+
+.loginChromeControls {
+  display: flex;
+  align-items: center;
+}
+
+.loginChromeButton {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #4a4a45;
+}
+
+.loginChromeButton:hover {
+  background: #efe9df;
+}
+
+.loginChromeClose:hover {
+  background: #e81123;
+  color: #fff;
 }
 
 .lockPanel {
-  width: min(440px, calc(100vw - 40px));
-  border: 1px solid rgba(148, 163, 184, 0.34);
-  border-radius: 8px;
-  background: #fff;
-  padding: 28px;
-  box-shadow: 0 20px 64px rgba(15, 23, 42, 0.1);
+  display: grid;
+  justify-items: center;
+  width: min(340px, calc(100% - 24px));
+  border: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
 }
 
-.lockIcon {
+.lockMark {
+  position: relative;
   display: grid;
   place-items: center;
-  width: 56px;
-  height: 56px;
-  border-radius: 8px;
-  background: #111827;
-  color: #fff;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 18px;
+  color: var(--skin-accent);
+}
+
+.lockMark span {
+  width: 60px;
+  height: 60px;
+  background: repeating-conic-gradient(from 3deg, var(--skin-accent) 0deg 8deg, transparent 8deg 24deg);
+  -webkit-mask: radial-gradient(circle, transparent 0 15px, #000 16px 100%);
+  mask: radial-gradient(circle, transparent 0 15px, #000 16px 100%);
+}
+
+.lockMark::after {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--skin-accent);
+  content: "";
+}
+
+.lockCopy {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  margin-bottom: 22px;
+  text-align: center;
+}
+
+.lockCopy > span {
+  color: var(--skin-accent);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .lockPanel .input {
   width: 100%;
+  height: 42px;
+  border-color: #ded7cc;
+  border-radius: 10px;
+  padding: 0 14px;
+  background: #fff;
+  color: #111111;
+  font-size: 14px;
+}
+
+.lockField {
+  display: grid;
+  gap: 6px;
+  width: min(340px, 100%);
+  margin-bottom: 10px;
+  color: #77746e;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .lockPanel .button {
-  margin-top: 14px;
+  width: min(340px, 100%);
+  min-height: 44px;
+  margin-top: 8px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 700;
 }
 
 .lockPanel .formError + .button {
@@ -2879,19 +3211,38 @@ code {
 }
 
 .lockPanel h1 {
-  margin: 20px 0 8px;
-  font-size: 24px;
+  margin: 0;
+  color: #111111;
+  font-family: Georgia, "Times New Roman", ui-serif, serif;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.15;
 }
 
 .lockPanel p {
-  margin: 0 0 18px;
-  color: #64748b;
-  line-height: 1.5;
+  margin: 0;
+  color: #77746e;
+  font-size: 14px;
+  line-height: 1.4;
+  max-width: 300px;
+}
+
+.lockPanel .formError {
+  width: min(340px, 100%);
+  margin: 0 0 4px;
+  white-space: normal;
 }
 
 .formError,
 .errorText {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   color: #b91c1c;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .formError {
@@ -2905,8 +3256,14 @@ code {
 }
 
 .notice {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   color: #047857;
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .toastNotice {
@@ -2987,6 +3344,19 @@ code {
 
   .importDialogControls {
     align-items: stretch;
+  }
+
+  .importTypeField {
+    min-width: 0;
+  }
+
+  .importTypeLine .importTypeField {
+    min-width: 0;
+  }
+
+  .importTypeLine .importTypeField .select {
+    min-width: 0;
+    width: min(220px, 100%);
   }
 
   .dialogMeta {

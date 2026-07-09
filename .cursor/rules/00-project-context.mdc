@@ -5,12 +5,12 @@ alwaysApply: true
 
 # OutlookEmail Desktop
 
-**Read `AGENTS.md` first.** Docs synced 2026-07-08.
+**Read `AGENTS.md` first.** Docs synced 2026-07-09.
 
 ## Snapshot
 
 - Tauri 2 + React/Vite/TS + Rust commands + SQLite (local-first, single-user desktop).
-- Core done: Graph OAuth, IMAP sync (Gmail/QQ/163 presets), mailbox search/preview dialog, temp mail, forwarding, WebDAV backup, scheduler, automation dashboard, project pools, retry queue, themes, share exports.
+- Core done: Graph OAuth, IMAP sync (Gmail/QQ/163 presets), mailbox search/preview dialog, local mail share exports, scheduler (mail refresh only), workspace keys, themes (built-in preset).
 - **M9 code complete;** remaining work = real Gmail/QQ/163 manual QA.
 - **OAuth = Microsoft only** (`graph`, Outlook `imap`). Gmail uses IMAP app password; Gmail OAuth rejected in backend.
 
@@ -24,4 +24,4 @@ alwaysApply: true
 
 - No web service / extension / SaaS / Gmail OAuth unless user explicitly requests.
 - Prefer minimal diffs; match existing patterns.
-- Provider or mail changes: run `pnpm test` and `cargo test`.
+- Provider or mail changes: run `pnpm test` and `pnpm cargo:test`.

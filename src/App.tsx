@@ -1,15 +1,11 @@
-﻿import {
-  Activity,
-  Archive,
+import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  Cloud,
   Copy,
   Download,
   ExternalLink,
   FileText,
-  FolderKanban,
   Inbox,
   KeyRound,
   Loader2,
@@ -21,7 +17,6 @@
   PanelLeftOpen,
   Plus,
   RefreshCw,
-  RotateCcw,
   Search,
   Settings as SettingsIcon,
   Share2,
@@ -30,7 +25,6 @@
   Trash2,
   Upload,
   Users,
-  WandSparkles,
   X,
   XCircle
 } from "lucide-react";
@@ -58,13 +52,8 @@ import {
 import type {
   Account,
   AppStatus,
-  AutomationObservability,
-  AutomationRun,
-  AutomationRunQuery,
-  BackupLog,
   ClearLocalDataInput,
   ExportResult,
-  ForwardingLog,
   Group,
   ImportAccountsResult,
   LocalRetentionSummary,
@@ -75,22 +64,14 @@ import type {
   OAuthSaveAccountInput,
   OAuthSaveAccountResult,
   OAuthTokenResult,
-  Project,
-  ProjectAccount,
-  RefreshLog,
-  RetryQueueItem,
-  RemoteSyncFailure,
   SchedulerStatus,
   Settings,
   Tag,
-  TempEmail,
-  TempEmailMessage,
-  CloudflareChannel,
   UpdateLoginPasswordInput,
   WorkspaceKeyRecord
 } from "./types";
 
-type View = "mail" | "accounts" | "refresh" | "automation" | "temp" | "projects" | "settings";
+type View = "mail" | "accounts" | "settings";
 type MailFilters = {
   search: string;
   readState: "all" | "read" | "unread";
@@ -120,9 +101,9 @@ const themePresets = [
 
 type SkinStyle = CSSProperties & Record<`--${string}`, string>;
 
-function buildSkin(settings: Settings | null): { className: string; style: SkinStyle } {
-  const preset = themePresets.find((item) => item.id === settings?.appearance_theme) ?? themePresets[0];
-  const accent = normalizeAccent(settings?.accent_color);
+function buildSkin(_settings: Settings | null): { className: string; style: SkinStyle } {
+  const preset = themePresets[0];
+  const accent = normalizeAccent(undefined);
   return {
     className: `skin-${preset.id}`,
     style: {
@@ -198,7 +179,6 @@ function accountMatchesSearch(account: Account, tokens: string[]) {
       account.last_refresh_status,
       formatStatus(account.last_refresh_status),
       account.last_refresh_error,
-      account.forward_enabled ? "转发 已启用 enabled forwarding" : "未转发 disabled",
       account.has_client_id ? "Client ID" : "",
       account.has_refresh_token ? "Outlook Graph OAuth" : "",
       account.has_imap_password ? "IMAP" : "",
@@ -229,27 +209,14 @@ function App() {
   const [tags, setTags] = useState<Tag[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [messages, setMessages] = useState<MailMessage[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectAccounts, setProjectAccounts] = useState<ProjectAccount[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
-  const [tempEmails, setTempEmails] = useState<TempEmail[]>([]);
-  const [tempMessages, setTempMessages] = useState<TempEmailMessage[]>([]);
-  const [cloudflareChannels, setCloudflareChannels] = useState<CloudflareChannel[]>([]);
-  const [forwardingLogs, setForwardingLogs] = useState<ForwardingLog[]>([]);
-  const [backupLogs, setBackupLogs] = useState<BackupLog[]>([]);
   const [workspaceKeyRecords, setWorkspaceKeyRecords] = useState<WorkspaceKeyRecord[]>([]);
   const [mailShareRecords, setMailShareRecords] = useState<MailShareRecord[]>([]);
-  const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
-  const [retryQueue, setRetryQueue] = useState<RetryQueueItem[]>([]);
-  const [refreshLogs, setRefreshLogs] = useState<RefreshLog[]>([]);
-  const [automationObservability, setAutomationObservability] = useState<AutomationObservability | null>(null);
   const [localRetention, setLocalRetention] = useState<LocalRetentionSummary | null>(null);
   const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<number | "all">("all");
   const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>();
   const [selectedMessageId, setSelectedMessageId] = useState<number | undefined>();
-  const [selectedTempEmail, setSelectedTempEmail] = useState<string | undefined>();
-  const [selectedTempMessageId, setSelectedTempMessageId] = useState<string | undefined>();
   const [folder, setFolder] = useState("all");
   const [mailFilters, setMailFilters] = useState<MailFilters>({
     search: "",
@@ -276,7 +243,6 @@ function App() {
 
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const selectedMessage = messages.find((message) => message.id === selectedMessageId);
-  const selectedTempMessage = tempMessages.find((message) => message.message_id === selectedTempMessageId);
   const railIdentity = selectedAccount?.email ?? accounts[0]?.email ?? "管理员";
   const railInitial = railIdentity === "管理员" ? "管" : railIdentity.slice(0, 1).toUpperCase();
   const skin = buildSkin(settings);
@@ -434,62 +400,22 @@ function App() {
     setSelectedMessageIds([]);
   }
 
-  async function loadProjects(projectId?: number) {
-    const nextProjects = await api.listProjects();
-    setProjects(nextProjects);
-    const selectedProject = nextProjects.find((project) => project.id === projectId) ?? nextProjects[0];
-    setProjectAccounts(selectedProject ? await api.listProjectAccounts(selectedProject.id) : []);
-  }
 
   async function loadMailShares() {
     setMailShareRecords(await api.listMailShareRecords(80));
   }
 
-  async function loadAutomation() {
-    const [
-      nextSettings,
-      nextForwardingLogs,
-      nextBackupLogs,
-      nextWorkspaceKeyRecords,
-      nextAutomationRuns,
-      nextRetryQueue,
-      nextRefreshLogs,
-      nextSchedulerStatus,
-      nextAutomationObservability,
-      nextLocalRetention
-    ] = await Promise.all([
+  async function loadSettingsData() {
+    const [nextSettings, nextWorkspaceKeyRecords, nextSchedulerStatus, nextLocalRetention] = await Promise.all([
       api.getSettings(),
-      api.listForwardingLogs(80),
-      api.listBackupLogs(40),
       api.listWorkspaceKeyRecords(),
-      api.listAutomationRuns({}, 80),
-      api.listRetryQueue({}, 80),
-      api.listRefreshLogs(null, 100),
       api.schedulerStatus(),
-      api.getAutomationObservability(),
       api.getLocalRetentionSummary()
     ]);
     setSettings(nextSettings);
-    setForwardingLogs(nextForwardingLogs);
-    setBackupLogs(nextBackupLogs);
     setWorkspaceKeyRecords(nextWorkspaceKeyRecords);
-    setAutomationRuns(nextAutomationRuns);
-    setRetryQueue(nextRetryQueue);
-    setRefreshLogs(nextRefreshLogs);
     setSchedulerStatus(nextSchedulerStatus);
-    setAutomationObservability(nextAutomationObservability);
     setLocalRetention(nextLocalRetention);
-  }
-
-  async function loadTempWorkspace(email: string | undefined | null = selectedTempEmail) {
-    const [nextTempEmails, nextChannels] = await Promise.all([api.listTempEmails(), api.listCloudflareChannels()]);
-    setTempEmails(nextTempEmails);
-    setCloudflareChannels(nextChannels);
-    const nextEmail = email === null ? nextTempEmails[0]?.email : email ?? nextTempEmails[0]?.email;
-    setSelectedTempEmail(nextEmail);
-    const nextMessages = nextEmail ? await api.listTempEmailMessages(nextEmail) : [];
-    setTempMessages(nextMessages);
-    setSelectedTempMessageId(nextMessages[0]?.message_id);
   }
 
   useEffect(() => {
@@ -504,10 +430,8 @@ function App() {
   useEffect(() => {
     if (!status?.unlocked) return;
     loadWorkspace().catch((err) => setError(readError(err)));
-    loadProjects().catch((err) => setError(readError(err)));
     loadMailShares().catch((err) => setError(readError(err)));
-    loadAutomation().catch((err) => setError(readError(err)));
-    loadTempWorkspace().catch((err) => setError(readError(err)));
+    loadSettingsData().catch((err) => setError(readError(err)));
   }, [status?.unlocked]);
 
   useEffect(() => {
@@ -572,7 +496,7 @@ function App() {
       setMailPage(0);
       await loadWorkspace(focusAccountId, folder, mailFilters, 0);
       await loadStatus();
-      await loadAutomation();
+      await loadSettingsData();
       setNotice(
         importedAccounts.length > 0
           ? `账号已导入 ${result.imported} 个，刷新成功 ${refreshSucceeded} 个，失败 ${refreshFailed} 个`
@@ -682,46 +606,6 @@ function App() {
           }}
         >
           <Users size={20} />
-        </IconButton>
-        <IconButton
-          active={view === "refresh"}
-          title="刷新"
-          onClick={() => {
-            setView("refresh");
-            setRailMenuOpen(false);
-          }}
-        >
-          <RefreshCw size={20} />
-        </IconButton>
-        <IconButton
-          active={view === "automation"}
-          title="自动化"
-          onClick={() => {
-            setView("automation");
-            setRailMenuOpen(false);
-          }}
-        >
-          <Activity size={20} />
-        </IconButton>
-        <IconButton
-          active={view === "temp"}
-          title="临时邮箱"
-          onClick={() => {
-            setView("temp");
-            setRailMenuOpen(false);
-          }}
-        >
-          <Cloud size={20} />
-        </IconButton>
-        <IconButton
-          active={view === "projects"}
-          title="项目"
-          onClick={() => {
-            setView("projects");
-            setRailMenuOpen(false);
-          }}
-        >
-          <FolderKanban size={20} />
         </IconButton>
         <div className="railSpacer" />
         <div className="railAccountArea" ref={railMenuRef}>
@@ -867,7 +751,7 @@ function App() {
                 const result = await api.markMessagesRead(messageIds, isRead);
                 setNotice(formatResultMessage(result.message));
                 await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
-                await loadAutomation();
+                await loadSettingsData();
               })
             }
             onDeleteMessages={(messageIds) =>
@@ -876,7 +760,7 @@ function App() {
                 setNotice(formatResultMessage(result.message));
                 await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
                 await loadStatus();
-                await loadAutomation();
+                await loadSettingsData();
               })
             }
             onCopyVerificationCode={(message) => void copyVerificationCode(message)}
@@ -954,22 +838,6 @@ function App() {
                 setBusy(false);
               }
             }}
-            onRetryRemoteFailure={(retryId) =>
-              runAction(async () => {
-                const result = await api.retryQueueItem(retryId);
-                setNotice(formatResultMessage(result.message));
-                await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
-                await loadAutomation();
-              })
-            }
-            onDismissRemoteFailure={(retryId) =>
-              runAction(async () => {
-                const result = await api.dismissRetryItem(retryId);
-                setNotice(formatResultMessage(result.message));
-                await loadMailboxMessages(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
-                await loadAutomation();
-              })
-            }
           />
         )}
 
@@ -1054,265 +922,19 @@ function App() {
           />
         )}
 
-        {view === "refresh" && (
-          <RefreshManagementView
-            accounts={accounts}
-            retryQueue={retryQueue}
-            refreshLogs={refreshLogs}
-            automationRuns={automationRuns}
-            schedulerStatus={schedulerStatus}
-            busy={busy}
-            onRefreshAccount={(accountId) =>
-              runAction(
-                async () => {
-                  const result = await api.runRefreshJob(accountId);
-                  setNotice(formatResultMessage(result.message));
-                  await loadWorkspace(accountId, folder, mailFilters, mailPage);
-                  await loadAutomation();
-                  await loadStatus();
-                },
-                undefined,
-                "正在刷新账号邮件..."
-              )
-            }
-            onRefreshAll={() =>
-              runAction(
-                async () => {
-                  const result = await api.runRefreshJob(undefined);
-                  setNotice(formatResultMessage(result.message));
-                  await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
-                  await loadAutomation();
-                  await loadStatus();
-                },
-                undefined,
-                "正在刷新全部账号邮件..."
-              )
-            }
-            onRunRetryQueue={() =>
-              runAction(async () => {
-                const result = await api.runRetryQueue(20);
-                setNotice(formatResultMessage(result.message));
-                await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
-                await loadAutomation();
-              })
-            }
-            onRetryQueueItem={(retryId) =>
-              runAction(async () => {
-                const result = await api.retryQueueItem(retryId);
-                setNotice(formatResultMessage(result.message));
-                await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
-                await loadAutomation();
-              })
-            }
-            onDismissRetryItem={(retryId) =>
-              runAction(async () => {
-                const result = await api.dismissRetryItem(retryId);
-                setNotice(formatResultMessage(result.message));
-                await loadAutomation();
-              })
-            }
-          />
-        )}
-
-        {view === "automation" && (
-          <AutomationDashboardView
-            observability={automationObservability}
-            automationRuns={automationRuns}
-            retryQueue={retryQueue}
-            schedulerStatus={schedulerStatus}
-            busy={busy}
-            onFilterAutomationRuns={(query) =>
-              runAction(async () => {
-                setAutomationRuns(await api.listAutomationRuns(query, 80));
-                setAutomationObservability(await api.getAutomationObservability());
-              })
-            }
-            onClearAutomationRuns={(query) =>
-              runAction(async () => {
-                const result = await api.clearAutomationRuns(query);
-                setNotice(formatResultMessage(result.message));
-                setAutomationRuns(await api.listAutomationRuns(query, 80));
-                setAutomationObservability(await api.getAutomationObservability());
-              })
-            }
-            onRunRetryQueue={() =>
-              runAction(async () => {
-                const result = await api.runRetryQueue(20);
-                setNotice(formatResultMessage(result.message));
-                await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
-                await loadAutomation();
-              })
-            }
-            onRetryQueueItem={(retryId) =>
-              runAction(async () => {
-                const result = await api.retryQueueItem(retryId);
-                setNotice(formatResultMessage(result.message));
-                await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
-                await loadAutomation();
-              })
-            }
-            onDismissRetryItem={(retryId) =>
-              runAction(async () => {
-                const result = await api.dismissRetryItem(retryId);
-                setNotice(formatResultMessage(result.message));
-                await loadAutomation();
-              })
-            }
-          />
-        )}
-
-        {view === "temp" && (
-          <TempEmailsView
-            tempEmails={tempEmails}
-            messages={tempMessages}
-            channels={cloudflareChannels}
-            selectedEmail={selectedTempEmail}
-            selectedMessage={selectedTempMessage}
-            busy={busy}
-            onSelect={(email) =>
-              runAction(async () => {
-                setSelectedTempEmail(email);
-                const nextMessages = await api.listTempEmailMessages(email);
-                setTempMessages(nextMessages);
-                setSelectedTempMessageId(nextMessages[0]?.message_id);
-              })
-            }
-            onMessageSelect={setSelectedTempMessageId}
-            onGenerate={(input) =>
-              runAction(async () => {
-                const created = await api.generateTempEmail(input);
-                await loadTempWorkspace(created.email);
-              }, "临时邮箱已生成")
-            }
-            onGenerateCloudflareBatch={(input) =>
-              runAction(async () => {
-                const result = await api.generateCloudflareTempEmails(input);
-                await loadTempWorkspace();
-                setNotice(`已生成 ${result.imported} 个 Cloudflare 地址，跳过 ${result.skipped} 个`);
-              })
-            }
-            onImport={async (input) => {
-              setBusy(true);
-              setError(null);
-              setNotice(null);
-              try {
-                const result = await api.importTempEmails(input);
-                await loadTempWorkspace();
-                setNotice(`已导入 ${result.imported} 个，跳过 ${result.skipped} 个`);
-                return result;
-              } catch (err) {
-                setError(readError(err));
-                throw err;
-              } finally {
-                setBusy(false);
-              }
-            }}
-            onRefresh={(email) =>
-              runAction(async () => {
-                const result = await api.refreshTempEmailMessages(email);
-                setNotice(formatResultMessage(result.message));
-                await loadTempWorkspace(email);
-              })
-            }
-            onUpdate={(input) =>
-              runAction(async () => {
-                await api.updateTempEmail(input);
-                await loadTempWorkspace(input.email);
-              }, "临时邮箱已保存")
-            }
-            onDelete={(email) =>
-              runAction(async () => {
-                await api.deleteTempEmail(email);
-                await loadTempWorkspace(undefined);
-              }, "临时邮箱已删除")
-            }
-            onSaveChannel={(input) =>
-              runAction(async () => {
-                await api.upsertCloudflareChannel(input);
-                await loadTempWorkspace(selectedTempEmail);
-              }, "Cloudflare 通道已保存")
-            }
-            onDeleteChannel={(channelId) =>
-              runAction(async () => {
-                await api.deleteCloudflareChannel(channelId);
-                await loadTempWorkspace(selectedTempEmail);
-              }, "Cloudflare 通道已删除")
-            }
-            onTestChannel={(channelId) =>
-              runAction(async () => {
-                const result = await api.testCloudflareChannel(channelId);
-                setNotice(formatResultMessage(result.message));
-              })
-            }
-          />
-        )}
-
-        {view === "projects" && (
-          <ProjectsView
-            projects={projects}
-            accounts={projectAccounts}
-            groups={groups}
-            tags={tags}
-            busy={busy}
-            onCreate={(input) =>
-              runAction(async () => {
-                const project = await api.createProject(input);
-                await loadProjects(project.id);
-              }, "项目已创建")
-            }
-            onSelect={(projectId) =>
-              runAction(async () => {
-                setProjectAccounts(await api.listProjectAccounts(projectId));
-              })
-            }
-            onSync={(projectId) =>
-              runAction(async () => {
-                await api.syncProjectScope(projectId);
-                await loadProjects(projectId);
-              }, "项目已同步")
-            }
-            onClaim={(projectId) =>
-              runAction(async () => {
-                const claimed = await api.claimProjectAccount({ project_id: projectId, lease_minutes: 30 });
-                await loadProjects(projectId);
-                setNotice(claimed ? `已领取 ${claimed.email}` : "没有可领取账号");
-              })
-            }
-            onExport={(projectId) =>
-              runAction(async () => {
-                const result = await api.exportProjectAccounts(projectId);
-                setNotice(exportNotice(result));
-              })
-            }
-            onAction={(projectId, action, projectAccountId) =>
-              runAction(async () => {
-                if (action === "success") await api.completeProjectAccountSuccess(projectAccountId);
-                if (action === "failed") await api.completeProjectAccountFailed(projectAccountId);
-                if (action === "release") await api.releaseProjectAccount(projectAccountId);
-                if (action === "remove") await api.removeProjectAccount(projectAccountId);
-                if (action === "restore") await api.restoreProjectAccount(projectAccountId);
-                await loadProjects(projectId);
-              }, "项目账号已更新")
-            }
-          />
-        )}
 
         {view === "settings" && settings && (
           <SettingsView
             status={status}
             settings={settings}
-            forwardingLogs={forwardingLogs}
-            backupLogs={backupLogs}
             workspaceKeyRecords={workspaceKeyRecords}
-            automationRuns={automationRuns}
-            retryQueue={retryQueue}
             localRetention={localRetention}
             schedulerStatus={schedulerStatus}
             busy={busy}
             onSave={(nextSettings) =>
               runAction(async () => {
                 setSettings(await api.updateSettings(nextSettings));
-                await loadAutomation();
+                await loadSettingsData();
               }, "设置已保存")
             }
             onUpdateLoginPassword={async (input) => {
@@ -1341,54 +963,6 @@ function App() {
               await api.deleteWorkspaceKeyRecord(recordId);
               setWorkspaceKeyRecords(await api.listWorkspaceKeyRecords());
             }}
-            onRunForwarding={() =>
-              runAction(async () => {
-                const result = await api.runForwardingJob({ limit: 50 });
-                setNotice(formatResultMessage(result.message));
-                await loadAutomation();
-              })
-            }
-            onRunBackup={() =>
-              runAction(async () => {
-                const result = await api.runBackupJob();
-                setNotice(formatResultMessage(result.message));
-                await loadAutomation();
-              })
-            }
-            onRestoreBackup={(backupLogId) =>
-              runAction(async () => {
-                const result = await api.restoreBackup(backupLogId);
-                const restoredFilters: MailFilters = {
-                  search: "",
-                  readState: "all",
-                  attachmentFilter: "all",
-                  sortBy: "date",
-                  sortOrder: "desc"
-                };
-                setFolder("all");
-                setMailFilters(restoredFilters);
-                setMailPage(0);
-                setNotice(`${formatResultMessage(result.message)}。安全快照：${result.safety_backup_path}`);
-                await loadStatus();
-                await loadWorkspace(null, "all", restoredFilters, 0);
-                await loadProjects();
-                await loadMailShares();
-                await loadAutomation();
-                await loadTempWorkspace(null);
-              })
-            }
-            onFilterAutomationRuns={(query) =>
-              runAction(async () => {
-                setAutomationRuns(await api.listAutomationRuns(query, 80));
-              })
-            }
-            onClearAutomationRuns={(query) =>
-              runAction(async () => {
-                const result = await api.clearAutomationRuns(query);
-                setNotice(formatResultMessage(result.message));
-                setAutomationRuns(await api.listAutomationRuns(query, 80));
-              })
-            }
             onClearLocalData={(input) =>
               runAction(async () => {
                 const result = await api.clearLocalData(input);
@@ -1396,29 +970,7 @@ function App() {
                 await loadStatus();
                 await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage);
                 await loadMailShares();
-                await loadTempWorkspace(selectedTempEmail);
-                await loadAutomation();
-              })
-            }
-            onRunRetryQueue={() =>
-              runAction(async () => {
-                const result = await api.runRetryQueue(20);
-                setNotice(formatResultMessage(result.message));
-                await loadAutomation();
-              })
-            }
-            onRetryQueueItem={(retryId) =>
-              runAction(async () => {
-                const result = await api.retryQueueItem(retryId);
-                setNotice(formatResultMessage(result.message));
-                await loadAutomation();
-              })
-            }
-            onDismissRetryItem={(retryId) =>
-              runAction(async () => {
-                const result = await api.dismissRetryItem(retryId);
-                setNotice(formatResultMessage(result.message));
-                setRetryQueue(await api.listRetryQueue({}, 80));
+                await loadSettingsData();
               })
             }
           />
@@ -1663,9 +1215,7 @@ function MailWorkspace({
   onSaveOAuthAccount,
   onDownloadAttachment,
   onDownloadAllAttachments,
-  onViewRawMessage,
-  onRetryRemoteFailure,
-  onDismissRemoteFailure
+  onViewRawMessage
 }: {
   groups: Group[];
   settings: Settings | null;
@@ -1705,8 +1255,6 @@ function MailWorkspace({
   onDownloadAttachment: (message: MailMessage, attachmentId: string) => void | Promise<void>;
   onDownloadAllAttachments: (message: MailMessage) => Promise<void>;
   onViewRawMessage: (message: MailMessage) => Promise<MailRawContent>;
-  onRetryRemoteFailure: (retryId: number) => void;
-  onDismissRemoteFailure: (retryId: number) => void;
 }) {
   const totalPages = Math.max(1, Math.ceil(totalCount / mailPageSize));
   const lastPage = totalPages - 1;
@@ -2160,12 +1708,6 @@ function MailWorkspace({
               <span className="sender">{formatSenderDisplayName(message.sender)}</span>
               <span className="messageLine">
                 <strong className="messageSubject">{message.subject || "（无主题）"}</strong>
-                {message.remote_sync_failure && (
-                  <span className="remoteFailureInline">
-                    <XCircle size={12} />
-                    {formatRemoteFailureAction(message.remote_sync_failure.action)} 远端同步失败
-                  </span>
-                )}
                 <span className="preview">{formatMessageListPreview(message)}</span>
               </span>
             </button>
@@ -2309,14 +1851,6 @@ function MailWorkspace({
               </div>
             </div>
             <div className="mailPreviewContent">
-              {selectedMessage.remote_sync_failure && (
-                <RemoteFailurePanel
-                  failure={selectedMessage.remote_sync_failure}
-                  busy={busy}
-                  onRetry={onRetryRemoteFailure}
-                  onDismiss={onDismissRemoteFailure}
-                />
-              )}
               <MailSharePanel records={visibleShareRecords} busy={busy} onRevoke={onRevokeMailShare} />
               <div className="mailPreviewSubjectBlock">
                 <h2>{selectedMessage.subject || "（无主题）"}</h2>
@@ -2591,24 +2125,8 @@ function AccountsView({
                 })
               }
             >
-              <FolderKanban size={14} />
+              <Tags size={14} />
               移动
-            </button>
-            <button
-              className="button compact secondary"
-              disabled={busy}
-              onClick={() => onBatchAccounts({ account_ids: selectedAccountIds, action: "set_forward", forward_enabled: true })}
-            >
-              <CheckCircle2 size={14} />
-              转发开
-            </button>
-            <button
-              className="button compact secondary"
-              disabled={busy}
-              onClick={() => onBatchAccounts({ account_ids: selectedAccountIds, action: "set_forward", forward_enabled: false })}
-            >
-              <XCircle size={14} />
-              转发关
             </button>
             <select
               className="select"
@@ -2898,7 +2416,7 @@ function GroupSettingsDialog({
         <div className="oauthDialogHeader">
           <div>
             <span className="oauthDialogIcon">
-              <FolderKanban size={18} />
+              <Tags size={18} />
             </span>
             <h2 id="groupSettingsTitle">分组设置</h2>
           </div>
@@ -3069,7 +2587,6 @@ type OAuthAccountSaveDraft = {
   password: string;
   client_id: string;
   group_id: number | null;
-  forward_enabled: boolean;
   callback_url: string;
 };
 
@@ -3340,7 +2857,6 @@ function OAuthAccountSaveDialog({
     password: "",
     client_id: "",
     group_id: initialGroupId,
-    forward_enabled: false,
     callback_url: ""
   });
   const [authUrl, setAuthUrl] = useState("");
@@ -3352,7 +2868,6 @@ function OAuthAccountSaveDialog({
     client_id: string;
     group_id: number | null;
     group_name: string;
-    forward_enabled: boolean;
     refresh_token: string;
     refresh_token_preview: string;
     scope: string;
@@ -3485,7 +3000,6 @@ function OAuthAccountSaveDialog({
         client_id: clientId,
         group_id: draft.group_id ?? null,
         group_name: group?.name ?? "",
-        forward_enabled: draft.forward_enabled,
         refresh_token: result.refresh_token,
         refresh_token_preview: result.refresh_token_preview,
         scope: result.scope,
@@ -3518,7 +3032,6 @@ function OAuthAccountSaveDialog({
         email: draft.email.trim(),
         password: draft.password || undefined,
         group_id: draft.group_id ?? undefined,
-        forward_enabled: draft.forward_enabled,
         client_id: preview?.client_id ?? activeClientId,
         redirect_uri: redirectUri,
         code_or_url: preview ? undefined : draft.callback_url.trim(),
@@ -3608,14 +3121,6 @@ function OAuthAccountSaveDialog({
                 </select>
               </label>
             </div>
-            <label className="checkLine oauthForwardToggle">
-              <input
-                type="checkbox"
-                checked={draft.forward_enabled}
-                onChange={(event) => updateDraft({ forward_enabled: event.target.checked })}
-              />
-              <span>保存后启用邮件转发</span>
-            </label>
           </section>
 
           <section className="oauthStep">
@@ -3698,1047 +3203,6 @@ function OAuthAccountSaveDialog({
   );
 }
 
-function RefreshManagementView({
-  accounts,
-  retryQueue,
-  refreshLogs,
-  automationRuns,
-  schedulerStatus,
-  busy,
-  onRefreshAccount,
-  onRefreshAll,
-  onRunRetryQueue,
-  onRetryQueueItem,
-  onDismissRetryItem
-}: {
-  accounts: Account[];
-  retryQueue: RetryQueueItem[];
-  refreshLogs: RefreshLog[];
-  automationRuns: AutomationRun[];
-  schedulerStatus: SchedulerStatus | null;
-  busy: boolean;
-  onRefreshAccount: (accountId: number) => Promise<void> | void;
-  onRefreshAll: () => void;
-  onRunRetryQueue: () => void;
-  onRetryQueueItem: (retryId: number) => void;
-  onDismissRetryItem: (retryId: number) => void;
-}) {
-  const [accountFilter, setAccountFilter] = useState("failed");
-  const [historyFilter, setHistoryFilter] = useState("all");
-  const [accountSearch, setAccountSearch] = useState("");
-  const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
-  const [batchRunning, setBatchRunning] = useState(false);
-  const stopBatchRef = useRef(false);
-
-  const refreshRetryQueue = useMemo(() => retryQueue.filter((item) => item.task_type === "refresh_account"), [retryQueue]);
-  const refreshRuns = useMemo(() => automationRuns.filter((run) => run.job_type === "refresh"), [automationRuns]);
-  const readyCount = accounts.filter(isRefreshReady).length;
-  const failedCount = accounts.filter((account) => account.last_refresh_status === "failed").length;
-  const successCount = accounts.filter((account) => account.last_refresh_status === "success").length;
-  const neverCount = accounts.filter((account) => account.last_refresh_status === "never").length;
-  const providerFailureSummaries = useMemo(() => summarizeProviderFailures(accounts), [accounts]);
-  const selectedSet = useMemo(() => new Set(selectedAccountIds), [selectedAccountIds]);
-  const accountSearchTokens = useMemo(() => searchTokens(accountSearch), [accountSearch]);
-  const visibleAccounts = useMemo(() => {
-    return accounts.filter((account) => {
-      if (accountFilter === "failed" && account.last_refresh_status !== "failed") return false;
-      if (accountFilter === "success" && account.last_refresh_status !== "success") return false;
-      if (accountFilter === "never" && account.last_refresh_status !== "never") return false;
-      if (accountFilter === "ready" && !isRefreshReady(account)) return false;
-      if (accountFilter === "missing" && isRefreshReady(account)) return false;
-      return accountMatchesSearch(account, accountSearchTokens);
-    });
-  }, [accounts, accountFilter, accountSearchTokens]);
-  const visibleAccountIds = useMemo(() => visibleAccounts.map((account) => account.id), [visibleAccounts]);
-  const allVisibleSelected = visibleAccountIds.length > 0 && visibleAccountIds.every((accountId) => selectedSet.has(accountId));
-  const filteredRefreshLogs = useMemo(
-    () => refreshLogs.filter((log) => historyFilter === "all" || log.status === historyFilter),
-    [refreshLogs, historyFilter]
-  );
-
-  useEffect(() => {
-    const accountIds = new Set(accounts.map((account) => account.id));
-    setSelectedAccountIds((current) => current.filter((accountId) => accountIds.has(accountId)));
-  }, [accounts]);
-
-  async function runSelectedRefreshBatch() {
-    if (selectedAccountIds.length === 0 || batchRunning) return;
-    stopBatchRef.current = false;
-    setBatchRunning(true);
-    try {
-      const batch = [...selectedAccountIds];
-      for (const accountId of batch) {
-        if (stopBatchRef.current) break;
-        await onRefreshAccount(accountId);
-      }
-    } finally {
-      setBatchRunning(false);
-      stopBatchRef.current = false;
-    }
-  }
-
-  return (
-    <section className="refreshGrid">
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>刷新管理</h2>
-          <RefreshCw size={18} />
-        </div>
-        <div className="statStrip refreshStats">
-          <Stat label="账号总数" value={accounts.length} />
-          <Stat label="凭据可用" value={readyCount} />
-          <Stat label="刷新成功" value={successCount} />
-          <Stat label="刷新失败" value={failedCount} />
-          <Stat label="从未刷新" value={neverCount} />
-          <Stat label="重试队列" value={refreshRetryQueue.length} />
-        </div>
-        {providerFailureSummaries.length > 0 && (
-          <div className="providerFailureGrid" aria-label="刷新失败服务商汇总">
-            {providerFailureSummaries.map((summary) => (
-              <button
-                className="providerFailureCard"
-                type="button"
-                key={summary.providerId}
-                title={`查看 ${summary.label} 失败账号`}
-                onClick={() => {
-                  setAccountFilter("failed");
-                  setAccountSearch(summary.label);
-                }}
-              >
-                <ProviderBadge provider={summary.providerId} />
-                <strong>{summary.count} 个失败</strong>
-                <small title={summary.topError}>{summary.topError}</small>
-                <small className="providerFailureHint" title={summary.hint}>{summary.hint}</small>
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="runStatusGrid">
-          <RunStatus label="上次定时刷新" value={schedulerStatus?.last_refresh_at} />
-        </div>
-        <div className="tableActions">
-          <button className="button primary" disabled={busy || batchRunning || accounts.length === 0} onClick={onRefreshAll}>
-            {busy && !batchRunning ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-            刷新全部
-          </button>
-          <button
-            className="button secondary"
-            disabled={busy || batchRunning || selectedAccountIds.length === 0}
-            onClick={() => void runSelectedRefreshBatch()}
-          >
-            {batchRunning ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-            刷新选中
-          </button>
-          <button className="button secondary" disabled={!batchRunning} onClick={() => (stopBatchRef.current = true)}>
-            <XCircle size={16} />
-            停止批量
-          </button>
-          <button className="button secondary" disabled={busy || batchRunning || refreshRetryQueue.length === 0} onClick={onRunRetryQueue}>
-            <RotateCcw size={16} />
-            运行到期重试
-          </button>
-        </div>
-      </div>
-
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>账号刷新状态</h2>
-          <Users size={18} />
-        </div>
-        <div className="automationFilters">
-          <select className="select" value={accountFilter} onChange={(event) => setAccountFilter(event.target.value)}>
-            <option value="failed">失败账号</option>
-            <option value="ready">凭据可用</option>
-            <option value="missing">缺少凭据</option>
-            <option value="success">成功</option>
-            <option value="never">从未刷新</option>
-            <option value="all">全部账号</option>
-          </select>
-          <input
-            className="input grow"
-            value={accountSearch}
-            placeholder="搜索邮箱、别名、分组或错误"
-            onChange={(event) => setAccountSearch(event.target.value)}
-          />
-          <button className="button secondary" disabled={selectedAccountIds.length === 0} onClick={() => setSelectedAccountIds([])}>
-            清除选择
-          </button>
-        </div>
-        <div className="logTable refreshAccountTable">
-          <div className="logHeader">
-            <span className="selectCell">
-              <input
-                type="checkbox"
-                aria-label="选择当前账号"
-                checked={allVisibleSelected}
-                disabled={visibleAccountIds.length === 0}
-                onChange={(event) => {
-                  const visibleIdSet = new Set(visibleAccountIds);
-                  setSelectedAccountIds((current) =>
-                    event.target.checked
-                      ? Array.from(new Set([...current, ...visibleAccountIds]))
-                      : current.filter((accountId) => !visibleIdSet.has(accountId))
-                  );
-                }}
-              />
-            </span>
-            <span>账号</span>
-            <span>凭据</span>
-            <span>状态</span>
-            <span>上次刷新</span>
-            <span>邮件</span>
-            <span>错误</span>
-            <span>操作</span>
-          </div>
-          {visibleAccounts.map((account) => (
-            <div className="logRow" key={account.id}>
-              <span className="selectCell">
-                <input
-                  type="checkbox"
-                  aria-label={`选择 ${account.email}`}
-                  checked={selectedSet.has(account.id)}
-                  onChange={(event) =>
-                    setSelectedAccountIds((current) =>
-                      event.target.checked
-                        ? Array.from(new Set([...current, account.id]))
-                        : current.filter((accountId) => accountId !== account.id)
-                    )
-                  }
-                />
-              </span>
-              <span>{account.email}</span>
-              <RefreshCredentialCell account={account} />
-              <StatusPill status={account.last_refresh_status} />
-              <span>{account.last_refresh_at ? formatDate(account.last_refresh_at) : "从未"}</span>
-              <span>{account.message_count}</span>
-              <RefreshErrorCell account={account} />
-              <span className="rowActions">
-                <button className="iconMini" title="刷新账号" disabled={busy || batchRunning} onClick={() => onRefreshAccount(account.id)}>
-                  <RefreshCw size={14} />
-                </button>
-              </span>
-            </div>
-          ))}
-        </div>
-        {visibleAccounts.length === 0 && <EmptyState icon={<RefreshCw size={24} />} text="没有匹配账号。" />}
-      </div>
-
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>刷新重试队列</h2>
-          <RotateCcw size={18} />
-        </div>
-        <div className="logTable refreshRetryTable">
-          <div className="logHeader">
-            <span>时间</span>
-            <span>账号</span>
-            <span>次数</span>
-            <span>下次</span>
-            <span>错误</span>
-            <span>操作</span>
-          </div>
-          {refreshRetryQueue.map((item) => (
-            <div className="logRow" key={item.id}>
-              <span>{formatDate(item.updated_at)}</span>
-              <span>{item.account_email}</span>
-              <span>{item.attempts} / {item.max_attempts}</span>
-              <span>{item.next_attempt_at ? formatDate(item.next_attempt_at) : "-"}</span>
-              <span>{item.error_message}</span>
-              <span className="rowActions">
-                <button className="iconMini" title="立即重试" disabled={busy || batchRunning} onClick={() => onRetryQueueItem(item.id)}>
-                  <RotateCcw size={14} />
-                </button>
-                <button className="iconMini danger" title="忽略" disabled={busy || batchRunning} onClick={() => onDismissRetryItem(item.id)}>
-                  <Trash2 size={14} />
-                </button>
-              </span>
-            </div>
-          ))}
-        </div>
-        {refreshRetryQueue.length === 0 && <EmptyState icon={<RotateCcw size={24} />} text="暂无刷新重试项。" />}
-      </div>
-
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>刷新历史</h2>
-          <RefreshCw size={18} />
-        </div>
-        <div className="automationFilters">
-          <select className="select" value={historyFilter} onChange={(event) => setHistoryFilter(event.target.value)}>
-            <option value="all">全部结果</option>
-            <option value="success">成功</option>
-            <option value="failed">失败</option>
-          </select>
-        </div>
-        <div className="logTable refreshHistoryTable">
-          <div className="logHeader">
-            <span>时间</span>
-            <span>账号</span>
-            <span>类型</span>
-            <span>状态</span>
-            <span>详情</span>
-          </div>
-          {filteredRefreshLogs.map((log) => (
-            <div className="logRow" key={log.id}>
-              <span>{formatDate(log.created_at)}</span>
-              <span>{log.account_email}</span>
-              <span>{log.refresh_type}</span>
-              <StatusPill status={log.status} />
-              <span>{log.error_message ?? ""}</span>
-            </div>
-          ))}
-        </div>
-        {filteredRefreshLogs.length === 0 && <EmptyState icon={<RefreshCw size={24} />} text="暂无刷新历史。" />}
-      </div>
-
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>刷新任务历史</h2>
-          <RefreshCw size={18} />
-        </div>
-        <div className="logTable refreshRunTable">
-          <div className="logHeader">
-            <span>时间</span>
-            <span>触发</span>
-            <span>状态</span>
-            <span>数量</span>
-            <span>耗时</span>
-            <span>详情</span>
-          </div>
-          {refreshRuns.map((run) => (
-            <div className="logRow" key={run.id}>
-              <span>{formatDate(run.finished_at)}</span>
-              <span>{formatAutomationTrigger(run.trigger_type)}</span>
-              <StatusPill status={run.status} />
-              <span>{run.refreshed} 成功 / {run.failed} 失败</span>
-              <span>{formatDuration(run.duration_ms)}</span>
-              <span>{formatResultMessage(run.message)}</span>
-            </div>
-          ))}
-        </div>
-        {refreshRuns.length === 0 && <EmptyState icon={<RefreshCw size={24} />} text="暂无刷新任务记录。" />}
-      </div>
-    </section>
-  );
-}
-
-function TempEmailsView({
-  tempEmails,
-  messages,
-  channels,
-  selectedEmail,
-  selectedMessage,
-  busy,
-  onSelect,
-  onMessageSelect,
-  onGenerate,
-  onGenerateCloudflareBatch,
-  onImport,
-  onRefresh,
-  onUpdate,
-  onDelete,
-  onSaveChannel,
-  onDeleteChannel,
-  onTestChannel
-}: {
-  tempEmails: TempEmail[];
-  messages: TempEmailMessage[];
-  channels: CloudflareChannel[];
-  selectedEmail?: string;
-  selectedMessage?: TempEmailMessage;
-  busy: boolean;
-  onSelect: (email: string) => void;
-  onMessageSelect: (messageId: string) => void;
-  onGenerate: (input: { provider: string; prefix?: string; domain?: string; username?: string; password?: string; channel_id?: number | null }) => void;
-  onGenerateCloudflareBatch: (input: Parameters<typeof api.generateCloudflareTempEmails>[0]) => void;
-  onImport: (input: { raw: string; provider: string; channel_id?: number | null }) => Promise<ImportAccountsResult>;
-  onRefresh: (email: string) => void;
-  onUpdate: (input: Parameters<typeof api.updateTempEmail>[0]) => void;
-  onDelete: (email: string) => void;
-  onSaveChannel: (input: {
-    id?: number;
-    name: string;
-    worker_domain: string;
-    email_domains: string[];
-    admin_password?: string;
-    enabled: boolean;
-    is_default: boolean;
-  }) => void;
-  onDeleteChannel: (channelId: number) => void;
-  onTestChannel: (channelId: number) => void;
-}) {
-  const [provider, setProvider] = useState("gptmail");
-  const [prefix, setPrefix] = useState("");
-  const [domain, setDomain] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [channelId, setChannelId] = useState<number | null>(channels[0]?.id ?? null);
-  const [importRaw, setImportRaw] = useState("");
-  const [tempSearch, setTempSearch] = useState("");
-  const [tempProviderFilter, setTempProviderFilter] = useState("all");
-  const [tempTagFilter, setTempTagFilter] = useState("all");
-  const [tempTagsText, setTempTagsText] = useState("");
-  const [batchCount, setBatchCount] = useState(10);
-  const [batchPrefix, setBatchPrefix] = useState("cf");
-  const [batchTagsText, setBatchTagsText] = useState("");
-  const [importProgress, setImportProgress] = useState({ active: false, done: 0, total: 0 });
-  const [channelDraft, setChannelDraft] = useState({
-    id: undefined as number | undefined,
-    name: "",
-    worker_domain: "",
-    email_domains: "",
-    admin_password: "",
-    enabled: true,
-    is_default: false
-  });
-
-  useEffect(() => {
-    if (!channelId && channels[0]) setChannelId(channels[0].id);
-  }, [channels.length]);
-
-  const selectedTemp = tempEmails.find((item) => item.email === selectedEmail);
-  const tempTags = useMemo(() => {
-    const tags = new Set<string>();
-    tempEmails.forEach((item) => item.tags.forEach((tag) => tags.add(tag)));
-    return [...tags].sort((a, b) => a.localeCompare(b));
-  }, [tempEmails]);
-  const visibleTempEmails = useMemo(() => {
-    const keyword = tempSearch.trim().toLowerCase();
-    return tempEmails.filter((item) => {
-      if (tempProviderFilter !== "all" && item.provider !== tempProviderFilter) return false;
-      if (tempTagFilter !== "all" && !item.tags.some((tag) => tag.toLowerCase() === tempTagFilter.toLowerCase())) return false;
-      if (!keyword) return true;
-      return [item.email, item.provider, item.last_refresh_status, item.last_refresh_error ?? "", ...item.tags]
-        .join(" ")
-        .toLowerCase()
-        .includes(keyword);
-    });
-  }, [tempEmails, tempProviderFilter, tempSearch, tempTagFilter]);
-
-  useEffect(() => {
-    setTempTagsText(selectedTemp?.tags.join(", ") ?? "");
-  }, [selectedTemp?.email, selectedTemp?.updated_at]);
-
-  async function runTempImport() {
-    const rows = importRaw
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (rows.length === 0) return;
-    const chunkSize = provider === "cloudflare" ? 50 : rows.length;
-    setImportProgress({ active: true, done: 0, total: rows.length });
-    try {
-      for (let index = 0; index < rows.length; index += chunkSize) {
-        const chunk = rows.slice(index, index + chunkSize);
-        await onImport({
-          raw: chunk.join("\n"),
-          provider,
-          channel_id: provider === "cloudflare" ? channelId : undefined
-        });
-        setImportProgress({ active: true, done: Math.min(index + chunk.length, rows.length), total: rows.length });
-      }
-      setImportRaw("");
-    } finally {
-      setImportProgress((current) => ({ ...current, active: false }));
-    }
-  }
-
-  return (
-    <section className="tempGrid">
-      <aside className="panel tempControlPanel">
-        <div className="panelHeader">
-          <h2>临时邮箱</h2>
-          <Cloud size={18} />
-        </div>
-        <div className="formLine">
-          <select className="select grow" value={provider} onChange={(event) => setProvider(event.target.value)}>
-            <option value="gptmail">GPTMail</option>
-            <option value="duckmail">DuckMail</option>
-            <option value="cloudflare">Cloudflare</option>
-          </select>
-          {provider === "cloudflare" && (
-            <select className="select grow" value={channelId ?? ""} onChange={(event) => setChannelId(Number(event.target.value) || null)}>
-              <option value="">通道</option>
-              {channels.map((channel) => (
-                <option key={channel.id} value={channel.id}>
-                  {channel.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-        <div className="formLine">
-          <input
-            className="input grow"
-            value={provider === "gptmail" ? prefix : username}
-            placeholder={provider === "gptmail" ? "前缀" : "用户名"}
-            onChange={(event) => (provider === "gptmail" ? setPrefix(event.target.value) : setUsername(event.target.value))}
-          />
-          <button
-            className="iconMini"
-            title="生成智能用户名"
-            onClick={() => {
-              const nextName = smartTempUsername();
-              if (provider === "gptmail") setPrefix(nextName);
-              else setUsername(nextName);
-            }}
-          >
-            <WandSparkles size={15} />
-          </button>
-          <input className="input grow" value={domain} placeholder="域名" onChange={(event) => setDomain(event.target.value)} />
-        </div>
-        {provider === "duckmail" && (
-          <input
-            className="input fullWidth tempPassword"
-            type="password"
-            value={password}
-            placeholder="DuckMail 密码"
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        )}
-        <button
-          className="button primary fullWidth"
-          disabled={busy || (provider === "duckmail" && (!username.trim() || !domain.trim() || password.length < 6)) || (provider === "cloudflare" && !channelId)}
-          onClick={() =>
-            onGenerate({
-              provider,
-              prefix: prefix || undefined,
-              domain: domain || undefined,
-              username: username || undefined,
-              password: password || undefined,
-              channel_id: provider === "cloudflare" ? channelId : undefined
-            })
-          }
-        >
-          {busy ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
-          生成
-        </button>
-        {provider === "cloudflare" && (
-          <div className="tempBatchBox">
-            <div className="formLine">
-              <input
-                className="input grow"
-                value={batchPrefix}
-                placeholder="批量前缀"
-                onChange={(event) => setBatchPrefix(event.target.value)}
-              />
-              <input
-                className="input smallInput"
-                type="number"
-                min={1}
-                max={200}
-                value={batchCount}
-                onChange={(event) => setBatchCount(Math.min(Math.max(Number(event.target.value) || 1, 1), 200))}
-              />
-            </div>
-            <input
-              className="input"
-              value={batchTagsText}
-              placeholder="批量标签，逗号分隔"
-              onChange={(event) => setBatchTagsText(event.target.value)}
-            />
-            <button
-              className="button secondary fullWidth"
-              disabled={busy || !channelId}
-              onClick={() =>
-                onGenerateCloudflareBatch({
-                  channel_id: channelId,
-                  prefix: batchPrefix || undefined,
-                  domain: domain || undefined,
-                  count: batchCount,
-                  tags: parseTagText(batchTagsText)
-                })
-              }
-            >
-              <Plus size={16} />
-              批量生成 {batchCount}
-            </button>
-          </div>
-        )}
-
-        <textarea
-          className="textarea compact tempImportBox"
-          value={importRaw}
-          onChange={(event) => setImportRaw(event.target.value)}
-          placeholder={provider === "duckmail" ? "邮箱----密码" : "邮箱地址"}
-        />
-        <button
-          className="button secondary fullWidth"
-          disabled={busy || importProgress.active || !importRaw.trim() || (provider === "cloudflare" && !channelId)}
-          onClick={() => void runTempImport()}
-        >
-          {importProgress.active ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
-          导入
-        </button>
-        {importProgress.total > 0 && (
-          <div className="importProgress">
-            <div>
-              <span style={{ width: `${Math.round((importProgress.done / importProgress.total) * 100)}%` }} />
-            </div>
-            <small>
-              {importProgress.done}/{importProgress.total}
-            </small>
-          </div>
-        )}
-      </aside>
-
-      <aside className="panel tempListPanel">
-        <div className="panelHeader">
-          <h2>地址</h2>
-          <span>{visibleTempEmails.length}/{tempEmails.length}</span>
-        </div>
-        <div className="tempFilters">
-          <input
-            className="input"
-            value={tempSearch}
-            placeholder="搜索地址、标签或状态"
-            onChange={(event) => setTempSearch(event.target.value)}
-          />
-          <div className="formLine">
-            <select className="select grow" value={tempProviderFilter} onChange={(event) => setTempProviderFilter(event.target.value)}>
-              <option value="all">全部服务</option>
-              <option value="gptmail">GPTMail</option>
-              <option value="duckmail">DuckMail</option>
-              <option value="cloudflare">Cloudflare</option>
-            </select>
-            <select className="select grow" value={tempTagFilter} onChange={(event) => setTempTagFilter(event.target.value)}>
-              <option value="all">全部标签</option>
-              {tempTags.map((tag) => (
-                <option value={tag} key={tag}>
-                  {tag}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <div className="tempRows">
-          {visibleTempEmails.map((item) => (
-            <button key={item.id} className={selectedEmail === item.email ? "tempEmailRow active" : "tempEmailRow"} onClick={() => onSelect(item.email)}>
-              <strong>{item.email}</strong>
-              <small>
-                {item.provider} · {item.message_count} 条消息 · {formatStatus(item.last_refresh_status)}
-              </small>
-              {item.tags.length > 0 && (
-                <span className="tempTagLine">
-                  {item.tags.map((tag) => (
-                    <span className="chip" key={tag}>
-                      {tag}
-                    </span>
-                  ))}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-        {visibleTempEmails.length === 0 && <EmptyState icon={<Cloud size={24} />} text="暂无匹配临时邮箱。" />}
-      </aside>
-
-      <section className="panel tempMessagePanel">
-        <div className="panelHeader">
-          <h2>{selectedTemp?.email ?? "消息"}</h2>
-          <div className="rowActions">
-            <button className="iconMini" title="刷新" disabled={!selectedEmail || busy} onClick={() => selectedEmail && onRefresh(selectedEmail)}>
-              <RefreshCw size={15} />
-            </button>
-            <button className="iconMini danger" title="删除" disabled={!selectedEmail || busy} onClick={() => selectedEmail && onDelete(selectedEmail)}>
-              <Trash2 size={15} />
-            </button>
-          </div>
-        </div>
-        {selectedTemp && (
-          <div className="tempTagEditor">
-            <input
-              className="input grow"
-              value={tempTagsText}
-              placeholder="标签，逗号分隔"
-              onChange={(event) => setTempTagsText(event.target.value)}
-            />
-            <button
-              className="button secondary"
-              disabled={busy}
-              onClick={() => onUpdate({ email: selectedTemp.email, tags: parseTagText(tempTagsText) })}
-            >
-              <Tags size={15} />
-              保存标签
-            </button>
-          </div>
-        )}
-        <div className="tempMessageRows">
-          {messages.map((message) => (
-            <button
-              key={message.message_id}
-              className={selectedMessage?.message_id === message.message_id ? "messageRow active" : "messageRow"}
-              onClick={() => onMessageSelect(message.message_id)}
-            >
-              <span className="messageTop">
-                <strong>{message.subject || "（无主题）"}</strong>
-                <small>{message.timestamp ? formatUnixDate(message.timestamp) : formatDate(message.created_at)}</small>
-              </span>
-              <span className="sender">{message.from_address}</span>
-              <span className="preview">{message.content || message.html_content}</span>
-            </button>
-          ))}
-        </div>
-        {messages.length === 0 && <EmptyState icon={<Mail size={24} />} text="暂无缓存临时邮件。" />}
-      </section>
-
-      <article className="panel tempDetailPanel">
-        {selectedMessage ? (
-          <>
-            <div className="detailHeader">
-              <h2>{selectedMessage.subject || "（无主题）"}</h2>
-              <p>{selectedMessage.from_address}</p>
-            </div>
-            <div className="metaGrid">
-              <span>邮箱</span>
-              <strong>{selectedMessage.email_address}</strong>
-              <span>接收时间</span>
-              <strong>{selectedMessage.timestamp ? formatUnixDate(selectedMessage.timestamp) : formatDate(selectedMessage.created_at)}</strong>
-            </div>
-            <MessageBody
-              body={selectedMessage.has_html ? selectedMessage.html_content : selectedMessage.content}
-              bodyType={selectedMessage.has_html ? "html" : "text"}
-            />
-          </>
-        ) : (
-          <EmptyState icon={<Mail size={24} />} text="请选择一封临时邮件。" />
-        )}
-      </article>
-
-      <section className="panel widePanel">
-        <div className="panelHeader">
-          <h2>Cloudflare 通道</h2>
-          <Cloud size={18} />
-        </div>
-        <div className="channelEditor">
-          <input className="input" value={channelDraft.name} placeholder="名称" onChange={(event) => setChannelDraft({ ...channelDraft, name: event.target.value })} />
-          <input
-            className="input"
-            value={channelDraft.worker_domain}
-            placeholder="Worker 域名"
-            onChange={(event) => setChannelDraft({ ...channelDraft, worker_domain: event.target.value })}
-          />
-          <input
-            className="input"
-            value={channelDraft.email_domains}
-            placeholder="域名，逗号分隔"
-            onChange={(event) => setChannelDraft({ ...channelDraft, email_domains: event.target.value })}
-          />
-          <input
-            className="input"
-            type="password"
-            value={channelDraft.admin_password}
-            placeholder="管理密码"
-            onChange={(event) => setChannelDraft({ ...channelDraft, admin_password: event.target.value })}
-          />
-          <label className="checkLine">
-            <input type="checkbox" checked={channelDraft.enabled} onChange={(event) => setChannelDraft({ ...channelDraft, enabled: event.target.checked })} />
-            <span>启用</span>
-          </label>
-          <label className="checkLine">
-            <input type="checkbox" checked={channelDraft.is_default} onChange={(event) => setChannelDraft({ ...channelDraft, is_default: event.target.checked })} />
-            <span>默认</span>
-          </label>
-          <button
-            className="button primary"
-            disabled={busy || !channelDraft.name.trim() || !channelDraft.worker_domain.trim()}
-            onClick={() => {
-              onSaveChannel({
-                id: channelDraft.id,
-                name: channelDraft.name,
-                worker_domain: channelDraft.worker_domain,
-                email_domains: channelDraft.email_domains.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean),
-                admin_password: channelDraft.admin_password || undefined,
-                enabled: channelDraft.enabled,
-                is_default: channelDraft.is_default
-              });
-              setChannelDraft({ id: undefined, name: "", worker_domain: "", email_domains: "", admin_password: "", enabled: true, is_default: false });
-            }}
-          >
-            <SettingsIcon size={16} />
-            保存
-          </button>
-        </div>
-        <div className="cloudflareChannelRows">
-          {channels.map((channel) => (
-            <div className="cloudflareChannelRow" key={channel.id}>
-              <span>
-                <strong>{channel.name}</strong>
-                <small>{channel.worker_domain}</small>
-              </span>
-              <span>{channel.email_domains.join(", ")}</span>
-              <StatusPill status={channel.enabled ? "success" : "removed"} />
-              <span className="rowActions">
-                <button className="iconMini" title="编辑" onClick={() => setChannelDraft({ id: channel.id, name: channel.name, worker_domain: channel.worker_domain, email_domains: channel.email_domains.join(", "), admin_password: "", enabled: channel.enabled, is_default: channel.is_default })}>
-                  <SettingsIcon size={15} />
-                </button>
-                <button className="iconMini" title="测试" onClick={() => onTestChannel(channel.id)}>
-                  <RefreshCw size={15} />
-                </button>
-                <button className="iconMini danger" title="删除" disabled={channel.reference_count > 0} onClick={() => onDeleteChannel(channel.id)}>
-                  <Trash2 size={15} />
-                </button>
-              </span>
-            </div>
-          ))}
-        </div>
-      </section>
-    </section>
-  );
-}
-
-function ProjectsView({
-  projects,
-  accounts,
-  groups,
-  tags,
-  busy,
-  onCreate,
-  onSelect,
-  onSync,
-  onClaim,
-  onExport,
-  onAction
-}: {
-  projects: Project[];
-  accounts: ProjectAccount[];
-  groups: Group[];
-  tags: Tag[];
-  busy: boolean;
-  onCreate: (input: {
-    name: string;
-    project_key?: string;
-    description?: string;
-    scope_mode?: string;
-    use_alias_email?: boolean;
-    group_ids?: number[];
-    tag_ids?: number[];
-  }) => void;
-  onSelect: (projectId: number) => void;
-  onSync: (projectId: number) => void;
-  onClaim: (projectId: number) => void;
-  onExport: (projectId: number) => void;
-  onAction: (projectId: number, action: "success" | "failed" | "release" | "remove" | "restore", projectAccountId: number) => void;
-}) {
-  const [selectedProjectId, setSelectedProjectId] = useState<number | undefined>(projects[0]?.id);
-  const [name, setName] = useState("");
-  const [projectKey, setProjectKey] = useState("");
-  const [description, setDescription] = useState("");
-  const [scopeMode, setScopeMode] = useState("all");
-  const [useAliasEmail, setUseAliasEmail] = useState(false);
-  const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
-  const [selectedTagIds, setSelectedTagIds] = useState<number[]>([]);
-
-  const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
-
-  useEffect(() => {
-    if (!selectedProjectId && projects[0]) {
-      setSelectedProjectId(projects[0].id);
-      onSelect(projects[0].id);
-    }
-  }, [projects.length]);
-
-  return (
-    <section className="projectsGrid">
-      <aside className="panel projectListPanel">
-        <div className="panelHeader">
-          <h2>项目</h2>
-          <FolderKanban size={18} />
-        </div>
-        <div className="projectCreate">
-          <input className="input" value={name} placeholder="项目名称" onChange={(event) => setName(event.target.value)} />
-          <input className="input" value={projectKey} placeholder="项目标识，可选" onChange={(event) => setProjectKey(event.target.value)} />
-          <textarea
-            className="textarea compact"
-            value={description}
-            placeholder="描述"
-            onChange={(event) => setDescription(event.target.value)}
-          />
-          <select className="select" value={scopeMode} onChange={(event) => setScopeMode(event.target.value)}>
-            <option value="all">全部启用账号</option>
-            <option value="groups">指定分组</option>
-            <option value="tags">指定标签</option>
-          </select>
-          <label className="checkLine toggleLine">
-            <input
-              type="checkbox"
-              checked={useAliasEmail}
-              onChange={(event) => setUseAliasEmail(event.target.checked)}
-            />
-            <span>项目账号池优先使用账号别名</span>
-          </label>
-          {scopeMode === "groups" && (
-            <div className="groupPicker">
-              {groups.map((group) => (
-                <label className="checkLine" key={group.id}>
-                  <input
-                    type="checkbox"
-                    checked={selectedGroupIds.includes(group.id)}
-                    onChange={(event) => {
-                      setSelectedGroupIds((current) =>
-                        event.target.checked ? [...current, group.id] : current.filter((id) => id !== group.id)
-                      );
-                    }}
-                  />
-                  <span>{group.name}</span>
-                </label>
-              ))}
-            </div>
-          )}
-          {scopeMode === "tags" && (
-            <div className="groupPicker">
-              {tags.map((tag) => (
-                <label className="checkLine" key={tag.id}>
-                  <input
-                    type="checkbox"
-                    checked={selectedTagIds.includes(tag.id)}
-                    onChange={(event) => {
-                      setSelectedTagIds((current) =>
-                        event.target.checked ? [...current, tag.id] : current.filter((id) => id !== tag.id)
-                      );
-                    }}
-                  />
-                  <span className="dot" style={{ backgroundColor: tag.color }} />
-                  <span>{tag.name}</span>
-                </label>
-              ))}
-            </div>
-          )}
-          <button
-            className="button primary fullWidth"
-            disabled={
-              busy ||
-              !name.trim() ||
-              (scopeMode === "groups" && selectedGroupIds.length === 0) ||
-              (scopeMode === "tags" && selectedTagIds.length === 0)
-            }
-            onClick={() => {
-              onCreate({
-                name,
-                project_key: projectKey || undefined,
-                description,
-                scope_mode: scopeMode,
-                use_alias_email: useAliasEmail,
-                group_ids: scopeMode === "groups" ? selectedGroupIds : [],
-                tag_ids: scopeMode === "tags" ? selectedTagIds : []
-              });
-              setName("");
-              setProjectKey("");
-              setDescription("");
-              setUseAliasEmail(false);
-            }}
-          >
-            <Plus size={16} />
-            创建项目
-          </button>
-        </div>
-
-        <div className="projectRows">
-          {projects.map((project) => (
-            <button
-              key={project.id}
-              className={selectedProject?.id === project.id ? "projectRow active" : "projectRow"}
-              onClick={() => {
-                setSelectedProjectId(project.id);
-                onSelect(project.id);
-              }}
-            >
-              <strong>{project.name}</strong>
-              <small>{project.project_key}</small>
-              <span>{project.stats.to_claim} 个可领取 · {project.stats.success} 个已完成</span>
-            </button>
-          ))}
-        </div>
-      </aside>
-
-      <section className="panel projectDetailPanel">
-        {selectedProject ? (
-          <>
-            <div className="projectHero">
-              <div>
-                <h2>{selectedProject.name}</h2>
-                <p>{selectedProject.description || selectedProject.project_key}</p>
-                {selectedProject.use_alias_email && <span className="chip">使用账号别名</span>}
-              </div>
-              <div className="topActions">
-                <button className="button secondary" disabled={busy} onClick={() => onSync(selectedProject.id)}>
-                  <RefreshCw size={16} />
-                  同步
-                </button>
-                <button className="button secondary" disabled={busy || accounts.length === 0} onClick={() => onExport(selectedProject.id)}>
-                  <Download size={16} />
-                  导出
-                </button>
-                <button className="button primary" disabled={busy} onClick={() => onClaim(selectedProject.id)}>
-                  <Archive size={16} />
-                  领取
-                </button>
-              </div>
-            </div>
-
-            <div className="statStrip">
-              <Stat label="总数" value={selectedProject.stats.total} />
-              <Stat label="可领取" value={selectedProject.stats.to_claim} />
-              <Stat label="已领取" value={selectedProject.stats.claimed} />
-              <Stat label="成功" value={selectedProject.stats.success} />
-              <Stat label="失败" value={selectedProject.stats.failed} />
-              <Stat label="已移除" value={selectedProject.stats.removed} />
-            </div>
-
-            <div className="projectAccountTable">
-              <div className="projectTableHeader">
-                <span>邮箱</span>
-                <span>状态</span>
-                <span>领取次数</span>
-                <span>租约</span>
-                <span />
-              </div>
-              {accounts.map((account) => (
-                <div className="projectTableRow" key={account.id}>
-                  <span>
-                    <strong>{account.email}</strong>
-                    <small>{account.last_result_detail || account.normalized_email}</small>
-                  </span>
-                  <StatusPill status={account.status} />
-                  <span>{account.claim_count}</span>
-                  <span>{account.lease_expires_at ? formatDate(account.lease_expires_at) : ""}</span>
-                  <span className="rowActions">
-                    {account.status === "claimed" && (
-                      <>
-                        <button className="iconMini" title="标记成功" onClick={() => onAction(selectedProject.id, "success", account.id)}>
-                          <CheckCircle2 size={15} />
-                        </button>
-                        <button className="iconMini danger" title="标记失败" onClick={() => onAction(selectedProject.id, "failed", account.id)}>
-                          <XCircle size={15} />
-                        </button>
-                        <button className="iconMini" title="释放" onClick={() => onAction(selectedProject.id, "release", account.id)}>
-                          <RefreshCw size={15} />
-                        </button>
-                      </>
-                    )}
-                    {account.status !== "removed" ? (
-                      <button className="iconMini danger" title="移除" onClick={() => onAction(selectedProject.id, "remove", account.id)}>
-                        <Trash2 size={15} />
-                      </button>
-                    ) : (
-                      <button className="iconMini" title="恢复" onClick={() => onAction(selectedProject.id, "restore", account.id)}>
-                        <RefreshCw size={15} />
-                      </button>
-                    )}
-                  </span>
-                </div>
-              ))}
-            </div>
-            {accounts.length === 0 && <EmptyState icon={<FolderKanban size={24} />} text="同步项目范围后会填充账号。" />}
-          </>
-        ) : (
-          <EmptyState icon={<FolderKanban size={24} />} text="创建项目后开始分配账号。" />
-        )}
-      </section>
-    </section>
-  );
-}
-
 function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div className="statBox">
@@ -4783,63 +3247,6 @@ function providerBadgeCode(provider: string) {
   }
 }
 
-function isRefreshReady(account: Account) {
-  return providerReadiness(account).status === "ready";
-}
-
-function RefreshCredentialCell({ account }: { account: Account }) {
-  const readiness = providerReadiness(account);
-  const text = readiness.status === "missing" ? readiness.detail : readiness.label;
-  return (
-    <span className={`credentialCell readiness-${readiness.status}`} title={readiness.detail}>
-      {text}
-    </span>
-  );
-}
-
-function RefreshErrorCell({ account }: { account: Account }) {
-  if (!account.last_refresh_error) return <span />;
-  const hint = providerFailureHint(account.provider, account.last_refresh_error);
-  return (
-    <span className="refreshErrorCell">
-      <span title={account.last_refresh_error}>{account.last_refresh_error}</span>
-      <small title={hint}>{hint}</small>
-    </span>
-  );
-}
-
-function summarizeProviderFailures(accounts: Account[]) {
-  const grouped = new Map<string, { count: number; errors: Map<string, number> }>();
-  for (const account of accounts) {
-    if (account.last_refresh_status !== "failed") continue;
-    const providerId = normalizeAccountProviderId(account.provider);
-    const summary = grouped.get(providerId) ?? { count: 0, errors: new Map<string, number>() };
-    const error = account.last_refresh_error?.trim() || "暂无错误详情";
-    summary.count += 1;
-    summary.errors.set(error, (summary.errors.get(error) ?? 0) + 1);
-    grouped.set(providerId, summary);
-  }
-
-  return Array.from(grouped.entries())
-    .map(([providerId, summary]) => {
-      const topError =
-        Array.from(summary.errors.entries()).sort(([leftError, leftCount], [rightError, rightCount]) => {
-          if (rightCount !== leftCount) return rightCount - leftCount;
-          return leftError.localeCompare(rightError);
-        })[0]?.[0] ?? "暂无错误详情";
-      return {
-        providerId,
-        label: accountProviderLabel(providerId),
-        count: summary.count,
-        topError,
-        hint: providerFailureHint(providerId, topError)
-      };
-    })
-    .sort((left, right) => {
-      if (right.count !== left.count) return right.count - left.count;
-      return left.label.localeCompare(right.label);
-    });
-}
 
 function AccountAuthDialog({
   account,
@@ -4961,7 +3368,6 @@ function AccountEditor({
     provider: "graph",
     account_type: "outlook",
     remark: "",
-    forward_enabled: false,
     imap_host: "",
     imap_port: 993,
     proxy_url: "",
@@ -4989,7 +3395,6 @@ function AccountEditor({
       provider,
       account_type: account.account_type || providerAccountType(provider),
       remark: account.remark,
-      forward_enabled: account.forward_enabled,
       imap_host: account.imap_host,
       imap_port: account.imap_port || 993,
       proxy_url: account.proxy_url,
@@ -5079,14 +3484,6 @@ function AccountEditor({
           onChange={(event) => setDraft({ ...draft, remark: event.target.value })}
         />
       </div>
-      <label className="checkLine toggleLine">
-        <input
-          type="checkbox"
-          checked={draft.forward_enabled}
-          onChange={(event) => setDraft({ ...draft, forward_enabled: event.target.checked })}
-        />
-        <span>转发此账号的缓存邮件</span>
-      </label>
       <label className="field">
         邮箱保留天数
         <input
@@ -5307,7 +3704,6 @@ function AccountEditor({
             provider: draft.provider,
             account_type: draft.account_type,
             remark: draft.remark,
-            forward_enabled: draft.forward_enabled,
             imap_host: draft.imap_host,
             imap_port: draft.imap_port,
             proxy_url: draft.proxy_url,
@@ -5327,293 +3723,6 @@ function AccountEditor({
         保存账号
       </button>
     </div>
-  );
-}
-
-function AutomationDashboardView({
-  observability,
-  automationRuns,
-  retryQueue,
-  schedulerStatus,
-  busy,
-  onFilterAutomationRuns,
-  onClearAutomationRuns,
-  onRunRetryQueue,
-  onRetryQueueItem,
-  onDismissRetryItem
-}: {
-  observability: AutomationObservability | null;
-  automationRuns: AutomationRun[];
-  retryQueue: RetryQueueItem[];
-  schedulerStatus: SchedulerStatus | null;
-  busy: boolean;
-  onFilterAutomationRuns: (query: AutomationRunQuery) => void;
-  onClearAutomationRuns: (query: AutomationRunQuery & { clear_all?: boolean }) => void;
-  onRunRetryQueue: () => void;
-  onRetryQueueItem: (retryId: number) => void;
-  onDismissRetryItem: (retryId: number) => void;
-}) {
-  const [runFilters, setRunFilters] = useState({ job_type: "all", trigger_type: "all", status: "all", search: "" });
-
-  function automationRunQuery(): AutomationRunQuery {
-    return {
-      job_type: runFilters.job_type === "all" ? undefined : runFilters.job_type,
-      trigger_type: runFilters.trigger_type === "all" ? undefined : runFilters.trigger_type,
-      status: runFilters.status === "all" ? undefined : runFilters.status,
-      search: runFilters.search.trim() || undefined
-    };
-  }
-
-  return (
-    <section className="settingsGrid automationDashboard">
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>自动化仪表盘</h2>
-          <Activity size={18} />
-        </div>
-        {observability ? (
-          <>
-            <div className="statStrip observabilityStrip">
-              <Stat label="任务记录" value={observability.run_count} />
-              <Stat label="成功" value={observability.successful_run_count} />
-              <Stat label="失败" value={observability.failed_run_count} />
-              <Stat label="待重试" value={observability.retry_pending_count} />
-              <Stat label="到期重试" value={observability.retry_due_count} />
-              <Stat label="熔断通道" value={observability.open_circuit_count} />
-            </div>
-            <div className="runStatusGrid">
-              <RunStatus label="上次刷新" value={schedulerStatus?.last_refresh_at} />
-              <RunStatus label="上次转发" value={schedulerStatus?.last_forwarding_at} />
-              <RunStatus label="上次备份" value={schedulerStatus?.last_backup_at} />
-            </div>
-            <div className="automationSummaryGrid">
-              {observability.job_summaries.map((summary) => (
-                <div className="summaryTile" key={summary.job_type}>
-                  <div className="summaryTop">
-                    <strong>{formatAutomationJob(summary.job_type)}</strong>
-                    <StatusPill status={summary.failed > 0 ? "failed" : summary.total > 0 ? "success" : "never"} />
-                  </div>
-                  <div className="summaryStats">
-                    <span>{summary.total} 次</span>
-                    <span>{summary.success} 成功</span>
-                    <span>{summary.failed} 失败</span>
-                    <span>{formatDuration(summary.average_duration_ms)}</span>
-                  </div>
-                  <small>{summary.last_finished_at ? formatDate(summary.last_finished_at) : "从未运行"}</small>
-                </div>
-              ))}
-            </div>
-          </>
-        ) : (
-          <EmptyState icon={<Activity size={24} />} text="暂无自动化观测数据。" />
-        )}
-      </div>
-
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>转发通道健康</h2>
-          <Mail size={18} />
-        </div>
-        <div className="logTable channelHealthTable">
-          <div className="logHeader">
-            <span>通道</span>
-            <span>状态</span>
-            <span>近期失败</span>
-            <span>待重试</span>
-            <span>熔断至</span>
-            <span>上次成功</span>
-            <span>错误</span>
-          </div>
-          {(observability?.channel_circuits ?? []).map((channel) => (
-            <div className="logRow" key={channel.channel}>
-              <span>{formatForwardingChannel(channel.channel)}</span>
-              <StatusPill status={channel.status} />
-              <span>{channel.recent_failures}</span>
-              <span>{channel.pending_retries}</span>
-              <span>{channel.open_until ? formatDate(channel.open_until) : "-"}</span>
-              <span>{channel.last_success_at ? formatDate(channel.last_success_at) : "-"}</span>
-              <span>{channel.last_error || "-"}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>错误分类</h2>
-          <XCircle size={18} />
-        </div>
-        <div className="logTable errorBucketTable">
-          <div className="logHeader">
-            <span>类别</span>
-            <span>次数</span>
-            <span>最近时间</span>
-            <span>详情</span>
-          </div>
-          {(observability?.error_buckets ?? []).map((bucket) => (
-            <div className="logRow" key={bucket.category}>
-              <span>{formatErrorCategory(bucket.category)}</span>
-              <span>{bucket.count}</span>
-              <span>{bucket.latest_at ? formatDate(bucket.latest_at) : "-"}</span>
-              <span>{formatResultMessage(bucket.latest_message)}</span>
-            </div>
-          ))}
-        </div>
-        {observability?.error_buckets.length === 0 && <EmptyState icon={<CheckCircle2 size={24} />} text="最近没有失败错误。" />}
-      </div>
-
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>重试退避</h2>
-          <RotateCcw size={18} />
-        </div>
-        <div className="automationSummaryGrid retrySummaryGrid">
-          {(observability?.retry_summaries ?? []).map((summary) => (
-            <div className="summaryTile" key={summary.task_type}>
-              <div className="summaryTop">
-                <strong>{formatRetryTaskType(summary.task_type)}</strong>
-                <StatusPill status={summary.failed > 0 ? "failed" : summary.pending > 0 ? "pending" : "success"} />
-              </div>
-              <div className="summaryStats">
-                <span>{summary.pending} 待处理</span>
-                <span>{summary.due} 到期</span>
-                <span>{summary.failed} 失败</span>
-                <span>{summary.exhausted} 耗尽</span>
-              </div>
-              <small>{summary.next_attempt_at ? `下次 ${formatDate(summary.next_attempt_at)}` : summary.last_error || "无待处理项"}</small>
-            </div>
-          ))}
-        </div>
-        <div className="tableActions">
-          <button className="button secondary" disabled={busy || retryQueue.length === 0} onClick={onRunRetryQueue}>
-            {busy ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />}
-            运行到期重试
-          </button>
-        </div>
-        <div className="logTable retryObservabilityTable">
-          <div className="logHeader">
-            <span>更新时间</span>
-            <span>任务</span>
-            <span>状态</span>
-            <span>错误类</span>
-            <span>次数</span>
-            <span>下次</span>
-            <span>错误</span>
-            <span>操作</span>
-          </div>
-          {retryQueue.map((item) => (
-            <div className="logRow" key={item.id}>
-              <span>{formatDate(item.updated_at)}</span>
-              <span>{formatRetryTask(item)}</span>
-              <StatusPill status={item.status} />
-              <span>{formatErrorCategory(item.error_category)}</span>
-              <span>{item.attempts} / {item.max_attempts}</span>
-              <span>{item.next_attempt_at ? `${formatDate(item.next_attempt_at)}（${formatRetryDelay(item)}）` : item.due_now ? "已到期" : "-"}</span>
-              <span>{item.error_message}</span>
-              <span className="rowActions">
-                <button className="iconMini" title="立即重试" disabled={busy} onClick={() => onRetryQueueItem(item.id)}>
-                  <RotateCcw size={14} />
-                </button>
-                <button className="iconMini danger" title="忽略" disabled={busy} onClick={() => onDismissRetryItem(item.id)}>
-                  <Trash2 size={14} />
-                </button>
-              </span>
-            </div>
-          ))}
-        </div>
-        {retryQueue.length === 0 && <EmptyState icon={<RotateCcw size={24} />} text="暂无待处理重试项。" />}
-      </div>
-
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>任务历史</h2>
-          <RefreshCw size={18} />
-        </div>
-        <div className="automationFilters">
-          <select
-            className="select"
-            value={runFilters.job_type}
-            onChange={(event) => setRunFilters({ ...runFilters, job_type: event.target.value })}
-          >
-            <option value="all">全部任务</option>
-            <option value="refresh">刷新</option>
-            <option value="forwarding">转发</option>
-            <option value="backup">备份</option>
-            <option value="retry">重试</option>
-          </select>
-          <select
-            className="select"
-            value={runFilters.trigger_type}
-            onChange={(event) => setRunFilters({ ...runFilters, trigger_type: event.target.value })}
-          >
-            <option value="all">全部触发</option>
-            <option value="manual">手动</option>
-            <option value="schedule">定时</option>
-          </select>
-          <select
-            className="select"
-            value={runFilters.status}
-            onChange={(event) => setRunFilters({ ...runFilters, status: event.target.value })}
-          >
-            <option value="all">全部状态</option>
-            <option value="success">成功</option>
-            <option value="failed">失败</option>
-          </select>
-          <input
-            className="input grow"
-            value={runFilters.search}
-            placeholder="搜索详情"
-            onChange={(event) => setRunFilters({ ...runFilters, search: event.target.value })}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") onFilterAutomationRuns(automationRunQuery());
-            }}
-          />
-          <button className="button secondary" disabled={busy} onClick={() => onFilterAutomationRuns(automationRunQuery())}>
-            <Search size={16} />
-            应用
-          </button>
-          <button
-            className="button danger"
-            disabled={busy || automationRuns.length === 0}
-            onClick={() => {
-              const query = automationRunQuery();
-              const clearAll = !query.job_type && !query.trigger_type && !query.status && !query.search;
-              if (window.confirm(clearAll ? "确认清空全部自动化历史？" : "确认清理匹配的自动化历史？")) {
-                onClearAutomationRuns({ ...query, clear_all: clearAll });
-              }
-            }}
-          >
-            <Trash2 size={16} />
-            清理
-          </button>
-        </div>
-        <div className="logTable automationDashboardLogTable">
-          <div className="logHeader">
-            <span>时间</span>
-            <span>任务</span>
-            <span>触发</span>
-            <span>状态</span>
-            <span>错误类</span>
-            <span>数量</span>
-            <span>耗时</span>
-            <span>详情</span>
-          </div>
-          {automationRuns.map((run) => (
-            <div className="logRow" key={run.id}>
-              <span>{formatDate(run.finished_at)}</span>
-              <span>{formatAutomationJob(run.job_type)}</span>
-              <span>{formatAutomationTrigger(run.trigger_type)}</span>
-              <StatusPill status={run.status} />
-              <span>{formatErrorCategory(run.error_category)}</span>
-              <span>{run.refreshed} 成功 / {run.failed} 失败</span>
-              <span>{formatDuration(run.duration_ms)}</span>
-              <span>{formatResultMessage(run.message)}</span>
-            </div>
-          ))}
-        </div>
-        {automationRuns.length === 0 && <EmptyState icon={<RefreshCw size={24} />} text="暂无自动化运行记录。" />}
-      </div>
-    </section>
   );
 }
 
@@ -5717,11 +3826,7 @@ function WorkspaceKeyRevealDialog({
 function SettingsView({
   status,
   settings,
-  forwardingLogs,
-  backupLogs,
   workspaceKeyRecords,
-  automationRuns,
-  retryQueue,
   localRetention,
   schedulerStatus,
   busy,
@@ -5732,23 +3837,11 @@ function SettingsView({
   onRefreshWorkspaceKeyRecords,
   onDeleteWorkspaceKeyRecord,
   onShowToast,
-  onRunForwarding,
-  onRunBackup,
-  onRestoreBackup,
-  onFilterAutomationRuns,
-  onClearAutomationRuns,
-  onClearLocalData,
-  onRunRetryQueue,
-  onRetryQueueItem,
-  onDismissRetryItem
+  onClearLocalData
 }: {
   status: AppStatus;
   settings: Settings;
-  forwardingLogs: ForwardingLog[];
-  backupLogs: BackupLog[];
   workspaceKeyRecords: WorkspaceKeyRecord[];
-  automationRuns: AutomationRun[];
-  retryQueue: RetryQueueItem[];
   localRetention: LocalRetentionSummary | null;
   schedulerStatus: SchedulerStatus | null;
   busy: boolean;
@@ -5759,21 +3852,11 @@ function SettingsView({
   onRefreshWorkspaceKeyRecords: () => Promise<void> | void;
   onDeleteWorkspaceKeyRecord: (recordId: number) => Promise<void> | void;
   onShowToast: (message: string) => void;
-  onRunForwarding: () => void;
-  onRunBackup: () => void;
-  onRestoreBackup: (backupLogId: number) => void;
-  onFilterAutomationRuns: (query: AutomationRunQuery) => void;
-  onClearAutomationRuns: (query: AutomationRunQuery & { clear_all?: boolean }) => void;
   onClearLocalData: (input: ClearLocalDataInput) => void;
-  onRunRetryQueue: () => void;
-  onRetryQueueItem: (retryId: number) => void;
-  onDismissRetryItem: (retryId: number) => void;
 }) {
   const [draft, setDraft] = useState(settings);
-  const [runFilters, setRunFilters] = useState({ job_type: "all", trigger_type: "all", status: "all", search: "" });
   const [clearLocal, setClearLocal] = useState({
     clear_mail_cache: false,
-    clear_temp_mail_cache: false,
     clear_attachments: false,
     clear_exports: false,
     confirm: ""
@@ -5794,21 +3877,13 @@ function SettingsView({
   useEffect(() => setDraft(settings), [settings]);
 
   const hasClearSelection =
-    clearLocal.clear_mail_cache || clearLocal.clear_temp_mail_cache || clearLocal.clear_attachments || clearLocal.clear_exports;
+    clearLocal.clear_mail_cache || clearLocal.clear_attachments || clearLocal.clear_exports;
   const settingsChanged = useMemo(() => JSON.stringify(draft) !== JSON.stringify(settings), [draft, settings]);
 
   function setField<K extends keyof Settings>(key: K, value: Settings[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
-  function automationRunQuery(): AutomationRunQuery {
-    return {
-      job_type: runFilters.job_type === "all" ? undefined : runFilters.job_type,
-      trigger_type: runFilters.trigger_type === "all" ? undefined : runFilters.trigger_type,
-      status: runFilters.status === "all" ? undefined : runFilters.status,
-      search: runFilters.search.trim() || undefined
-    };
-  }
 
   async function saveLoginPassword() {
     const currentPassword = passwordDraft.current_password;
@@ -5899,108 +3974,6 @@ function SettingsView({
 
       <div className="panel">
         <div className="panelHeader">
-          <h2>外观</h2>
-          <WandSparkles size={18} />
-        </div>
-        <div className="themePresetGrid">
-          {themePresets.map((preset) => (
-            <button
-              key={preset.id}
-              className={draft.appearance_theme === preset.id ? "themePreset active" : "themePreset"}
-              onClick={() => setField("appearance_theme", preset.id)}
-            >
-              <span className="themePreview" style={{ background: preset.rail }}>
-                <i style={{ background: normalizeAccent(draft.accent_color) }} />
-              </span>
-              <strong>{preset.label}</strong>
-            </button>
-          ))}
-        </div>
-        <div className="accentPicker">
-          <label>
-            <span>强调色</span>
-            <input
-              type="color"
-              value={normalizeAccent(draft.accent_color)}
-              onChange={(event) => setField("accent_color", event.target.value)}
-            />
-          </label>
-          <div className="accentSwatches">
-            {["#b5725f", "#111111", "#8a7a70", "#4a4a45", "#c05f42", "#e0a17f"].map((accent) => (
-              <button
-                key={accent}
-                className={normalizeAccent(draft.accent_color).toLowerCase() === accent ? "accentSwatch active" : "accentSwatch"}
-                style={{ background: accent }}
-                title={accent}
-                onClick={() => setField("accent_color", accent)}
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="panel">
-        <div className="panelHeader">
-          <h2>服务商设置</h2>
-          <SettingsIcon size={18} />
-        </div>
-        <Field label="Microsoft Graph 客户端 ID" value={draft.graph_client_id} onChange={(value) => setField("graph_client_id", value)} />
-        <Field label="OAuth 回调地址" value={draft.oauth_redirect_uri} onChange={(value) => setField("oauth_redirect_uri", value)} />
-        <Field label="GPTMail 基础地址" value={draft.gptmail_base_url} onChange={(value) => setField("gptmail_base_url", value)} />
-        <SecretField label="GPTMail API 密钥" value={draft.gptmail_api_key} onChange={(value) => setField("gptmail_api_key", value)} />
-        <Field label="DuckMail 基础地址" value={draft.duckmail_base_url} onChange={(value) => setField("duckmail_base_url", value)} />
-        <SecretField label="DuckMail API 密钥" value={draft.duckmail_api_key} onChange={(value) => setField("duckmail_api_key", value)} />
-      </div>
-
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>工作区密钥</h2>
-          <KeyRound size={18} />
-        </div>
-        <p className="oauthHint">
-          随机生成 16 字节 workspace key（Base64 编码）。密钥仅在生成时显示一次，保存后无法再次查看；列表仅保留用途和生成时间。用途在生成弹窗中填写，留空时自动命名为 密钥_1、密钥_2……
-        </p>
-        <div className="workspaceKeyGenerateAction">
-          <button
-            className="button primary"
-            disabled={busy || workspaceKeyBusy || Boolean(revealedWorkspaceKey)}
-            onClick={generateWorkspaceKey}
-          >
-            {busy || workspaceKeyBusy ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
-            生成密钥
-          </button>
-        </div>
-        {workspaceKeyError && <div className="formError">{workspaceKeyError}</div>}
-
-        <div className="logTable workspaceKeyTable">
-          <div className="logHeader">
-            <span>用途</span>
-            <span>生成时间</span>
-            <span>操作</span>
-          </div>
-          {workspaceKeyRecords.map((record) => (
-            <div className="logRow" key={record.id}>
-              <span>{record.purpose}</span>
-              <span>{formatDate(record.created_at)}</span>
-              <span className="rowActions">
-                <button
-                  className="button danger workspaceKeyDeleteButton"
-                  title="删除密钥"
-                  disabled={busy || workspaceKeyBusy}
-                  onClick={() => deleteWorkspaceKeyRecord(record.id)}
-                >
-                  <Trash2 size={14} />
-                  删除
-                </button>
-              </span>
-            </div>
-          ))}
-        </div>
-        {workspaceKeyRecords.length === 0 && <EmptyState icon={<KeyRound size={24} />} text="暂无工作区密钥记录。" />}
-      </div>
-
-      <div className="panel">
-        <div className="panelHeader">
           <h2>登录密码</h2>
           <Lock size={18} />
         </div>
@@ -6063,94 +4036,53 @@ function SettingsView({
             onChange={(value) => setField("scheduler_refresh_top", value)}
           />
         </div>
-        <label className="checkLine toggleLine">
-          <input
-            type="checkbox"
-            checked={draft.forwarding_enabled}
-            onChange={(event) => setField("forwarding_enabled", event.target.checked)}
-          />
-          <span>定时转发</span>
-        </label>
-        <NumberField
-          label="转发间隔"
-          value={draft.forwarding_interval_minutes}
-          min={1}
-          onChange={(value) => setField("forwarding_interval_minutes", value)}
-        />
-        <label className="checkLine toggleLine">
-          <input
-            type="checkbox"
-            checked={draft.backup_enabled}
-            onChange={(event) => setField("backup_enabled", event.target.checked)}
-          />
-          <span>定时 WebDAV 备份</span>
-        </label>
-        <NumberField
-          label="备份间隔"
-          value={draft.backup_interval_minutes}
-          min={1}
-          onChange={(value) => setField("backup_interval_minutes", value)}
-        />
       </div>
 
-      <div className="panel">
+      <div className="panel widePanel">
         <div className="panelHeader">
-          <h2>转发通道</h2>
-          <Mail size={18} />
+          <h2>工作区密钥</h2>
+          <KeyRound size={18} />
         </div>
-        <div className="formLine">
-          <Field label="SMTP 主机" value={draft.forward_smtp_host} onChange={(value) => setField("forward_smtp_host", value)} />
-          <NumberField
-            label="端口"
-            value={draft.forward_smtp_port}
-            min={1}
-            max={65535}
-            onChange={(value) => setField("forward_smtp_port", value)}
-          />
+        <p className="oauthHint">
+          随机生成 16 字节 workspace key（Base64 编码）。密钥仅在生成时显示一次，保存后无法再次查看；列表仅保留用途和生成时间。用途在生成弹窗中填写，留空时自动命名为 密钥_1、密钥_2……
+        </p>
+        <div className="workspaceKeyGenerateAction">
+          <button
+            className="button primary"
+            disabled={busy || workspaceKeyBusy || Boolean(revealedWorkspaceKey)}
+            onClick={generateWorkspaceKey}
+          >
+            {busy || workspaceKeyBusy ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
+            生成密钥
+          </button>
         </div>
-        <Field label="SMTP 用户名" value={draft.forward_smtp_username} onChange={(value) => setField("forward_smtp_username", value)} />
-        <SecretField
-          label="SMTP 密码"
-          value={draft.forward_smtp_password}
-          onChange={(value) => setField("forward_smtp_password", value)}
-        />
-        <Field label="SMTP 发件人" value={draft.forward_smtp_from} onChange={(value) => setField("forward_smtp_from", value)} />
-        <Field label="SMTP 收件人" value={draft.forward_smtp_to} onChange={(value) => setField("forward_smtp_to", value)} />
-        <SecretField
-          label="Telegram 机器人 Token"
-          value={draft.forward_telegram_bot_token}
-          onChange={(value) => setField("forward_telegram_bot_token", value)}
-        />
-        <Field
-          label="Telegram 会话 ID"
-          value={draft.forward_telegram_chat_id}
-          onChange={(value) => setField("forward_telegram_chat_id", value)}
-        />
-        <SecretField
-          label="企业微信 Webhook"
-          value={draft.forward_wecom_webhook}
-          onChange={(value) => setField("forward_wecom_webhook", value)}
-        />
-      </div>
+        {workspaceKeyError && <div className="formError">{workspaceKeyError}</div>}
 
-      <div className="panel">
-        <div className="panelHeader">
-          <h2>WebDAV 备份</h2>
-          <Archive size={18} />
+        <div className="logTable workspaceKeyTable">
+          <div className="logHeader">
+            <span>用途</span>
+            <span>生成时间</span>
+            <span>操作</span>
+          </div>
+          {workspaceKeyRecords.map((record) => (
+            <div className="logRow" key={record.id}>
+              <span>{record.purpose}</span>
+              <span>{formatDate(record.created_at)}</span>
+              <span className="rowActions">
+                <button
+                  className="button danger workspaceKeyDeleteButton"
+                  title="删除密钥"
+                  disabled={busy || workspaceKeyBusy}
+                  onClick={() => deleteWorkspaceKeyRecord(record.id)}
+                >
+                  <Trash2 size={14} />
+                  删除
+                </button>
+              </span>
+            </div>
+          ))}
         </div>
-        <Field label="WebDAV 地址" value={draft.webdav_url} onChange={(value) => setField("webdav_url", value)} />
-        <Field label="WebDAV 用户名" value={draft.webdav_username} onChange={(value) => setField("webdav_username", value)} />
-        <SecretField label="WebDAV 密码" value={draft.webdav_password} onChange={(value) => setField("webdav_password", value)} />
-        <div className="actionGrid">
-          <button className="button secondary" disabled={busy} onClick={onRunForwarding}>
-            {busy ? <Loader2 className="spin" size={16} /> : <Mail size={16} />}
-            运行转发
-          </button>
-          <button className="button secondary" disabled={busy} onClick={onRunBackup}>
-            {busy ? <Loader2 className="spin" size={16} /> : <Archive size={16} />}
-            运行备份
-          </button>
-        </div>
+        {workspaceKeyRecords.length === 0 && <EmptyState icon={<KeyRound size={24} />} text="暂无工作区密钥记录。" />}
       </div>
 
       <div className="panel widePanel">
@@ -6164,18 +4096,14 @@ function SettingsView({
         </div>
         <div className="runStatusGrid">
           <RunStatus label="刷新" value={schedulerStatus?.last_refresh_at} />
-          <RunStatus label="转发" value={schedulerStatus?.last_forwarding_at} />
-          <RunStatus label="备份" value={schedulerStatus?.last_backup_at} />
         </div>
         {localRetention && (
           <>
             <div className="retentionStats">
               <Stat label="本地邮件" value={localRetention.mail_message_count} />
               <Stat label="未读" value={localRetention.unread_message_count} />
-              <Stat label="临时消息" value={localRetention.temp_message_count} />
               <Stat label="附件文件" value={localRetention.attachment_file_count} />
               <Stat label="导出文件" value={localRetention.export_file_count} />
-              <Stat label="待重试" value={localRetention.retry_queue_count} />
             </div>
             <div className="retentionSizeGrid">
               <span>数据库</span>
@@ -6184,8 +4112,6 @@ function SettingsView({
               <strong>{formatBytes(localRetention.attachments_size) || "0 B"}</strong>
               <span>导出</span>
               <strong>{formatBytes(localRetention.exports_size) || "0 B"}</strong>
-              <span>备份</span>
-              <strong>{formatBytes(localRetention.backups_size) || "0 B"}</strong>
               <span>最新邮件</span>
               <strong>{localRetention.latest_mail_received_at ? formatDate(localRetention.latest_mail_received_at) : "-"}</strong>
               <span>账号刷新</span>
@@ -6203,14 +4129,6 @@ function SettingsView({
                   onChange={(event) => setClearLocal({ ...clearLocal, clear_mail_cache: event.target.checked })}
                 />
                 <span>邮件缓存</span>
-              </label>
-              <label className="checkLine">
-                <input
-                  type="checkbox"
-                  checked={clearLocal.clear_temp_mail_cache}
-                  onChange={(event) => setClearLocal({ ...clearLocal, clear_temp_mail_cache: event.target.checked })}
-                />
-                <span>临时邮箱消息</span>
               </label>
               <label className="checkLine">
                 <input
@@ -6247,207 +4165,9 @@ function SettingsView({
         )}
       </div>
 
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>重试队列</h2>
-          <RotateCcw size={18} />
-        </div>
-        <div className="tableActions">
-          <button className="button secondary" disabled={busy || retryQueue.length === 0} onClick={onRunRetryQueue}>
-            {busy ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />}
-            运行到期重试
-          </button>
-        </div>
-        <div className="logTable retryQueueTable">
-          <div className="logHeader">
-            <span>时间</span>
-            <span>任务</span>
-            <span>状态</span>
-            <span>账号</span>
-            <span>目标</span>
-            <span>次数</span>
-            <span>下次</span>
-            <span>错误</span>
-            <span>操作</span>
-          </div>
-          {retryQueue.map((item) => (
-            <div className="logRow" key={item.id}>
-              <span>{formatDate(item.updated_at)}</span>
-              <span>{formatRetryTask(item)}</span>
-              <StatusPill status={item.status} />
-              <span>{item.account_email || "-"}</span>
-              <span>{item.channel ? `${item.message_id} / ${item.channel}` : item.message_id}</span>
-              <span>{item.attempts} / {item.max_attempts}</span>
-              <span>{item.next_attempt_at ? formatDate(item.next_attempt_at) : "-"}</span>
-              <span>{item.error_message}</span>
-              <span className="rowActions">
-                <button className="iconMini" title="立即重试" disabled={busy} onClick={() => onRetryQueueItem(item.id)}>
-                  <RotateCcw size={14} />
-                </button>
-                <button className="iconMini danger" title="忽略" disabled={busy} onClick={() => onDismissRetryItem(item.id)}>
-                  <Trash2 size={14} />
-                </button>
-              </span>
-            </div>
-          ))}
-        </div>
-        {retryQueue.length === 0 && <EmptyState icon={<RotateCcw size={24} />} text="暂无待处理重试项。" />}
-      </div>
 
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>自动化历史</h2>
-          <RefreshCw size={18} />
-        </div>
-        <div className="automationFilters">
-          <select
-            className="select"
-            value={runFilters.job_type}
-            onChange={(event) => setRunFilters({ ...runFilters, job_type: event.target.value })}
-          >
-            <option value="all">全部任务</option>
-            <option value="refresh">刷新</option>
-            <option value="forwarding">转发</option>
-            <option value="backup">备份</option>
-            <option value="retry">重试</option>
-          </select>
-          <select
-            className="select"
-            value={runFilters.trigger_type}
-            onChange={(event) => setRunFilters({ ...runFilters, trigger_type: event.target.value })}
-          >
-            <option value="all">全部触发</option>
-            <option value="manual">手动</option>
-            <option value="schedule">定时</option>
-          </select>
-          <select
-            className="select"
-            value={runFilters.status}
-            onChange={(event) => setRunFilters({ ...runFilters, status: event.target.value })}
-          >
-            <option value="all">全部状态</option>
-            <option value="success">成功</option>
-            <option value="failed">失败</option>
-          </select>
-          <input
-            className="input grow"
-            value={runFilters.search}
-            placeholder="搜索详情"
-            onChange={(event) => setRunFilters({ ...runFilters, search: event.target.value })}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") onFilterAutomationRuns(automationRunQuery());
-            }}
-          />
-          <button className="button secondary" disabled={busy} onClick={() => onFilterAutomationRuns(automationRunQuery())}>
-            <Search size={16} />
-            应用
-          </button>
-          <button
-            className="button danger"
-            disabled={busy || automationRuns.length === 0}
-            onClick={() => {
-              const query = automationRunQuery();
-              const clearAll = !query.job_type && !query.trigger_type && !query.status && !query.search;
-              if (window.confirm(clearAll ? "确认清空全部自动化历史？" : "确认清理匹配的自动化历史？")) {
-                onClearAutomationRuns({ ...query, clear_all: clearAll });
-              }
-            }}
-          >
-            <Trash2 size={16} />
-            清理
-          </button>
-        </div>
-        <div className="logTable automationLogTable">
-          <div className="logHeader">
-            <span>时间</span>
-            <span>任务</span>
-            <span>触发</span>
-            <span>状态</span>
-            <span>数量</span>
-            <span>耗时</span>
-            <span>详情</span>
-          </div>
-          {automationRuns.map((run) => (
-            <div className="logRow" key={run.id}>
-              <span>{formatDate(run.finished_at)}</span>
-              <span>{formatAutomationJob(run.job_type)}</span>
-              <span>{formatAutomationTrigger(run.trigger_type)}</span>
-              <StatusPill status={run.status} />
-              <span>{run.refreshed} 成功 / {run.failed} 失败</span>
-              <span>{formatDuration(run.duration_ms)}</span>
-              <span>{formatResultMessage(run.message)}</span>
-            </div>
-          ))}
-        </div>
-        {automationRuns.length === 0 && <EmptyState icon={<RefreshCw size={24} />} text="暂无自动化运行记录。" />}
-      </div>
 
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>转发日志</h2>
-          <Mail size={18} />
-        </div>
-        <div className="logTable forwardingLogTable">
-          <div className="logHeader">
-            <span>时间</span>
-            <span>账号</span>
-            <span>通道</span>
-            <span>状态</span>
-            <span>详情</span>
-          </div>
-          {forwardingLogs.map((log) => (
-            <div className="logRow" key={log.id}>
-              <span>{formatDate(log.created_at)}</span>
-              <span>{log.account_email}</span>
-              <span>{log.channel}</span>
-              <StatusPill status={log.status} />
-              <span>{log.error_message || log.message_id}</span>
-            </div>
-          ))}
-        </div>
-        {forwardingLogs.length === 0 && <EmptyState icon={<Mail size={24} />} text="暂无转发记录。" />}
-      </div>
 
-      <div className="panel widePanel">
-        <div className="panelHeader">
-          <h2>备份日志</h2>
-          <Archive size={18} />
-        </div>
-        <div className="logTable backupLogTable">
-          <div className="logHeader">
-            <span>时间</span>
-            <span>文件</span>
-            <span>状态</span>
-            <span>大小</span>
-            <span>目标</span>
-            <span>操作</span>
-          </div>
-          {backupLogs.map((log) => (
-            <div className="logRow" key={log.id}>
-              <span>{formatDate(log.created_at)}</span>
-              <span>{log.file_name}</span>
-              <StatusPill status={log.status} />
-              <span>{formatBytes(log.size)}</span>
-              <span>{log.error_message || log.target}</span>
-              <span className="rowActions">
-                <button
-                  className="iconMini"
-                  title="恢复备份"
-                  disabled={busy || log.status !== "success"}
-                  onClick={() => {
-                    if (window.confirm("确认从此备份恢复当前工作区？恢复前会先创建安全快照。")) {
-                      onRestoreBackup(log.id);
-                    }
-                  }}
-                >
-                  <RotateCcw size={14} />
-                </button>
-              </span>
-            </div>
-          ))}
-        </div>
-        {backupLogs.length === 0 && <EmptyState icon={<Archive size={24} />} text="暂无备份记录。" />}
-      </div>
     </section>
   );
 }
@@ -6528,41 +4248,6 @@ function MessageBody({ body, bodyType }: { body: string; bodyType?: string | nul
     );
   }
   return <div className="messageBody">{body}</div>;
-}
-
-function RemoteFailurePanel({
-  failure,
-  busy,
-  onRetry,
-  onDismiss
-}: {
-  failure: RemoteSyncFailure;
-  busy: boolean;
-  onRetry: (retryId: number) => void;
-  onDismiss: (retryId: number) => void;
-}) {
-  return (
-    <div className="remoteFailurePanel">
-      <div>
-        <strong>{formatRemoteFailureAction(failure.action)}在远端邮箱执行失败</strong>
-        <p>{failure.error_message}</p>
-        <small>
-          {formatStatus(failure.status)} · {failure.attempts} / {failure.max_attempts} 次
-          {failure.next_attempt_at ? ` · 下次 ${formatDate(failure.next_attempt_at)}` : ""}
-        </small>
-      </div>
-      <div className="remoteFailureActions">
-        <button className="button compact secondary" disabled={busy} onClick={() => onRetry(failure.retry_id)}>
-          <RotateCcw size={14} />
-          重试
-        </button>
-        <button className="button compact ghost" disabled={busy} onClick={() => onDismiss(failure.retry_id)}>
-          <Trash2 size={14} />
-          忽略
-        </button>
-      </div>
-    </div>
-  );
 }
 
 function MailSharePanel({
@@ -6764,59 +4449,10 @@ function formatDuration(value: number) {
   return `${(value / 1000).toFixed(1)} s`;
 }
 
-function formatRetryTask(item: RetryQueueItem) {
-  if (item.task_type === "mail_mark") return item.action === "mark_read" ? "标记已读" : "标记未读";
-  return formatRetryTaskType(item.task_type);
-}
 
-function formatRetryTaskType(taskType: string) {
-  if (taskType === "mail_mark") return "标记邮件";
-  if (taskType === "mail_delete") return "删除邮件";
-  if (taskType === "forward_message") return "转发邮件";
-  if (taskType === "temp_refresh") return "刷新临时邮箱";
-  if (taskType === "refresh_account") return "刷新账号";
-  if (taskType === "backup_job") return "执行备份";
-  return taskType;
-}
 
-function formatErrorCategory(category: string) {
-  const map: Record<string, string> = {
-    none: "-",
-    auth: "认证",
-    rate_limit: "限流",
-    network: "网络",
-    config: "配置",
-    storage: "存储",
-    data: "数据",
-    provider: "服务商",
-    unknown: "未知"
-  };
-  return map[category] ?? category;
-}
 
-function formatForwardingChannel(channel: string) {
-  const map: Record<string, string> = {
-    smtp: "SMTP",
-    telegram: "Telegram",
-    wecom: "企业微信",
-    preview: "预览"
-  };
-  return map[channel] ?? channel;
-}
 
-function formatRetryDelay(item: RetryQueueItem) {
-  if (item.due_now) return "已到期";
-  if (!item.next_delay_minutes) return "小于 1 分钟";
-  if (item.next_delay_minutes < 60) return `${item.next_delay_minutes} 分钟后`;
-  return `${(item.next_delay_minutes / 60).toFixed(1)} 小时后`;
-}
-
-function formatRemoteFailureAction(action: string) {
-  if (action === "mark_read") return "标记已读";
-  if (action === "mark_unread") return "标记未读";
-  if (action === "delete") return "删除邮件";
-  return action || "远端同步";
-}
 
 function formatStatus(status: string) {
   const map: Record<string, string> = {
@@ -6828,14 +4464,7 @@ function formatStatus(status: string) {
     pending: "待处理",
     expired: "已过期",
     revoked: "已撤销",
-    healthy: "健康",
-    degraded: "降级",
-    open: "熔断",
-    not_configured: "未配置",
     none: "-",
-    removed: "已移除",
-    toClaim: "可领取",
-    claimed: "已领取",
     read: "已读",
     unread: "未读",
     local: "本地"
@@ -6843,34 +4472,13 @@ function formatStatus(status: string) {
   return map[status] ?? status;
 }
 
-function formatAutomationJob(job: string) {
-  const map: Record<string, string> = {
-    refresh: "刷新",
-    forwarding: "转发",
-    backup: "备份",
-    retry: "重试"
-  };
-  return map[job] ?? job;
-}
 
-function formatAutomationTrigger(trigger: string) {
-  const map: Record<string, string> = {
-    manual: "手动",
-    schedule: "定时"
-  };
-  return map[trigger] ?? trigger;
-}
 
 function formatResultMessage(message: string) {
   if (!message) return message;
-  if (message === "No retry item(s) due") return "暂无到期重试项";
   if (message === "Refresh job accepted. Provider adapters are available in the Tauri runtime.") {
     return "刷新任务已接收。服务商适配器将在 Tauri 运行时可用。";
   }
-  if (message === "Backup preview completed") return "备份预览已完成";
-  if (message === "Temp mailbox refreshed") return "临时邮箱已刷新";
-  if (message === "Cloudflare channel connected") return "Cloudflare 通道连接成功";
-  if (message === "uploaded") return "已上传";
 
   const localMailFailure = message.match(/^(Marked read|Marked unread|Deleted) (\d+) local message\(s\), (\d+) remote sync failed: (.+)$/);
   if (localMailFailure) {
@@ -6902,62 +4510,19 @@ function formatResultMessage(message: string) {
   const refreshed = message.match(/^Refreshed (\d+) account\(s\)$/);
   if (refreshed) return `已刷新 ${refreshed[1]} 个账号`;
 
-  const refreshedTemp = message.match(/^Refreshed (\d+) temp message\(s\)$/);
-  if (refreshedTemp) return `已刷新 ${refreshedTemp[1]} 条临时邮件`;
-
-  const forwardedWithCircuit = message.match(/^Forwarded (\d+) message channel\(s\), (\d+) failed, (\d+) circuit skipped: (.+)$/);
-  if (forwardedWithCircuit) {
-    const [, forwarded, failed, skipped, detail] = forwardedWithCircuit;
-    return `已转发 ${forwarded} 个消息通道，${failed} 个失败，${skipped} 个因熔断跳过：${detail}`;
-  }
-
-  const forwardedWithFailures = message.match(/^Forwarded (\d+) message channel\(s\), (\d+) failed: (.+)$/);
-  if (forwardedWithFailures) {
-    const [, forwarded, failed, detail] = forwardedWithFailures;
-    return `已转发 ${forwarded} 个消息通道，${failed} 个失败：${detail}`;
-  }
-
-  const forwarded = message.match(/^Forwarded (\d+) message channel\(s\), skipped (\d+)$/);
-  if (forwarded) return `已转发 ${forwarded[1]} 个消息通道，跳过 ${forwarded[2]} 个`;
-
-  const forwardedPreview = message.match(/^Forwarded (\d+) preview item\(s\)$/);
-  if (forwardedPreview) return `已转发 ${forwardedPreview[1]} 个预览项`;
-
-  const retriedWithFailures = message.match(/^Retried (\d+) item\(s\), (\d+) failed: (.+)$/);
-  if (retriedWithFailures) {
-    const [, retried, failed, detail] = retriedWithFailures;
-    return `已重试 ${retried} 项，${failed} 项失败：${detail}`;
-  }
-
-  const retried = message.match(/^Retried (\d+) item\(s\)$/);
-  if (retried) return `已重试 ${retried[1]} 项`;
-
-  const dismissed = message.match(/^Dismissed (\d+) retry item\(s\)$/);
-  if (dismissed) return `已忽略 ${dismissed[1]} 个重试项`;
-
-  const cleared = message.match(/^Cleared (\d+) automation run\(s\)$/);
-  if (cleared) return `已清理 ${cleared[1]} 条自动化记录`;
-
-  const clearedLocal = message.match(/^Cleared local data: (\d+) mail message\(s\), (\d+) temp message\(s\), (\d+) file\(s\)$/);
-  if (clearedLocal) return `已清理本地数据：${clearedLocal[1]} 封邮件、${clearedLocal[2]} 条临时消息、${clearedLocal[3]} 个文件`;
-
-  const batch = message.match(/^Batch (delete|move_group|set_forward|add_tags|remove_tags) processed (\d+) account\(s\)$/);
+  const batch = message.match(/^Batch (delete|move_group|add_tags|remove_tags) processed (\d+) account\(s\)$/);
   if (batch) {
     const actionMap: Record<string, string> = {
       delete: "删除",
       move_group: "移动",
-      set_forward: "更新转发开关",
       add_tags: "添加标签",
       remove_tags: "移除标签"
     };
     return `已批量${actionMap[batch[1]]} ${batch[2]} 个账号`;
   }
 
-  const uploaded = message.match(/^Uploaded (.+)$/);
-  if (uploaded) return `已上传 ${uploaded[1]}`;
-
-  const restored = message.match(/^Restored local backup (.+)$/);
-  if (restored) return `已恢复本地备份 ${restored[1]}`;
+  const clearedLocal = message.match(/^Cleared local data: (\d+) mail message\(s\), (\d+) file\(s\)$/);
+  if (clearedLocal) return `已清理本地数据：${clearedLocal[1]} 封邮件、${clearedLocal[2]} 个文件`;
 
   return message;
 }

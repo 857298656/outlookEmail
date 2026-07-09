@@ -100,8 +100,17 @@ Gmail IMAP 登录失败、QQ 授权码错误，以及 163 客户端授权密码/
 ```powershell
 pnpm test
 pnpm build
-$env:RUSTUP_HOME='E:\RustCache\.rustup'; $env:CARGO_HOME='E:\RustCache\.cargo'; $env:PATH='E:\RustCache\.cargo\bin;' + $env:PATH; cargo test
+pnpm cargo:test
 ```
+
+Rust 编译缓存与临时目录默认写到 `E:\RustCache\`（`CARGO_TARGET_DIR`、`TEMP`/`TMP`），避免 Cursor 沙箱把 `target` 写到 C 盘。也可直接：
+
+```powershell
+pnpm cargo:check
+node scripts/cargo-with-rust-env.mjs test
+```
+
+若要释放 C 盘，可关闭 Cursor 后删除 `%LOCALAPPDATA%\Temp\cursor-sandbox-cache\`（不影响 E 盘上的 `.cargo` 或 `E:\RustCache\cargo-target\`）。
 
 当前回归重点：
 
@@ -118,15 +127,14 @@ $env:RUSTUP_HOME='E:\RustCache\.rustup'; $env:CARGO_HOME='E:\RustCache\.cargo'; 
 - `providers::tests::resolve_imap_received_time_prefers_internal_date` 与 `providers::tests::parse_imap_message_uses_seen_flag_from_fetch_meta` 覆盖 IMAP `INTERNALDATE`、`FLAGS \\Seen` 解析。
 - `providers::tests::should_send_imap_client_id_for_qq_gmail_and_custom_providers` 覆盖 QQ/Gmail/163/Custom IMAP 登录后发送 RFC 2971 `ID` 命令。
 - `db::project_tests::classifies_provider_specific_credential_errors` 覆盖 Gmail、QQ、163 provider-specific 凭据错误归类。
-- `db::project_tests::queues_failed_account_refresh_retry`、`queues_and_retries_failed_remote_mail_action`、`failed_remote_delete_keeps_message_visible_until_retry_success` 覆盖刷新失败、远端操作失败和删除回滚路径。
+- `db::project_tests::remote_mail_action_failure_reports_job_result` 与 `db::project_tests::failed_account_refresh_reports_job_result` 覆盖远端操作失败和账号刷新失败的 job result 上报。
 
 ## 已知限制
 
-- Gmail、QQ、163 的真实账号流程仍需要人工验收；自动化测试只能覆盖归一化、路由和本地重试逻辑。
+- Gmail、QQ、163 的真实账号流程仍需要人工验收；自动化测试只能覆盖归一化、路由和本地缓存逻辑。
 - **Gmail OAuth、Gmail API、`historyId` 增量同步和 push notifications 不在当前代码中**；Gmail 默认且唯一走 IMAP 应用专用密码。
 - IMAP 删除语义因服务商不同可能表现为 `\Deleted` + expunge、移动到 Trash 或服务商拒绝 UID 操作。
 - QQ/163 授权码流程可能随服务商策略变化，需要以真实账号网页端说明为准。
-- 当前 SMTP 转发仍是全局配置；按账号发信或按服务商发信不在本轮 M9 范围内。
 
 ## IMAP 兼容增强（暂缓，按需实施）
 

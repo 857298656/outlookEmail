@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "tauri:dev": "node scripts/tauri-with-rust-env.mjs dev",
     "tauri:build": "node scripts/tauri-with-rust-env.mjs build",
+    "cargo:test": "node scripts/cargo-with-rust-env.mjs test --lib",
+    "cargo:check": "node scripts/cargo-with-rust-env.mjs check",
     "test": "vitest run"
   },
   "dependencies": {

@@ -39,6 +39,7 @@ src-tauri/src/
   db.rs                 # SQLite + business logic
   providers.rs          # Provider registry + Graph/IMAP adapters
   import.rs             # Account import
+  scheduler.rs          # Background mail refresh scheduler
 docs/
   requirements-milestones.md   # Scope, milestones, done/undone
   provider-integration-plan.md # M9 plan (Gmail/QQ/163 IMAP)
@@ -46,7 +47,7 @@ docs/
   architecture.md              # Runtime + module map
 ```
 
-**Main UI views:** mail, accounts, refresh, automation, temp, projects, settings.
+**Main UI views:** mail, accounts, settings.
 
 ## Commands
 
@@ -54,8 +55,8 @@ docs/
 pnpm install
 pnpm tauri:dev          # full desktop dev
 pnpm build && pnpm test # frontend-only (no Rust)
-cargo test              # Rust tests (see provider-operations.md for RUSTUP/CARGO paths on this machine)
-pnpm tauri:build        # Windows exe / MSI / NSIS
+pnpm cargo:test       # Rust lib tests (uses E:\RustCache target dirs)
+pnpm tauri:build      # Windows exe / MSI / NSIS
 ```
 
 ## Conventions
@@ -63,8 +64,8 @@ pnpm tauri:build        # Windows exe / MSI / NSIS
 - Local-first: new features via Tauri commands + SQLite, not HTTP API.
 - Provider changes: update **both** `src/lib/providerRegistry.ts` and `src-tauri/src/providers.rs`.
 - Mail HTML: sanitize + sandboxed iframe (`emailHtml.ts`); list snippets via `mailPreview.ts`.
-- Failed remote ops → `retry_queue`; failed deletes keep local cache until retry succeeds.
-- Tests: `pnpm test` + `cargo test` before provider-related merges.
+- Failed remote mark/delete actions surface in job results; local cache updates immediately.
+- Tests: `pnpm test` + `pnpm cargo:test` before provider-related merges.
 
 ## Docs to open by task
 
@@ -77,8 +78,8 @@ pnpm tauri:build        # Windows exe / MSI / NSIS
 
 ## Deferred (do not implement unless asked)
 
-Web service, browser extension, Docker deploy, public HTTP API, Gmail OAuth/Gmail API.
+Web service, browser extension, Docker deploy, public HTTP API, Gmail OAuth/Gmail API, temp mail, forwarding, WebDAV backup, retry queue, automation dashboard, project pools.
 
 ## Session bootstrap
 
-New agents: read this file + **当前推荐下一步** in `docs/requirements-milestones.md`. Do **not** re-read the full codebase unless the task requires it. Docs were synced to code on **2026-07-08**.
+New agents: read this file + **当前推荐下一步** in `docs/requirements-milestones.md`. Do **not** re-read the full codebase unless the task requires it. Docs were synced to code on **2026-07-09**.

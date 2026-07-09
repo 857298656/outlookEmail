@@ -292,83 +292,18 @@ pub fn export_account_secrets(state: State<'_, AppState>, input: ExportAccountSe
     db.export_account_secrets(input)
 }
 
-#[tauri::command]
-pub fn export_project_accounts(state: State<'_, AppState>, input: ExportProjectAccountsInput) -> AppResult<ExportResult> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.export_project_accounts(input)
-}
 
-#[tauri::command]
-pub fn list_projects(state: State<'_, AppState>) -> AppResult<Vec<Project>> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.list_projects()
-}
 
-#[tauri::command]
-pub fn create_project(state: State<'_, AppState>, input: CreateProjectInput) -> AppResult<Project> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.create_project(input)
-}
 
-#[tauri::command]
-pub fn get_project(state: State<'_, AppState>, project_id: i64) -> AppResult<Project> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.get_project(project_id)
-}
 
-#[tauri::command]
-pub fn sync_project_scope(state: State<'_, AppState>, project_id: i64) -> AppResult<Project> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.sync_project_scope(project_id)
-}
 
-#[tauri::command]
-pub fn list_project_accounts(state: State<'_, AppState>, project_id: i64) -> AppResult<Vec<ProjectAccount>> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.list_project_accounts(project_id)
-}
 
-#[tauri::command]
-pub fn claim_project_account(state: State<'_, AppState>, input: ClaimProjectAccountInput) -> AppResult<Option<ProjectAccount>> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.claim_project_account(input)
-}
 
-#[tauri::command]
-pub fn complete_project_account_success(state: State<'_, AppState>, input: ProjectAccountActionInput) -> AppResult<ProjectAccount> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.complete_project_account_success(input)
-}
 
-#[tauri::command]
-pub fn complete_project_account_failed(state: State<'_, AppState>, input: ProjectAccountActionInput) -> AppResult<ProjectAccount> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.complete_project_account_failed(input)
-}
 
-#[tauri::command]
-pub fn release_project_account(state: State<'_, AppState>, input: ProjectAccountActionInput) -> AppResult<ProjectAccount> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.release_project_account(input)
-}
 
-#[tauri::command]
-pub fn remove_project_account(state: State<'_, AppState>, input: ProjectAccountActionInput) -> AppResult<ProjectAccount> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.remove_project_account(input)
-}
 
-#[tauri::command]
-pub fn restore_project_account(state: State<'_, AppState>, input: ProjectAccountActionInput) -> AppResult<ProjectAccount> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.restore_project_account(input)
-}
 
-#[tauri::command]
-pub fn list_project_events(state: State<'_, AppState>, project_id: i64) -> AppResult<Vec<ProjectAccountEvent>> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.list_project_events(project_id)
-}
 
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> AppResult<Settings> {
@@ -382,23 +317,8 @@ pub fn update_settings(state: State<'_, AppState>, settings: Settings) -> AppRes
     db.update_settings(settings)
 }
 
-#[tauri::command]
-pub fn run_forwarding_job(state: State<'_, AppState>, input: Option<ForwardingInput>) -> AppResult<JobResult> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.run_forwarding_job(input)
-}
 
-#[tauri::command]
-pub fn run_backup_job(state: State<'_, AppState>) -> AppResult<BackupResult> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.run_backup_job()
-}
 
-#[tauri::command]
-pub fn restore_backup(state: State<'_, AppState>, input: RestoreBackupInput) -> AppResult<RestoreBackupResult> {
-    let mut db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.restore_backup(input)
-}
 
 #[tauri::command]
 pub fn get_local_retention_summary(state: State<'_, AppState>) -> AppResult<LocalRetentionSummary> {
@@ -412,163 +332,12 @@ pub fn clear_local_data(state: State<'_, AppState>, input: ClearLocalDataInput) 
     db.clear_local_data(input)
 }
 
-#[tauri::command]
-pub fn list_forwarding_logs(state: State<'_, AppState>, limit: Option<i64>) -> AppResult<Vec<ForwardingLog>> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.list_forwarding_logs(limit)
-}
 
-#[tauri::command]
-pub fn list_backup_logs(state: State<'_, AppState>, limit: Option<i64>) -> AppResult<Vec<BackupLog>> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.list_backup_logs(limit)
-}
 
 #[tauri::command]
 pub fn scheduler_status(state: State<'_, AppState>) -> AppResult<SchedulerStatus> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.scheduler_status()
-}
-
-#[tauri::command]
-pub fn get_automation_observability(state: State<'_, AppState>) -> AppResult<AutomationObservability> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.get_automation_observability()
-}
-
-#[tauri::command]
-pub fn list_refresh_logs(
-    state: State<'_, AppState>,
-    account_id: Option<i64>,
-    limit: Option<i64>,
-) -> AppResult<Vec<RefreshLog>> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.list_refresh_logs(account_id, limit)
-}
-
-#[tauri::command]
-pub fn list_automation_runs(
-    state: State<'_, AppState>,
-    limit: Option<i64>,
-    query: Option<AutomationRunQuery>,
-) -> AppResult<Vec<AutomationRun>> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    match query {
-        Some(mut query) => {
-            if query.limit.is_none() {
-                query.limit = limit;
-            }
-            db.list_automation_runs_query(query)
-        }
-        None => db.list_automation_runs(limit),
-    }
-}
-
-#[tauri::command]
-pub fn clear_automation_runs(state: State<'_, AppState>, input: ClearAutomationRunsInput) -> AppResult<JobResult> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.clear_automation_runs(input)
-}
-
-#[tauri::command]
-pub fn list_retry_queue(
-    state: State<'_, AppState>,
-    query: Option<RetryQueueQuery>,
-    limit: Option<i64>,
-) -> AppResult<Vec<RetryQueueItem>> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    let mut query = query.unwrap_or_default();
-    if query.limit.is_none() {
-        query.limit = limit;
-    }
-    db.list_retry_queue(query)
-}
-
-#[tauri::command]
-pub fn run_retry_queue(state: State<'_, AppState>, input: Option<RetryQueueRunInput>) -> AppResult<JobResult> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.run_retry_queue(input)
-}
-
-#[tauri::command]
-pub fn dismiss_retry_item(state: State<'_, AppState>, input: RetryQueueItemInput) -> AppResult<JobResult> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.dismiss_retry_item(input)
-}
-
-#[tauri::command]
-pub fn list_temp_emails(state: State<'_, AppState>) -> AppResult<Vec<TempEmail>> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.list_temp_emails()
-}
-
-#[tauri::command]
-pub fn import_temp_emails(state: State<'_, AppState>, input: ImportTempEmailsInput) -> AppResult<ImportAccountsResult> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.import_temp_emails(input)
-}
-
-#[tauri::command]
-pub fn generate_temp_email(state: State<'_, AppState>, input: GenerateTempEmailInput) -> AppResult<TempEmail> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.generate_temp_email(input)
-}
-
-#[tauri::command]
-pub fn generate_cloudflare_temp_emails(
-    state: State<'_, AppState>,
-    input: GenerateCloudflareBatchInput,
-) -> AppResult<ImportAccountsResult> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.generate_cloudflare_batch(input)
-}
-
-#[tauri::command]
-pub fn delete_temp_email(state: State<'_, AppState>, input: TempEmailAddressInput) -> AppResult<()> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.delete_temp_email(input.email)
-}
-
-#[tauri::command]
-pub fn refresh_temp_email_messages(state: State<'_, AppState>, input: TempEmailAddressInput) -> AppResult<JobResult> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.refresh_temp_email_messages(input.email)
-}
-
-#[tauri::command]
-pub fn update_temp_email(state: State<'_, AppState>, input: UpdateTempEmailInput) -> AppResult<TempEmail> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.update_temp_email(input)
-}
-
-#[tauri::command]
-pub fn list_temp_email_messages(state: State<'_, AppState>, email: String) -> AppResult<Vec<TempEmailMessage>> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.list_temp_email_messages(email)
-}
-
-#[tauri::command]
-pub fn list_cloudflare_channels(state: State<'_, AppState>) -> AppResult<Vec<CloudflareChannel>> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.list_cloudflare_channels()
-}
-
-#[tauri::command]
-pub fn upsert_cloudflare_channel(state: State<'_, AppState>, input: UpsertCloudflareChannelInput) -> AppResult<CloudflareChannel> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.upsert_cloudflare_channel(input)
-}
-
-#[tauri::command]
-pub fn delete_cloudflare_channel(state: State<'_, AppState>, channel_id: i64) -> AppResult<()> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.delete_cloudflare_channel(channel_id)
-}
-
-#[tauri::command]
-pub fn test_cloudflare_channel(state: State<'_, AppState>, channel_id: i64) -> AppResult<JobResult> {
-    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
-    db.test_cloudflare_channel(channel_id)
 }
 
 #[tauri::command]

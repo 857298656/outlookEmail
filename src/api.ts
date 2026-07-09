@@ -5,16 +5,9 @@ import type {
   Account,
   AccountSecretsPreview,
   AppStatus,
-  AutomationObservability,
-  AutomationRun,
-  AutomationRunQuery,
-  BackupLog,
-  BackupResult,
   ClearLocalDataInput,
   ClearLocalDataResult,
-  CloudflareChannel,
   ExportResult,
-  ForwardingLog,
   Group,
   ImportAccountsResult,
   JobResult,
@@ -27,18 +20,9 @@ import type {
   OAuthSaveAccountInput,
   OAuthSaveAccountResult,
   OAuthTokenResult,
-  Project,
-  ProjectAccount,
-  ProjectAccountEvent,
-  RefreshLog,
-  RetryQueueItem,
-  RetryQueueQuery,
-  RestoreBackupResult,
   SchedulerStatus,
   Settings,
   Tag,
-  TempEmail,
-  TempEmailMessage,
   UpdateLoginPasswordInput,
   WorkspaceKeyRecord,
   GenerateWorkspaceKeyResult
@@ -53,31 +37,9 @@ const encodeOAuthQueryValue = (value: string) => encodeURIComponent(value).repla
 const defaultSettings: Settings = {
   graph_client_id: defaultGraphClientId,
   oauth_redirect_uri: defaultOAuthRedirectUri,
-  gptmail_base_url: "https://mail.chatgpt.org.uk",
-  gptmail_api_key: "",
-  duckmail_base_url: "https://api.duckmail.sbs",
-  duckmail_api_key: "",
-  webdav_url: "",
-  webdav_username: "",
-  webdav_password: "",
-  backup_enabled: false,
-  backup_interval_minutes: 1440,
   scheduler_refresh_enabled: false,
   scheduler_refresh_interval_minutes: 15,
-  scheduler_refresh_top: 25,
-  forwarding_enabled: false,
-  forwarding_interval_minutes: 10,
-  forward_smtp_host: "",
-  forward_smtp_port: 587,
-  forward_smtp_username: "",
-  forward_smtp_password: "",
-  forward_smtp_from: "",
-  forward_smtp_to: "",
-  forward_telegram_bot_token: "",
-  forward_telegram_chat_id: "",
-  forward_wecom_webhook: "",
-  appearance_theme: "default",
-  accent_color: "#b5725f"
+  scheduler_refresh_top: 25
 };
 
 let mockInitialized = false;
@@ -106,23 +68,10 @@ let mockTags: Tag[] = [
 let mockAccounts: Account[] = [];
 let mockMessages: MailMessage[] = [];
 let mockSettings = defaultSettings;
-let mockProjects: Project[] = [];
-let mockProjectAccounts: ProjectAccount[] = [];
-let mockProjectEvents: ProjectAccountEvent[] = [];
-let mockForwardingLogs: ForwardingLog[] = [];
-let mockBackupLogs: BackupLog[] = [];
-let mockTempEmails: TempEmail[] = [];
-let mockTempMessages: TempEmailMessage[] = [];
-let mockCloudflareChannels: CloudflareChannel[] = [];
 let mockWorkspaceKeyRecords: WorkspaceKeyRecord[] = [];
 let mockSchedulerStatus: SchedulerStatus = {
-  last_refresh_at: null,
-  last_forwarding_at: null,
-  last_backup_at: null
+  last_refresh_at: null
 };
-let mockAutomationRuns: AutomationRun[] = [];
-let mockRetryQueue: RetryQueueItem[] = [];
-let mockRefreshLogs: RefreshLog[] = [];
 let mockMailShareRecords: MailShareRecord[] = [];
 
 function isTauriRuntime() {
@@ -179,16 +128,13 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       const input = args?.input as ClearLocalDataInput;
       if (input.confirm !== "CLEAR LOCAL DATA") throw new Error("type CLEAR LOCAL DATA to confirm local data cleanup");
       const deletedMessages = input.clear_mail_cache ? mockMessages.length : 0;
-      const deletedTempMessages = input.clear_temp_mail_cache ? mockTempMessages.length : 0;
       const deletedFiles = (input.clear_attachments ? 2 : 0) + (input.clear_exports ? 2 : 0);
       const freedBytes = deletedFiles * 512;
       if (input.clear_mail_cache) mockMessages = [];
-      if (input.clear_temp_mail_cache) mockTempMessages = [];
       return {
         success: true,
-        message: `Cleared local data: ${deletedMessages} mail message(s), ${deletedTempMessages} temp message(s), ${deletedFiles} file(s)`,
+        message: `Cleared local data: ${deletedMessages} mail message(s), ${deletedFiles} file(s)`,
         deleted_messages: deletedMessages,
-        deleted_temp_messages: deletedTempMessages,
         deleted_files: deletedFiles,
         freed_bytes: freedBytes
       } as T;
@@ -310,7 +256,6 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
           status: "active",
           provider: row.provider,
           account_type: accountType,
-          forward_enabled: false,
           last_refresh_status: "never",
           last_refresh_error: null,
           last_refresh_at: null,
@@ -348,7 +293,6 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         account_ids: number[];
         action: string;
         group_id?: number | null;
-        forward_enabled?: boolean;
         tag_ids?: number[];
       };
       const ids = new Set(input.account_ids);
@@ -366,10 +310,6 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
                 group_name: group?.name ?? null
               }
             : account
-        );
-      } else if (input.action === "set_forward") {
-        mockAccounts = mockAccounts.map((account) =>
-          ids.has(account.id) ? { ...account, forward_enabled: Boolean(input.forward_enabled) } : account
         );
       } else if (input.action === "add_tags") {
         const tagsToAdd = mockTags.filter((tag) => input.tag_ids?.includes(tag.id));
@@ -425,7 +365,6 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         body: "This local message confirms the desktop workspace is working.",
         body_type: "text",
         attachments: [],
-        remote_sync_failure: null
       };
       mockMessages = [message, ...mockMessages];
       return message as T;
@@ -464,231 +403,15 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
           ? { ...account, last_refresh_status: "success", last_refresh_error: null, last_refresh_at: refreshedAt, updated_at: refreshedAt }
           : account
       );
-      mockRefreshLogs = [
-        ...targetAccounts.map((account, index) => ({
-          id: Date.now() + index,
-          account_id: account.id,
-          account_email: account.email,
-          refresh_type: "manual",
-          status: "success",
-          error_message: "Mock refresh completed",
-          created_at: refreshedAt
-        })),
-        ...mockRefreshLogs
-      ];
-      return recordMockAutomationRun("refresh", "manual", {
+      return {
         success: true,
         message: "Refresh job accepted. Provider adapters are available in the Tauri runtime.",
         refreshed: targetAccounts.length,
         failed: 0
-      }) as T;
+      } as T;
     }
-    case "run_forwarding_job": {
-      const now = new Date().toISOString();
-      mockSchedulerStatus.last_forwarding_at = now;
-      const enabledAccounts = mockAccounts.filter((account) => account.forward_enabled);
-      const rows = enabledAccounts.slice(0, 3).map((account, index) => ({
-        id: Date.now() + index,
-        account_id: account.id,
-        account_email: account.email,
-        message_id: `mock-${index}`,
-        channel: mockSettings.forward_smtp_host ? "smtp" : "preview",
-        status: "success",
-        error_message: null,
-        created_at: now
-      } satisfies ForwardingLog));
-      mockForwardingLogs = [...rows, ...mockForwardingLogs];
-      return recordMockAutomationRun("forwarding", "manual", {
-        success: true,
-        message: `Forwarded ${rows.length} preview item(s)`,
-        refreshed: rows.length,
-        failed: 0
-      }) as T;
-    }
-    case "run_backup_job": {
-      const now = new Date().toISOString();
-      mockSchedulerStatus.last_backup_at = now;
-      const log: BackupLog = {
-        id: Date.now(),
-        target: mockSettings.webdav_url || "browser-preview",
-        status: "success",
-        file_name: "outlook-email-preview.sqlite",
-        size: 1024,
-        error_message: null,
-        created_at: now
-      };
-      mockBackupLogs = [log, ...mockBackupLogs];
-      const result = { success: true, message: "Backup preview completed", path: "browser-preview.sqlite", remote_url: log.target, size: log.size };
-      recordMockAutomationRun("backup", "manual", {
-        success: result.success,
-        message: result.message,
-        refreshed: 1,
-        failed: 0
-      });
-      return result as T;
-    }
-    case "restore_backup": {
-      const input = args?.input as { backup_log_id: number; confirm?: boolean };
-      if (!input?.confirm) throw new Error("restore confirmation is required");
-      const log = mockBackupLogs.find((item) => item.id === input.backup_log_id);
-      if (!log || log.status !== "success") throw new Error("successful backup log not found");
-      return ({
-        success: true,
-        message: `Restored local backup ${log.file_name}`,
-        restored_file: log.file_name,
-        safety_backup_path: "browser-pre-restore.sqlite",
-        replaced_database_path: "browser-preview.sqlite",
-        size: log.size
-      } satisfies RestoreBackupResult) as T;
-    }
-    case "list_forwarding_logs":
-      return mockForwardingLogs.slice(0, (args?.limit as number | undefined) ?? 100) as T;
-    case "list_backup_logs":
-      return mockBackupLogs.slice(0, (args?.limit as number | undefined) ?? 100) as T;
     case "scheduler_status":
       return mockSchedulerStatus as T;
-    case "get_automation_observability":
-      return mockAutomationObservability() as T;
-    case "list_refresh_logs": {
-      const accountId = args?.accountId as number | undefined;
-      const limit = (args?.limit as number | undefined) ?? 100;
-      return mockRefreshLogs
-        .filter((log) => !accountId || log.account_id === accountId)
-        .slice(0, limit) as T;
-    }
-    case "list_automation_runs":
-      return filterMockAutomationRuns(args) as T;
-    case "clear_automation_runs": {
-      const input = args?.input as AutomationRunQuery & { clear_all?: boolean };
-      if (!input.clear_all && !input.job_type && !input.trigger_type && !input.status && !input.search) {
-        throw new Error("choose a filter or enable clear_all before clearing automation history");
-      }
-      const before = mockAutomationRuns.length;
-      mockAutomationRuns = mockAutomationRuns.filter((run) => !matchesAutomationRun(run, input));
-      const deleted = before - mockAutomationRuns.length;
-      return { success: true, message: `Cleared ${deleted} automation run(s)`, refreshed: deleted, failed: 0 } as T;
-    }
-    case "list_retry_queue": {
-      const query = ((args?.query ?? {}) as RetryQueueQuery) || {};
-      const limit = query.limit ?? (args?.limit as number | undefined) ?? 100;
-      return mockRetryQueue
-        .filter((item) => (!query.status || query.status === "all" ? true : item.status === query.status))
-        .filter((item) => (!query.task_type || query.task_type === "all" ? true : item.task_type === query.task_type))
-        .slice(0, limit) as T;
-    }
-    case "run_retry_queue": {
-      const input = (args?.input ?? {}) as { retry_id?: number; limit?: number };
-      const selected = input.retry_id
-        ? mockRetryQueue.filter((item) => item.id === input.retry_id)
-        : mockRetryQueue.filter((item) => item.status === "pending").slice(0, input.limit ?? 20);
-      mockRetryQueue = mockRetryQueue.filter((item) => !selected.some((selectedItem) => selectedItem.id === item.id));
-      return { success: true, message: `Retried ${selected.length} item(s)`, refreshed: selected.length, failed: 0 } as T;
-    }
-    case "dismiss_retry_item": {
-      const input = args?.input as { retry_id: number };
-      const before = mockRetryQueue.length;
-      mockRetryQueue = mockRetryQueue.filter((item) => item.id !== input.retry_id);
-      const deleted = before - mockRetryQueue.length;
-      return { success: true, message: `Dismissed ${deleted} retry item(s)`, refreshed: deleted, failed: 0 } as T;
-    }
-    case "list_temp_emails":
-      return mockTempEmails as T;
-    case "import_temp_emails": {
-      const input = args?.input as { raw: string; provider: string; channel_id?: number | null };
-      let imported = 0;
-      let skipped = 0;
-      for (const line of input.raw.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
-        const email = (line.includes("----") ? line.split("----")[0] : line.split(",")[0]).trim().toLowerCase();
-        if (!email.includes("@") || mockTempEmails.some((item) => item.email === email)) {
-          skipped += 1;
-          continue;
-        }
-        mockTempEmails = [mockTempEmail(email, input.provider, input.channel_id ?? null), ...mockTempEmails];
-        imported += 1;
-      }
-      return { imported, skipped } as T;
-    }
-    case "generate_temp_email": {
-      const input = args?.input as { provider: string; prefix?: string; domain?: string; username?: string; channel_id?: number | null };
-      const provider = input.provider || "gptmail";
-      const domain = input.domain || (provider === "cloudflare" ? mockCloudflareChannels[0]?.email_domains[0] : "example.test") || "example.test";
-      const name = input.username || input.prefix || `oe${Math.floor(Math.random() * 100000)}`;
-      const email = `${name}@${domain}`.toLowerCase();
-      const item = mockTempEmail(email, provider, input.channel_id ?? mockCloudflareChannels[0]?.id ?? null);
-      mockTempEmails = [item, ...mockTempEmails.filter((existing) => existing.email !== email)];
-      return item as T;
-    }
-    case "generate_cloudflare_temp_emails": {
-      const input = args?.input as { channel_id?: number | null; prefix?: string; domain?: string; count: number; tags?: string[] };
-      const channel = input.channel_id ? mockCloudflareChannels.find((item) => item.id === input.channel_id) : mockCloudflareChannels[0];
-      const domain = input.domain || channel?.email_domains[0] || "example.test";
-      const prefix = input.prefix?.trim() || "cf";
-      const tags = normalizeMockTempTags(input.tags ?? []);
-      const count = Math.min(Math.max(input.count || 1, 1), 200);
-      let imported = 0;
-      for (let index = 0; index < count; index += 1) {
-        const email = `${prefix}${index}${Math.floor(Math.random() * 100000)}@${domain}`.toLowerCase();
-        mockTempEmails = [{ ...mockTempEmail(email, "cloudflare", channel?.id ?? null), tags }, ...mockTempEmails];
-        imported += 1;
-      }
-      return { imported, skipped: 0 } as T;
-    }
-    case "delete_temp_email": {
-      const input = args?.input as { email: string };
-      mockTempEmails = mockTempEmails.filter((item) => item.email !== input.email);
-      mockTempMessages = mockTempMessages.filter((item) => item.email_address !== input.email);
-      return undefined as T;
-    }
-    case "refresh_temp_email_messages": {
-      const input = args?.input as { email: string };
-      const message = mockTempMessage(input.email);
-      mockTempMessages = [message, ...mockTempMessages.filter((item) => item.message_id !== message.message_id)];
-      mockTempEmails = mockTempEmails.map((item) =>
-        item.email === input.email
-          ? { ...item, message_count: mockTempMessages.filter((msg) => msg.email_address === input.email).length, last_refresh_at: new Date().toISOString(), last_refresh_status: "success", updated_at: new Date().toISOString() }
-          : item
-      );
-      return { success: true, message: "Temp mailbox refreshed", refreshed: 1, failed: 0 } as T;
-    }
-    case "update_temp_email": {
-      const input = args?.input as { email: string; tags: string[] };
-      const normalizedEmail = input.email.trim().toLowerCase();
-      const tags = normalizeMockTempTags(input.tags);
-      mockTempEmails = mockTempEmails.map((item) =>
-        item.email === normalizedEmail ? { ...item, tags, updated_at: new Date().toISOString() } : item
-      );
-      const updated = mockTempEmails.find((item) => item.email === normalizedEmail);
-      if (!updated) throw new Error("temp email not found");
-      return updated as T;
-    }
-    case "list_temp_email_messages":
-      return mockTempMessages.filter((item) => item.email_address === args?.email) as T;
-    case "list_cloudflare_channels":
-      return mockCloudflareChannels as T;
-    case "upsert_cloudflare_channel": {
-      const input = args?.input as { id?: number; name: string; worker_domain: string; email_domains: string[]; enabled: boolean; is_default: boolean };
-      const channel: CloudflareChannel = {
-        id: input.id ?? Date.now(),
-        name: input.name,
-        worker_domain: input.worker_domain,
-        email_domains: input.email_domains,
-        enabled: input.enabled,
-        is_default: input.is_default,
-        admin_password_configured: true,
-        reference_count: 0,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-      mockCloudflareChannels = [channel, ...mockCloudflareChannels.filter((item) => item.id !== channel.id)].map((item) =>
-        channel.is_default && item.id !== channel.id ? { ...item, is_default: false } : item
-      );
-      return channel as T;
-    }
-    case "delete_cloudflare_channel":
-      mockCloudflareChannels = mockCloudflareChannels.filter((item) => item.id !== args?.channelId);
-      return undefined as T;
-    case "test_cloudflare_channel":
-      return { success: true, message: "Cloudflare channel connected", refreshed: 1, failed: 0 } as T;
     case "list_workspace_key_records":
       return mockWorkspaceKeyRecords as T;
     case "generate_workspace_key": {
@@ -772,7 +495,6 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         status: "active",
         provider,
         account_type: providerAccountType(provider),
-        forward_enabled: false,
         last_refresh_status: "authorized",
         last_refresh_error: null,
         last_refresh_at: null,
@@ -873,75 +595,6 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       const count = mockAccounts.filter((account) => selected.has(account.id)).length;
       return mockExport("account-secrets.csv", count) as T;
     }
-    case "export_project_accounts": {
-      const input = args?.input as { project_id: number };
-      const count = mockProjectAccounts.filter((account) => account.project_id === input.project_id).length;
-      return mockExport("project-accounts-export.csv", count) as T;
-    }
-    case "list_projects":
-      return mockProjects as T;
-    case "create_project": {
-      const input = args?.input as {
-        name: string;
-        project_key?: string;
-        description?: string;
-        scope_mode?: string;
-        use_alias_email?: boolean;
-        group_ids?: number[];
-        tag_ids?: number[];
-      };
-      const project: Project = {
-        id: Date.now(),
-        name: input.name,
-        project_key: input.project_key || input.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
-        description: input.description ?? "",
-        scope_mode: input.scope_mode ?? "all",
-        use_alias_email: Boolean(input.use_alias_email),
-        status: "active",
-        group_ids: input.group_ids ?? [],
-        tag_ids: input.tag_ids ?? [],
-        stats: { total: 0, to_claim: 0, claimed: 0, success: 0, failed: 0, removed: 0 },
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-      mockProjects = [project, ...mockProjects];
-      syncMockProject(project.id);
-      return mockProjects.find((item) => item.id === project.id) as T;
-    }
-    case "get_project":
-      return mockProjects.find((project) => project.id === args?.projectId) as T;
-    case "sync_project_scope": {
-      const projectId = args?.projectId as number;
-      syncMockProject(projectId);
-      return mockProjects.find((project) => project.id === projectId) as T;
-    }
-    case "list_project_accounts":
-      return mockProjectAccounts.filter((item) => item.project_id === args?.projectId) as T;
-    case "claim_project_account": {
-      const input = args?.input as { project_id: number };
-      const item = mockProjectAccounts.find((account) => account.project_id === input.project_id && account.status === "toClaim");
-      if (!item) return null as T;
-      item.status = "claimed";
-      item.claim_token = crypto.randomUUID();
-      item.claimed_at = new Date().toISOString();
-      item.lease_expires_at = new Date(Date.now() + 30 * 60_000).toISOString();
-      item.claim_count += 1;
-      item.updated_at = new Date().toISOString();
-      updateMockProjectStats(input.project_id);
-      return item as T;
-    }
-    case "complete_project_account_success":
-      return mutateMockProjectAccount((args?.input as { project_account_id: number }).project_account_id, "success") as T;
-    case "complete_project_account_failed":
-      return mutateMockProjectAccount((args?.input as { project_account_id: number }).project_account_id, "failed") as T;
-    case "release_project_account":
-      return mutateMockProjectAccount((args?.input as { project_account_id: number }).project_account_id, "toClaim") as T;
-    case "remove_project_account":
-      return mutateMockProjectAccount((args?.input as { project_account_id: number }).project_account_id, "removed") as T;
-    case "restore_project_account":
-      return mutateMockProjectAccount((args?.input as { project_account_id: number }).project_account_id, "toClaim") as T;
-    case "list_project_events":
-      return mockProjectEvents.filter((event) => event.project_id === args?.projectId) as T;
     default:
       throw new Error(`Unknown command: ${command}`);
   }
@@ -954,75 +607,11 @@ function refreshMockGroupCounts() {
   }));
 }
 
-function syncMockProject(projectId: number) {
-  const project = mockProjects.find((item) => item.id === projectId);
-  if (!project) return;
-  const scopedAccounts = mockAccounts.filter((account) => {
-    if (account.status !== "active") return false;
-    if (project.scope_mode === "groups") return project.group_ids.includes(account.group_id ?? -1);
-    if (project.scope_mode === "tags") return account.tags.some((tag) => project.tag_ids.includes(tag.id));
-    return true;
-  });
-  for (const account of scopedAccounts) {
-    const email = project.use_alias_email && account.aliases[0] ? account.aliases[0] : account.email;
-    const normalizedEmail = email.trim().toLowerCase();
-    if (!mockProjectAccounts.some((item) => item.project_id === project.id && item.normalized_email === normalizedEmail)) {
-      mockProjectAccounts.push({
-        id: Date.now() + mockProjectAccounts.length,
-        project_id: project.id,
-        account_id: account.id,
-        email,
-        normalized_email: normalizedEmail,
-        status: "toClaim",
-        claim_token: null,
-        claimed_at: null,
-        lease_expires_at: null,
-        last_result: "",
-        last_result_detail: "",
-        claim_count: 0,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      });
-    }
-  }
-  const targetEmails = new Set(
-    scopedAccounts.map((account) => {
-      const email = project.use_alias_email && account.aliases[0] ? account.aliases[0] : account.email;
-      return email.trim().toLowerCase();
-    })
-  );
-  mockProjectAccounts = mockProjectAccounts.map((item) =>
-    item.project_id === project.id && item.status !== "removed" && !targetEmails.has(item.normalized_email)
-      ? { ...item, status: "removed", updated_at: new Date().toISOString() }
-      : item
-  );
-  updateMockProjectStats(projectId);
-}
 
-function mutateMockProjectAccount(projectAccountId: number, status: string) {
-  const item = mockProjectAccounts.find((account) => account.id === projectAccountId);
-  if (!item) throw new Error("Project account not found");
-  item.status = status;
-  item.claim_token = status === "claimed" ? item.claim_token : null;
-  item.lease_expires_at = status === "claimed" ? item.lease_expires_at : null;
-  item.last_result = status === "success" || status === "failed" ? status : "";
-  item.updated_at = new Date().toISOString();
-  updateMockProjectStats(item.project_id);
-  return item;
-}
 
-function updateMockProjectStats(projectId: number) {
-  const rows = mockProjectAccounts.filter((item) => item.project_id === projectId);
-  const stats = {
-    total: rows.length,
-    to_claim: rows.filter((item) => item.status === "toClaim").length,
-    claimed: rows.filter((item) => item.status === "claimed").length,
-    success: rows.filter((item) => item.status === "success").length,
-    failed: rows.filter((item) => item.status === "failed").length,
-    removed: rows.filter((item) => item.status === "removed").length
-  };
-  mockProjects = mockProjects.map((project) => (project.id === projectId ? { ...project, stats, updated_at: new Date().toISOString() } : project));
-}
+
+
+
 
 function status(): AppStatus {
   return {
@@ -1038,104 +627,21 @@ function mockLocalRetentionSummary(): LocalRetentionSummary {
   const attachmentFileCount = mockMessages.reduce((count, message) => count + message.attachments.length, 0);
   return {
     database_path: "browser-preview.sqlite",
-    database_size: 4096 + mockMessages.length * 1024 + mockTempMessages.length * 512,
+    database_size: 4096 + mockMessages.length * 1024,
     attachment_file_count: attachmentFileCount,
     attachments_size: attachmentFileCount * 2048,
-    export_file_count: mockBackupLogs.length,
-    exports_size: mockBackupLogs.length * 1024,
-    backup_file_count: mockBackupLogs.length,
-    backups_size: mockBackupLogs.reduce((sum, log) => sum + log.size, 0),
+    export_file_count: 0,
+    exports_size: 0,
     mail_message_count: mockMessages.length,
     unread_message_count: mockMessages.filter((message) => !message.is_read).length,
     raw_mime_count: mockMessages.length,
     body_cached_count: mockMessages.filter((message) => message.body).length,
-    temp_message_count: mockTempMessages.length,
-    retry_queue_count: mockRetryQueue.filter((item) => item.status === "pending" || item.status === "failed").length,
     latest_mail_received_at: mockMessages[0]?.received_at ?? null,
     latest_account_refresh_at: mockAccounts.find((account) => account.last_refresh_at)?.last_refresh_at ?? null
   };
 }
 
-function mockAutomationObservability(): AutomationObservability {
-  const runs = mockAutomationRuns.slice(0, 500);
-  const retryItems = mockRetryQueue.slice(0, 500);
-  const channelCircuits = ["smtp", "telegram", "wecom"].map((channel) => {
-    const configured =
-      (channel === "smtp" && !!mockSettings.forward_smtp_host && !!mockSettings.forward_smtp_to) ||
-      (channel === "telegram" && !!mockSettings.forward_telegram_bot_token && !!mockSettings.forward_telegram_chat_id) ||
-      (channel === "wecom" && !!mockSettings.forward_wecom_webhook);
-    const channelLogs = mockForwardingLogs.filter((log) => log.channel === channel);
-    const recentFailures = channelLogs.filter((log) => log.status === "failed").length;
-    const pendingRetries = retryItems.filter((item) => item.task_type === "forward_message" && item.channel === channel).length;
-    const open = configured && recentFailures + pendingRetries >= 3;
-    return {
-      channel,
-      configured,
-      status: configured ? (open ? "open" : recentFailures || pendingRetries ? "degraded" : "healthy") : "not_configured",
-      recent_failures: recentFailures + pendingRetries,
-      pending_retries: pendingRetries,
-      open_until: open ? new Date(Date.now() + 30 * 60 * 1000).toISOString() : null,
-      last_success_at: channelLogs.find((log) => log.status === "success")?.created_at ?? null,
-      last_failure_at: channelLogs.find((log) => log.status === "failed")?.created_at ?? null,
-      last_error: channelLogs.find((log) => log.status === "failed")?.error_message ?? ""
-    };
-  });
-  const errorBuckets = [...runs.filter((run) => run.status === "failed").map((run) => run.message), ...retryItems.map((item) => item.error_message)]
-    .filter(Boolean)
-    .reduce<AutomationObservability["error_buckets"]>((buckets, message) => {
-      const category = classifyMockError(message);
-      const current = buckets.find((bucket) => bucket.category === category);
-      if (current) {
-        current.count += 1;
-        current.latest_message = message;
-      } else {
-        buckets.push({ category, count: 1, latest_message: message, latest_at: new Date().toISOString() });
-      }
-      return buckets;
-    }, [])
-    .sort((left, right) => right.count - left.count);
-  return {
-    run_count: runs.length,
-    successful_run_count: runs.filter((run) => run.status === "success").length,
-    failed_run_count: runs.filter((run) => run.status === "failed").length,
-    scheduled_run_count: runs.filter((run) => run.trigger_type === "schedule").length,
-    manual_run_count: runs.filter((run) => run.trigger_type === "manual").length,
-    average_duration_ms: runs.length ? Math.round(runs.reduce((sum, run) => sum + run.duration_ms, 0) / runs.length) : 0,
-    retry_pending_count: retryItems.filter((item) => item.status === "pending").length,
-    retry_failed_count: retryItems.filter((item) => item.status === "failed").length,
-    retry_due_count: retryItems.filter((item) => item.status === "pending" && (item.due_now || !item.next_attempt_at)).length,
-    retry_exhausted_count: retryItems.filter((item) => item.status === "failed" || item.attempts >= item.max_attempts).length,
-    open_circuit_count: channelCircuits.filter((channel) => channel.status === "open").length,
-    job_summaries: ["refresh", "forwarding", "backup", "retry"].map((jobType) => {
-      const matching = runs.filter((run) => run.job_type === jobType);
-      return {
-        job_type: jobType,
-        total: matching.length,
-        success: matching.filter((run) => run.status === "success").length,
-        failed: matching.filter((run) => run.status === "failed").length,
-        scheduled: matching.filter((run) => run.trigger_type === "schedule").length,
-        manual: matching.filter((run) => run.trigger_type === "manual").length,
-        average_duration_ms: matching.length ? Math.round(matching.reduce((sum, run) => sum + run.duration_ms, 0) / matching.length) : 0,
-        last_finished_at: matching[0]?.finished_at ?? null,
-        latest_message: matching[0]?.message ?? ""
-      };
-    }),
-    retry_summaries: ["mail_mark", "mail_delete", "forward_message", "temp_refresh", "refresh_account", "backup_job"].map((taskType) => {
-      const matching = retryItems.filter((item) => item.task_type === taskType);
-      return {
-        task_type: taskType,
-        pending: matching.filter((item) => item.status === "pending").length,
-        failed: matching.filter((item) => item.status === "failed").length,
-        due: matching.filter((item) => item.status === "pending" && (item.due_now || !item.next_attempt_at)).length,
-        exhausted: matching.filter((item) => item.status === "failed" || item.attempts >= item.max_attempts).length,
-        next_attempt_at: matching.find((item) => item.next_attempt_at)?.next_attempt_at ?? null,
-        last_error: matching.find((item) => item.error_message)?.error_message ?? ""
-      };
-    }),
-    error_buckets: errorBuckets,
-    channel_circuits: channelCircuits
-  };
-}
+
 
 function mockExport(fileName: string, itemCount: number): ExportResult {
   return {
@@ -1152,56 +658,13 @@ function refreshMockShareStatus(record: MailShareRecord): MailShareRecord {
   return { ...record, status: "active" };
 }
 
-function recordMockAutomationRun(jobType: string, triggerType: string, result: JobResult): JobResult {
-  const finished = new Date().toISOString();
-  mockAutomationRuns = [
-    {
-      id: Date.now() + Math.floor(Math.random() * 1000),
-      job_type: jobType,
-      trigger_type: triggerType,
-      status: result.success ? "success" : "failed",
-      error_category: result.success ? "none" : classifyMockError(result.message),
-      message: result.message,
-      refreshed: result.refreshed,
-      failed: result.failed,
-      duration_ms: Math.floor(Math.random() * 900) + 80,
-      started_at: finished,
-      finished_at: finished
-    },
-    ...mockAutomationRuns
-  ];
-  return result;
-}
 
-function filterMockAutomationRuns(args?: Record<string, unknown>) {
-  const query = ((args?.query ?? {}) as AutomationRunQuery) || {};
-  const limit = query.limit ?? (args?.limit as number | undefined) ?? 100;
-  return mockAutomationRuns.filter((run) => matchesAutomationRun(run, query)).slice(0, limit);
-}
 
-function matchesAutomationRun(run: AutomationRun, query: AutomationRunQuery) {
-  const search = query.search?.trim().toLowerCase() ?? "";
-  const text = [run.job_type, run.trigger_type, run.status, run.message].join(" ").toLowerCase();
-  return (
-    (!query.job_type || query.job_type === "all" || run.job_type === query.job_type) &&
-    (!query.trigger_type || query.trigger_type === "all" || run.trigger_type === query.trigger_type) &&
-    (!query.status || query.status === "all" || run.status === query.status) &&
-    (!search || text.includes(search))
-  );
-}
 
-function classifyMockError(message: string) {
-  const value = message.toLowerCase();
-  if (!value.trim()) return "none";
-  if (value.includes("auth") || value.includes("token") || value.includes("password") || value.includes("unauthorized")) return "auth";
-  if (value.includes("429") || value.includes("rate limit") || value.includes("throttle")) return "rate_limit";
-  if (value.includes("timeout") || value.includes("connection") || value.includes("proxy") || value.includes("network")) return "network";
-  if (value.includes("required") || value.includes("missing") || value.includes("configure")) return "config";
-  if (value.includes("sqlite") || value.includes("database") || value.includes("backup")) return "storage";
-  if (value.includes("invalid") || value.includes("parse") || value.includes("not found")) return "data";
-  if (value.includes("smtp") || value.includes("telegram") || value.includes("wecom") || value.includes("webdav")) return "provider";
-  return "unknown";
-}
+
+
+
+
 
 function filterMockMessages(args?: Record<string, unknown>) {
   const query = (args?.query ?? {}) as MailMessageQuery;
@@ -1328,54 +791,6 @@ function normalizeMockFolder(value: string) {
   return "all";
 }
 
-function mockTempEmail(email: string, provider: string, channelId: number | null): TempEmail {
-  return {
-    id: Date.now() + Math.floor(Math.random() * 1000),
-    email,
-    provider,
-    status: "active",
-    channel_id: channelId,
-    message_count: 0,
-    last_refresh_at: null,
-    last_refresh_status: "never",
-    last_refresh_error: null,
-    tags: [],
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  };
-}
-
-function normalizeMockTempTags(tags: string[]) {
-  const seen = new Set<string>();
-  return tags
-    .map((tag) => tag.trim())
-    .filter((tag) => {
-      if (!tag) return false;
-      const key = tag.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .map((tag) => tag.slice(0, 32))
-    .slice(0, 20);
-}
-
-function mockTempMessage(email: string): TempEmailMessage {
-  return {
-    id: Date.now(),
-    message_id: crypto.randomUUID(),
-    email_address: email,
-    from_address: "sender@example.test",
-    subject: "Temporary mailbox preview",
-    content: "This preview message confirms the temp mailbox workspace is wired.",
-    html_content: "",
-    has_html: false,
-    timestamp: Math.floor(Date.now() / 1000),
-    raw_content: "",
-    created_at: new Date().toISOString()
-  };
-}
-
 export const api = {
   status: () => call<AppStatus>("app_status"),
   login: (input: LoginInput) => call<AppStatus>("login_app", { input }),
@@ -1430,7 +845,6 @@ export const api = {
     fallback_proxy_url_1?: string;
     fallback_proxy_url_2?: string;
     mail_retention_days?: number;
-    forward_enabled?: boolean;
     password?: string;
     client_id?: string;
     refresh_token?: string;
@@ -1443,9 +857,8 @@ export const api = {
   deleteAccount: (accountId: number) => call<void>("delete_account", { accountId }),
   batchAccounts: (input: {
     account_ids: number[];
-    action: "delete" | "move_group" | "set_forward" | "add_tags" | "remove_tags";
+    action: "delete" | "move_group" | "add_tags" | "remove_tags";
     group_id?: number | null;
-    forward_enabled?: boolean;
     tag_ids?: number[];
   }) => call<JobResult>("batch_accounts", { input }),
   revealAccountSecrets: (input: { account_id: number; password: string }) =>
@@ -1485,55 +898,11 @@ export const api = {
     call<ExportResult>("export_accounts", { input: { group_id: groupId ?? null, account_ids: accountIds } }),
   exportAccountSecrets: (accountIds: number[], password: string, confirm: string) =>
     call<ExportResult>("export_account_secrets", { input: { account_ids: accountIds, password, confirm } }),
-  exportProjectAccounts: (projectId: number) =>
-    call<ExportResult>("export_project_accounts", { input: { project_id: projectId } }),
   getSettings: () => call<Settings>("get_settings"),
   updateSettings: (settings: Settings) => call<Settings>("update_settings", { settings }),
-  runForwardingJob: (input?: { account_id?: number; limit?: number }) =>
-    call<JobResult>("run_forwarding_job", { input }),
-  runBackupJob: () => call<BackupResult>("run_backup_job"),
-  restoreBackup: (backupLogId: number) =>
-    call<RestoreBackupResult>("restore_backup", { input: { backup_log_id: backupLogId, confirm: true } }),
   getLocalRetentionSummary: () => call<LocalRetentionSummary>("get_local_retention_summary"),
   clearLocalData: (input: ClearLocalDataInput) => call<ClearLocalDataResult>("clear_local_data", { input }),
-  listForwardingLogs: (limit = 100) => call<ForwardingLog[]>("list_forwarding_logs", { limit }),
-  listBackupLogs: (limit = 100) => call<BackupLog[]>("list_backup_logs", { limit }),
   schedulerStatus: () => call<SchedulerStatus>("scheduler_status"),
-  getAutomationObservability: () => call<AutomationObservability>("get_automation_observability"),
-  listRefreshLogs: (accountId?: number | null, limit = 100) =>
-    call<RefreshLog[]>("list_refresh_logs", { accountId: accountId ?? null, limit }),
-  listAutomationRuns: (query: AutomationRunQuery = {}, limit = 100) =>
-    call<AutomationRun[]>("list_automation_runs", { limit, query: { ...query, limit: query.limit ?? limit } }),
-  clearAutomationRuns: (input: AutomationRunQuery & { older_than_days?: number; clear_all?: boolean }) =>
-    call<JobResult>("clear_automation_runs", { input }),
-  listRetryQueue: (query: RetryQueueQuery = {}, limit = 100) =>
-    call<RetryQueueItem[]>("list_retry_queue", { limit, query: { ...query, limit: query.limit ?? limit } }),
-  runRetryQueue: (limit = 20) => call<JobResult>("run_retry_queue", { input: { limit } }),
-  retryQueueItem: (retryId: number) => call<JobResult>("run_retry_queue", { input: { retry_id: retryId } }),
-  dismissRetryItem: (retryId: number) => call<JobResult>("dismiss_retry_item", { input: { retry_id: retryId } }),
-  listTempEmails: () => call<TempEmail[]>("list_temp_emails"),
-  importTempEmails: (input: { raw: string; provider: string; channel_id?: number | null }) =>
-    call<ImportAccountsResult>("import_temp_emails", { input }),
-  generateTempEmail: (input: { provider: string; prefix?: string; domain?: string; username?: string; password?: string; channel_id?: number | null }) =>
-    call<TempEmail>("generate_temp_email", { input }),
-  generateCloudflareTempEmails: (input: { channel_id?: number | null; prefix?: string; domain?: string; count: number; tags?: string[] }) =>
-    call<ImportAccountsResult>("generate_cloudflare_temp_emails", { input }),
-  deleteTempEmail: (email: string) => call<void>("delete_temp_email", { input: { email } }),
-  refreshTempEmailMessages: (email: string) => call<JobResult>("refresh_temp_email_messages", { input: { email } }),
-  updateTempEmail: (input: { email: string; tags: string[] }) => call<TempEmail>("update_temp_email", { input }),
-  listTempEmailMessages: (email: string) => call<TempEmailMessage[]>("list_temp_email_messages", { email }),
-  listCloudflareChannels: () => call<CloudflareChannel[]>("list_cloudflare_channels"),
-  upsertCloudflareChannel: (input: {
-    id?: number;
-    name: string;
-    worker_domain: string;
-    email_domains: string[];
-    admin_password?: string;
-    enabled: boolean;
-    is_default: boolean;
-  }) => call<CloudflareChannel>("upsert_cloudflare_channel", { input }),
-  deleteCloudflareChannel: (channelId: number) => call<void>("delete_cloudflare_channel", { channelId }),
-  testCloudflareChannel: (channelId: number) => call<JobResult>("test_cloudflare_channel", { channelId }),
   listWorkspaceKeyRecords: () => call<WorkspaceKeyRecord[]>("list_workspace_key_records"),
   generateWorkspaceKey: (input: { purpose: string }) =>
     call<GenerateWorkspaceKeyResult>("generate_workspace_key", { input }),
@@ -1552,33 +921,6 @@ export const api = {
   downloadAllAttachments: (input: { account_id: number; message_id: string; folder?: string }) =>
     call<ExportResult>("download_all_attachments", { input }),
   getMailRawContent: (messageId: number) => call<MailRawContent>("get_mail_raw_content", { messageId }),
-  listProjects: () => call<Project[]>("list_projects"),
-  createProject: (input: {
-    name: string;
-    project_key?: string;
-    description?: string;
-    scope_mode?: string;
-    use_alias_email?: boolean;
-    group_ids?: number[];
-    tag_ids?: number[];
-  }) =>
-    call<Project>("create_project", { input }),
-  getProject: (projectId: number) => call<Project>("get_project", { projectId }),
-  syncProjectScope: (projectId: number) => call<Project>("sync_project_scope", { projectId }),
-  listProjectAccounts: (projectId: number) => call<ProjectAccount[]>("list_project_accounts", { projectId }),
-  claimProjectAccount: (input: { project_id: number; lease_minutes?: number }) =>
-    call<ProjectAccount | null>("claim_project_account", { input }),
-  completeProjectAccountSuccess: (projectAccountId: number, detail = "") =>
-    call<ProjectAccount>("complete_project_account_success", { input: { project_account_id: projectAccountId, detail } }),
-  completeProjectAccountFailed: (projectAccountId: number, detail = "") =>
-    call<ProjectAccount>("complete_project_account_failed", { input: { project_account_id: projectAccountId, detail } }),
-  releaseProjectAccount: (projectAccountId: number, detail = "") =>
-    call<ProjectAccount>("release_project_account", { input: { project_account_id: projectAccountId, detail } }),
-  removeProjectAccount: (projectAccountId: number, detail = "") =>
-    call<ProjectAccount>("remove_project_account", { input: { project_account_id: projectAccountId, detail } }),
-  restoreProjectAccount: (projectAccountId: number, detail = "") =>
-    call<ProjectAccount>("restore_project_account", { input: { project_account_id: projectAccountId, detail } }),
-  listProjectEvents: (projectId: number) => call<ProjectAccountEvent[]>("list_project_events", { projectId }),
   runRefreshJob: (accountId?: number, folder = "all", top?: number) => {
     const input: { account_id?: number; folder: string; top?: number } = { account_id: accountId, folder };
     if (top !== undefined) input.top = top;

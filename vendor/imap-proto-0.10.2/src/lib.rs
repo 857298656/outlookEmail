@@ -31,7 +31,7 @@ use std::borrow::Cow;
 // QUOTED-CHAR = <any TEXT-CHAR except quoted-specials> / "\" quoted-specials
 // quoted-specials = DQUOTE / "\"
 // TEXT-CHAR = <any CHAR except CR and LF>
-fn quoted_string(s: &str) -> Result<Cow<str>, &'static str> {
+fn quoted_string(s: &str) -> Result<Cow<'_, str>, &'static str> {
     let bytes = s.as_bytes();
     let (mut start, mut new) = (0, Vec::<u8>::new());
     for (i, b) in bytes.iter().enumerate() {

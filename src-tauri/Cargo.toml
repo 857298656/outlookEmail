@@ -19,7 +19,6 @@ base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 directories = "5"
 imap = "2.4"
-lettre = "0.11"
 mailparse = "0.15"
 native-tls = "0.2"
 rand = "0.8"

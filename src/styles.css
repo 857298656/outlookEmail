@@ -946,17 +946,6 @@ button:disabled {
   display: flex;
 }
 
-.remoteFailureInline {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  width: fit-content;
-  max-width: 100%;
-  color: #b91c1c;
-  font-size: 12px;
-  font-weight: 650;
-}
-
 .messageOpen.unread .sender,
 .messageOpen.unread .messageSubject {
   color: #0f172a;
@@ -1136,7 +1125,6 @@ button:disabled {
 }
 
 .mailPreviewContent .messageBody,
-.mailPreviewContent .remoteFailurePanel,
 .mailPreviewContent .mailSharePanel,
 .mailPreviewContent .rawSourcePanel {
   max-width: none;
@@ -1146,7 +1134,6 @@ button:disabled {
   max-width: 680px;
 }
 
-.mailPreviewContent .remoteFailurePanel,
 .mailPreviewContent .mailSharePanel,
 .mailPreviewContent .rawSourcePanel,
 .mailPreviewContent .inlineError {
@@ -1188,45 +1175,6 @@ button:disabled {
   white-space: pre-wrap;
   line-height: 1.6;
   color: #273444;
-}
-
-.remoteFailurePanel {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  max-width: 760px;
-  margin: 0 0 18px;
-  padding: 12px;
-  border: 1px solid #fecaca;
-  border-radius: 8px;
-  background: #fff7f7;
-  color: #7f1d1d;
-}
-
-.remoteFailurePanel strong {
-  display: block;
-  margin-bottom: 4px;
-  font-size: 13px;
-}
-
-.remoteFailurePanel p {
-  margin: 0 0 5px;
-  color: #991b1b;
-  font-size: 12px;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-
-.remoteFailurePanel small {
-  color: #b45309;
-  font-size: 12px;
-}
-
-.remoteFailureActions {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
 }
 
 .mailSharePanel {
@@ -1411,10 +1359,7 @@ button:disabled {
 }
 
 .managementGrid,
-.refreshGrid,
-.settingsGrid,
-.projectsGrid,
-.tempGrid {
+.settingsGrid {
   display: grid;
   grid-template-columns: minmax(360px, 0.9fr) minmax(360px, 0.9fr);
   align-content: start;
@@ -1422,14 +1367,6 @@ button:disabled {
   min-height: 0;
   overflow: auto;
   padding: 22px;
-}
-
-.projectsGrid {
-  grid-template-columns: 360px minmax(0, 1fr);
-}
-
-.tempGrid {
-  grid-template-columns: 300px 320px minmax(320px, 0.9fr) minmax(360px, 1.1fr);
 }
 
 .settingsSaveBar {
@@ -1790,10 +1727,6 @@ button:disabled {
   margin-top: 14px;
 }
 
-.oauthForwardToggle {
-  margin-top: 10px;
-}
-
 .oauthStep {
   display: grid;
   gap: 8px;
@@ -1832,211 +1765,6 @@ button:disabled {
   margin-bottom: 16px;
 }
 
-.projectListPanel,
-.projectDetailPanel {
-  min-height: calc(100vh - 120px);
-}
-
-.tempControlPanel,
-.tempListPanel,
-.tempMessagePanel,
-.tempDetailPanel {
-  min-height: calc(100vh - 120px);
-}
-
-.tempRows,
-.tempMessageRows,
-.cloudflareChannelRows {
-  display: grid;
-  gap: 8px;
-}
-
-.tempEmailRow {
-  display: grid;
-  gap: 5px;
-  width: 100%;
-  min-height: 62px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fff;
-  padding: 10px 12px;
-  text-align: left;
-  color: #17202a;
-}
-
-.tempEmailRow:hover {
-  border-color: #9ca3af;
-  background: var(--skin-hover);
-}
-
-.tempEmailRow.active {
-  border-color: #9ca3af;
-  background: var(--skin-selected);
-}
-
-.tempEmailRow strong,
-.tempEmailRow small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tempEmailRow small {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.tempFilters {
-  display: grid;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.tempFilters .formLine {
-  margin-top: 0;
-}
-
-.tempTagLine {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  min-width: 0;
-}
-
-.tempTagLine .chip {
-  min-height: 22px;
-  padding: 0 8px;
-}
-
-.tempTagEditor {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.tempPassword,
-.tempImportBox {
-  margin-top: 12px;
-}
-
-.tempBatchBox {
-  display: grid;
-  gap: 10px;
-  margin-top: 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  padding: 12px;
-}
-
-.tempBatchBox .formLine {
-  margin-top: 0;
-}
-
-.importProgress {
-  display: grid;
-  gap: 6px;
-  margin-top: 10px;
-  color: #64748b;
-  font-size: 12px;
-}
-
-.importProgress > div {
-  height: 7px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #e2e8f0;
-}
-
-.importProgress span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: #111827;
-}
-
-.channelEditor {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(160px, 1fr)) 110px 110px 100px;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 16px;
-}
-
-.cloudflareChannelRow {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) 100px 120px;
-  align-items: center;
-  gap: 12px;
-  min-height: 54px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  padding: 0 12px;
-  color: #273444;
-  font-size: 13px;
-}
-
-.cloudflareChannelRow strong,
-.cloudflareChannelRow small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.cloudflareChannelRow small {
-  margin-top: 3px;
-  color: #64748b;
-}
-
-.projectCreate {
-  display: grid;
-  gap: 10px;
-}
-
-.projectRows {
-  display: grid;
-  gap: 8px;
-  margin-top: 18px;
-}
-
-.projectRow {
-  display: grid;
-  gap: 4px;
-  width: 100%;
-  min-height: 72px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fff;
-  padding: 10px 12px;
-  text-align: left;
-  color: #17202a;
-}
-
-.projectRow:hover {
-  border-color: #9ca3af;
-  background: var(--skin-hover);
-}
-
-.projectRow.active {
-  border-color: #9ca3af;
-  background: var(--skin-selected);
-}
-
-.projectRow strong,
-.projectRow small,
-.projectRow span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.projectRow small,
-.projectRow span {
-  color: #64748b;
-  font-size: 12px;
-}
-
 .groupPicker {
   display: grid;
   gap: 6px;
@@ -2061,31 +1789,6 @@ button:disabled {
   margin: 8px 0;
 }
 
-.projectHero {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 18px;
-}
-
-.projectHero h2 {
-  margin: 0;
-  font-size: 22px;
-}
-
-.projectHero p {
-  margin: 6px 0 0;
-  color: #64748b;
-}
-
-.statStrip {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 18px;
-}
-
 .statBox {
   display: grid;
   gap: 2px;
@@ -2104,49 +1807,6 @@ button:disabled {
   font-size: 12px;
 }
 
-.projectAccountTable {
-  display: grid;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.projectTableHeader,
-.projectTableRow {
-  display: grid;
-  grid-template-columns: minmax(240px, 1fr) 120px 80px 150px 180px;
-  align-items: center;
-  gap: 12px;
-  min-height: 44px;
-  padding: 0 12px;
-}
-
-.projectTableHeader {
-  background: #f8fafc;
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.projectTableRow {
-  border-top: 1px solid #eef2f7;
-  color: #273444;
-  font-size: 13px;
-}
-
-.projectTableRow strong,
-.projectTableRow small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.projectTableRow small {
-  margin-top: 3px;
-  color: #64748b;
-}
-
 .statusPill {
   display: inline-flex;
   align-items: center;
@@ -2159,70 +1819,6 @@ button:disabled {
   color: #334155;
   font-size: 12px;
   font-weight: 700;
-}
-
-.status-toClaim {
-  background: #f3f4f6;
-  color: #111827;
-}
-
-.status-claimed {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-.status-success {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.status-failed {
-  background: #fee2e2;
-  color: #991b1b;
-}
-
-.status-removed {
-  background: #e5e7eb;
-  color: #4b5563;
-}
-
-.status-expired,
-.status-revoked {
-  background: #e5e7eb;
-  color: #475569;
-}
-
-.status-never,
-.status-authorized,
-.status-active {
-  background: #eef2ff;
-  color: #3730a3;
-}
-
-.status-pending {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-.status-healthy {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.status-degraded {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-.status-open {
-  background: #fee2e2;
-  color: #991b1b;
-}
-
-.status-not_configured,
-.status-none {
-  background: #f3f4f6;
-  color: #475569;
 }
 
 .rowActions {
@@ -2299,91 +1895,6 @@ button:disabled {
 
 .importTypeLine .importTypeField .select {
   min-width: 180px;
-}
-
-.themePresetGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.themePreset {
-  display: grid;
-  grid-template-columns: 46px minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  min-height: 52px;
-  border: 1px solid var(--skin-border);
-  border-radius: 8px;
-  background: var(--skin-surface);
-  padding: 8px;
-  color: #17202a;
-  text-align: left;
-}
-
-.themePreset.active {
-  border-color: var(--skin-accent);
-  box-shadow: 0 0 0 2px var(--skin-accent-soft);
-}
-
-.themePreview {
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 32px;
-  border-radius: 8px;
-}
-
-.themePreview i {
-  display: block;
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  border: 2px solid rgba(255, 255, 255, 0.72);
-}
-
-.accentPicker {
-  display: grid;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.accentPicker label,
-.accentSwatches {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.accentPicker label {
-  justify-content: space-between;
-  color: #475569;
-  font-size: 13px;
-}
-
-.accentPicker input[type="color"] {
-  width: 48px;
-  height: 32px;
-  border: 1px solid var(--skin-border);
-  border-radius: 8px;
-  padding: 2px;
-  background: var(--skin-surface);
-}
-
-.accentSwatches {
-  flex-wrap: wrap;
-}
-
-.accentSwatch {
-  width: 28px;
-  height: 28px;
-  border: 2px solid #fff;
-  border-radius: 999px;
-  box-shadow: 0 0 0 1px var(--skin-border);
-}
-
-.accentSwatch.active {
-  box-shadow: 0 0 0 2px var(--skin-accent);
 }
 
 .grow {
@@ -2687,106 +2198,6 @@ button:disabled {
   margin-bottom: 18px;
 }
 
-.observabilityStrip {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-
-.automationSummaryGrid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin: 14px 0 18px;
-}
-
-.retrySummaryGrid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.providerFailureGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 10px;
-  margin: 0 0 18px;
-}
-
-.providerFailureCard {
-  display: grid;
-  gap: 7px;
-  min-width: 0;
-  border: 1px solid #fecaca;
-  border-radius: 8px;
-  background: #fff7f7;
-  padding: 11px;
-  color: #7f1d1d;
-  text-align: left;
-  cursor: pointer;
-}
-
-.providerFailureCard:hover {
-  border-color: #fca5a5;
-  background: #fff1f1;
-}
-
-.providerFailureCard:focus-visible {
-  outline: 2px solid #ef4444;
-  outline-offset: 2px;
-}
-
-.providerFailureCard strong,
-.providerFailureCard small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.providerFailureCard strong {
-  color: #7f1d1d;
-  font-size: 13px;
-}
-
-.providerFailureCard small {
-  color: #991b1b;
-  font-size: 12px;
-}
-
-.summaryTile {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fbfdff;
-  padding: 12px;
-}
-
-.summaryTop {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.summaryTop strong,
-.summaryTile small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.summaryStats {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  color: #475569;
-  font-size: 12px;
-}
-
-.summaryTile small {
-  color: #64748b;
-}
-
 .retentionStats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2853,17 +2264,6 @@ button:disabled {
   font-size: 13px;
 }
 
-.automationFilters {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.automationFilters .select {
-  min-width: 130px;
-}
-
 .tableActions {
   display: flex;
   justify-content: flex-end;
@@ -2885,16 +2285,6 @@ button:disabled {
   gap: 12px;
   min-height: 42px;
   padding: 0 12px;
-}
-
-.forwardingLogTable .logHeader,
-.forwardingLogTable .logRow {
-  grid-template-columns: 150px minmax(180px, 1fr) 100px 100px minmax(220px, 1.4fr);
-}
-
-.backupLogTable .logHeader,
-.backupLogTable .logRow {
-  grid-template-columns: 150px minmax(190px, 1fr) 100px 100px minmax(240px, 1.4fr) 90px;
 }
 
 .workspaceKeyTable {
@@ -2996,56 +2386,6 @@ button:disabled {
 .monoText {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
-}
-
-.retryQueueTable .logHeader,
-.retryQueueTable .logRow {
-  grid-template-columns: 140px 120px 100px minmax(160px, 1fr) minmax(190px, 1.1fr) 90px 140px minmax(220px, 1.4fr) 80px;
-}
-
-.automationLogTable .logHeader,
-.automationLogTable .logRow {
-  grid-template-columns: 150px 100px 90px 100px 130px 90px minmax(260px, 1fr);
-}
-
-.channelHealthTable .logHeader,
-.channelHealthTable .logRow {
-  grid-template-columns: 110px 100px 90px 90px 150px 150px minmax(260px, 1fr);
-}
-
-.errorBucketTable .logHeader,
-.errorBucketTable .logRow {
-  grid-template-columns: 110px 80px 150px minmax(300px, 1fr);
-}
-
-.retryObservabilityTable .logHeader,
-.retryObservabilityTable .logRow {
-  grid-template-columns: 150px 120px 90px 90px 90px 190px minmax(280px, 1fr) 80px;
-}
-
-.automationDashboardLogTable .logHeader,
-.automationDashboardLogTable .logRow {
-  grid-template-columns: 150px 100px 90px 90px 90px 130px 90px minmax(280px, 1fr);
-}
-
-.refreshAccountTable .logHeader,
-.refreshAccountTable .logRow {
-  grid-template-columns: 32px minmax(190px, 1.2fr) minmax(150px, 0.9fr) 90px 120px 70px minmax(220px, 1.4fr) 60px;
-}
-
-.refreshRetryTable .logHeader,
-.refreshRetryTable .logRow {
-  grid-template-columns: 150px minmax(180px, 1fr) 90px 140px minmax(260px, 1.4fr) 80px;
-}
-
-.refreshHistoryTable .logHeader,
-.refreshHistoryTable .logRow {
-  grid-template-columns: 150px minmax(180px, 1fr) 90px 90px minmax(280px, 1.5fr);
-}
-
-.refreshRunTable .logHeader,
-.refreshRunTable .logRow {
-  grid-template-columns: 150px 90px 90px 130px 90px minmax(280px, 1fr);
 }
 
 .logHeader {
@@ -3403,9 +2743,6 @@ code {
     grid-template-columns: 1fr;
   }
 
-  .observabilityStrip,
-  .automationSummaryGrid,
-  .retrySummaryGrid,
   .retentionStats,
   .runStatusGrid {
     grid-template-columns: 1fr;

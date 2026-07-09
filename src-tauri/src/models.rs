@@ -56,21 +56,10 @@ pub struct Group {
     pub id: i64,
     pub name: String,
     pub description: String,
-    pub color: String,
-    pub proxy_url: String,
-    pub fallback_proxy_url_1: String,
-    pub fallback_proxy_url_2: String,
     pub parent_id: Option<i64>,
     pub level: i64,
     pub sort_order: i64,
     pub account_count: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Tag {
-    pub id: i64,
-    pub name: String,
-    pub color: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -89,12 +78,9 @@ pub struct Account {
     pub message_count: i64,
     pub created_at: String,
     pub updated_at: String,
-    pub tags: Vec<Tag>,
     pub aliases: Vec<String>,
-    pub has_password: bool,
     pub has_client_id: bool,
     pub has_refresh_token: bool,
-    pub has_imap_password: bool,
     pub imap_host: String,
     pub imap_port: i64,
     pub proxy_url: String,
@@ -224,19 +210,7 @@ pub struct SchedulerStatus {
 pub struct CreateGroupInput {
     pub name: String,
     pub description: Option<String>,
-    pub color: Option<String>,
     pub parent_id: Option<i64>,
-    pub proxy_url: Option<String>,
-    pub fallback_proxy_url_1: Option<String>,
-    pub fallback_proxy_url_2: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct UpdateGroupProxyInput {
-    pub id: i64,
-    pub proxy_url: Option<String>,
-    pub fallback_proxy_url_1: Option<String>,
-    pub fallback_proxy_url_2: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -244,19 +218,10 @@ pub struct UpdateGroupInput {
     pub id: i64,
     pub name: String,
     pub description: Option<String>,
-    pub color: Option<String>,
     pub parent_id: Option<i64>,
     pub sort_order: Option<i64>,
-    pub proxy_url: Option<String>,
-    pub fallback_proxy_url_1: Option<String>,
-    pub fallback_proxy_url_2: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct CreateTagInput {
-    pub name: String,
-    pub color: String,
-}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImportAccountsInput {
@@ -301,11 +266,8 @@ pub struct UpdateAccountInput {
     pub fallback_proxy_url_1: Option<String>,
     pub fallback_proxy_url_2: Option<String>,
     pub mail_retention_days: Option<i64>,
-    pub password: Option<String>,
     pub client_id: Option<String>,
     pub refresh_token: Option<String>,
-    pub imap_password: Option<String>,
-    pub tag_ids: Option<Vec<i64>>,
     pub aliases: Option<Vec<String>>,
 }
 
@@ -314,7 +276,6 @@ pub struct AccountBatchInput {
     pub account_ids: Vec<i64>,
     pub action: String,
     pub group_id: Option<i64>,
-    pub tag_ids: Option<Vec<i64>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -325,10 +286,8 @@ pub struct RevealAccountSecretsInput {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountSecretsPreview {
-    pub password: String,
     pub client_id: String,
     pub refresh_token_preview: String,
-    pub imap_password: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -362,7 +321,6 @@ pub struct OAuthTokenResult {
 #[derive(Debug, Clone, Deserialize)]
 pub struct OAuthSaveAccountInput {
     pub email: String,
-    pub password: Option<String>,
     pub group_id: Option<i64>,
     pub remark: Option<String>,
     pub client_id: String,
@@ -490,12 +448,10 @@ pub struct AccountCredentials {
     pub email: String,
     pub provider: String,
     pub account_type: String,
-    pub password: String,
     pub client_id: String,
     pub refresh_token: String,
     pub imap_host: String,
     pub imap_port: i64,
-    pub imap_password: String,
     pub proxy_chain: Vec<String>,
 }
 

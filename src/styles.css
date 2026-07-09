@@ -488,12 +488,6 @@ button:disabled {
   background: var(--skin-selected);
 }
 
-.dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-}
-
 .accountRow {
   display: grid;
   grid-template-columns: 38px 1fr;
@@ -614,7 +608,7 @@ button:disabled {
 
 .mailTreeGroup {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   min-height: 34px;
@@ -1520,6 +1514,39 @@ button:disabled {
   padding: 0;
 }
 
+.accountEditorForm {
+  display: grid;
+  gap: 2px;
+}
+
+.accountEditorForm .oauthFieldGrid {
+  margin-top: 0;
+}
+
+.accountEditorForm .oauthFieldGrid + .oauthFieldGrid {
+  margin-top: 4px;
+}
+
+.accountEditorForm .oauthHint {
+  margin: 6px 0 2px;
+}
+
+.accountEditorForm .oauthFieldGrid + .field {
+  margin-top: 12px;
+}
+
+.accountEditorForm .field {
+  gap: 10px;
+}
+
+.accountEditorForm .field .textarea.compact {
+  margin-top: 0;
+}
+
+.accountEditorForm .button.fullWidth {
+  margin-top: 8px;
+}
+
 .modalTabLine {
   display: flex;
   gap: 8px;
@@ -2020,6 +2047,21 @@ button:disabled {
   padding: 0;
 }
 
+.groupTreeRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.groupTreeRow .groupTreeButton {
+  flex: 1;
+  min-width: 0;
+}
+
+.groupTreeDelete {
+  flex: 0 0 auto;
+}
+
 .groupTreeButton {
   display: flex;
   align-items: center;
@@ -2043,7 +2085,7 @@ button:disabled {
   background: var(--skin-selected);
 }
 
-.groupTreeButton > span:not(.dot) {
+.groupTreeButton > span {
   flex: 1;
   min-width: 0;
   overflow: hidden;

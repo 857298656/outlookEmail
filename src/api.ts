@@ -22,7 +22,6 @@ import type {
   OAuthTokenResult,
   SchedulerStatus,
   Settings,
-  Tag,
   UpdateLoginPasswordInput,
   WorkspaceKeyRecord,
   GenerateWorkspaceKeyResult
@@ -50,20 +49,11 @@ let mockGroups: Group[] = [
     id: 1,
     name: "Default",
     description: "Default mailbox group",
-    color: "#111827",
-    proxy_url: "",
-    fallback_proxy_url_1: "",
-    fallback_proxy_url_2: "",
     parent_id: null,
     level: 1,
     sort_order: 0,
     account_count: 0
   }
-];
-let mockTags: Tag[] = [
-  { id: 1, name: "Core", color: "#111827" },
-  { id: 2, name: "Warmup", color: "#374151" },
-  { id: 3, name: "Issue", color: "#64748b" }
 ];
 let mockAccounts: Account[] = [];
 let mockMessages: MailMessage[] = [];
@@ -144,21 +134,13 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     case "create_group": {
       const input = args?.input as {
         name: string;
-        color?: string;
         description?: string;
         parent_id?: number | null;
-        proxy_url?: string;
-        fallback_proxy_url_1?: string;
-        fallback_proxy_url_2?: string;
       };
       const group: Group = {
         id: Date.now(),
         name: input.name,
         description: input.description ?? "",
-        color: input.color ?? "#2f6f9f",
-        proxy_url: input.proxy_url ?? "",
-        fallback_proxy_url_1: input.fallback_proxy_url_1 ?? "",
-        fallback_proxy_url_2: input.fallback_proxy_url_2 ?? "",
         parent_id: input.parent_id ?? null,
         level: 1,
         sort_order: mockGroups.length,
@@ -166,16 +148,6 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       };
       mockGroups = [...mockGroups, group];
       return group as T;
-    }
-    case "update_group_proxy": {
-      const input = args?.input as {
-        id: number;
-        proxy_url?: string;
-        fallback_proxy_url_1?: string;
-        fallback_proxy_url_2?: string;
-      };
-      mockGroups = mockGroups.map((group) => (group.id === input.id ? { ...group, ...input } : group));
-      return mockGroups.find((group) => group.id === input.id) as T;
     }
     case "update_group": {
       const input = args?.input as Partial<Group> & { id: number; name: string };
@@ -204,35 +176,20 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         .map((item) => (item.parent_id === groupId ? { ...item, parent_id: group?.parent_id ?? null, level: Math.max(1, item.level - 1) } : item));
       return undefined as T;
     }
-    case "list_tags":
-      return mockTags as T;
-    case "create_tag": {
-      const input = args?.input as { name: string; color: string };
-      const tag: Tag = { id: Date.now(), name: input.name, color: input.color };
-      mockTags = [...mockTags, tag];
-      return tag as T;
-    }
-    case "delete_tag":
-      mockTags = mockTags.filter((tag) => tag.id !== args?.tagId);
-      return undefined as T;
     case "update_account": {
       const input = args?.input as Partial<Account> & {
         id: number;
-        tag_ids?: number[];
         client_id?: string;
         refresh_token?: string;
-        imap_password?: string;
       };
-      const { tag_ids, client_id, refresh_token, imap_password, ...accountInput } = input;
+      const { client_id, refresh_token, ...accountInput } = input;
       mockAccounts = mockAccounts.map((account) => {
         if (account.id !== input.id) return account;
         return {
           ...account,
           ...accountInput,
           has_client_id: client_id === undefined ? account.has_client_id : Boolean(client_id),
-          has_refresh_token: refresh_token === undefined ? account.has_refresh_token : Boolean(refresh_token),
-          has_imap_password: imap_password === undefined ? account.has_imap_password : Boolean(imap_password),
-          tags: tag_ids ? mockTags.filter((tag) => tag_ids.includes(tag.id)) : account.tags
+          has_refresh_token: refresh_token === undefined ? account.has_refresh_token : Boolean(refresh_token)
         };
       });
       return mockAccounts.find((account) => account.id === input.id) as T;
@@ -247,6 +204,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         const imapDefaults = providerDefaultImap(row.provider);
         const accountType = providerAccountType(row.provider);
         const isImapProvider = accountType === "imap";
+        const hasRefreshToken = isImapProvider ? Boolean(row.password) : Boolean(row.refresh_token || row.password);
         return {
           id: Date.now() + index,
           email: row.email,
@@ -262,12 +220,9 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
           message_count: 0,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
-          tags: [],
           aliases: [],
-          has_password: Boolean(row.password) && !isImapProvider,
           has_client_id: Boolean(row.client_id),
-          has_refresh_token: Boolean(row.refresh_token),
-          has_imap_password: Boolean(row.password) && isImapProvider,
+          has_refresh_token: hasRefreshToken,
           imap_host: imapDefaults.host,
           imap_port: imapDefaults.port,
           proxy_url: "",
@@ -293,7 +248,6 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         account_ids: number[];
         action: string;
         group_id?: number | null;
-        tag_ids?: number[];
       };
       const ids = new Set(input.account_ids);
       const targetCount = mockAccounts.filter((account) => ids.has(account.id)).length;
@@ -311,18 +265,6 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
               }
             : account
         );
-      } else if (input.action === "add_tags") {
-        const tagsToAdd = mockTags.filter((tag) => input.tag_ids?.includes(tag.id));
-        mockAccounts = mockAccounts.map((account) => {
-          if (!ids.has(account.id)) return account;
-          const tagMap = new Map([...account.tags, ...tagsToAdd].map((tag) => [tag.id, tag]));
-          return { ...account, tags: [...tagMap.values()] };
-        });
-      } else if (input.action === "remove_tags") {
-        const tagIds = new Set(input.tag_ids ?? []);
-        mockAccounts = mockAccounts.map((account) =>
-          ids.has(account.id) ? { ...account, tags: account.tags.filter((tag) => !tagIds.has(tag.id)) } : account
-        );
       }
       refreshMockGroupCounts();
       return {
@@ -338,10 +280,8 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       const account = mockAccounts.find((item) => item.id === input.account_id);
       if (!account) throw new Error("account not found");
       return {
-        password: account.has_password ? "********" : "",
         client_id: mockSettings.graph_client_id,
-        refresh_token_preview: account.has_refresh_token ? "mock...oken" : "",
-        imap_password: account.has_imap_password ? "********" : ""
+        refresh_token_preview: account.has_refresh_token ? "mock...oken" : ""
       } as T;
     }
     case "list_messages":
@@ -501,12 +441,9 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         message_count: 0,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-        tags: [],
         aliases: [],
-        has_password: false,
         has_client_id: Boolean(input.client_id),
         has_refresh_token: Boolean(input.refresh_token),
-        has_imap_password: false,
         imap_host: "",
         imap_port: 993,
         proxy_url: "",
@@ -802,34 +739,17 @@ export const api = {
   createGroup: (input: {
     name: string;
     description?: string;
-    color?: string;
     parent_id?: number | null;
-    proxy_url?: string;
-    fallback_proxy_url_1?: string;
-    fallback_proxy_url_2?: string;
   }) =>
     call<Group>("create_group", { input }),
-  updateGroupProxy: (input: {
-    id: number;
-    proxy_url?: string;
-    fallback_proxy_url_1?: string;
-    fallback_proxy_url_2?: string;
-  }) => call<Group>("update_group_proxy", { input }),
   updateGroup: (input: {
     id: number;
     name: string;
     description?: string;
-    color?: string;
     parent_id?: number | null;
     sort_order?: number;
-    proxy_url?: string;
-    fallback_proxy_url_1?: string;
-    fallback_proxy_url_2?: string;
   }) => call<Group>("update_group", { input }),
   deleteGroup: (groupId: number) => call<void>("delete_group", { groupId }),
-  listTags: () => call<Tag[]>("list_tags"),
-  createTag: (input: { name: string; color: string }) => call<Tag>("create_tag", { input }),
-  deleteTag: (tagId: number) => call<void>("delete_tag", { tagId }),
   listAccounts: () => call<Account[]>("list_accounts"),
   updateAccount: (input: {
     id: number;
@@ -845,11 +765,8 @@ export const api = {
     fallback_proxy_url_1?: string;
     fallback_proxy_url_2?: string;
     mail_retention_days?: number;
-    password?: string;
     client_id?: string;
     refresh_token?: string;
-    imap_password?: string;
-    tag_ids?: number[];
     aliases?: string[];
   }) => call<Account>("update_account", { input }),
   importAccounts: (input: { raw: string; group_id?: number | null }) =>
@@ -857,9 +774,8 @@ export const api = {
   deleteAccount: (accountId: number) => call<void>("delete_account", { accountId }),
   batchAccounts: (input: {
     account_ids: number[];
-    action: "delete" | "move_group" | "add_tags" | "remove_tags";
+    action: "delete" | "move_group";
     group_id?: number | null;
-    tag_ids?: number[];
   }) => call<JobResult>("batch_accounts", { input }),
   revealAccountSecrets: (input: { account_id: number; password: string }) =>
     call<AccountSecretsPreview>("reveal_account_secrets", { input }),

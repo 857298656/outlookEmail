@@ -32,20 +32,10 @@ export type Group = {
   id: number;
   name: string;
   description: string;
-  color: string;
-  proxy_url: string;
-  fallback_proxy_url_1: string;
-  fallback_proxy_url_2: string;
   parent_id: number | null;
   level: number;
   sort_order: number;
   account_count: number;
-};
-
-export type Tag = {
-  id: number;
-  name: string;
-  color: string;
 };
 
 export type Account = {
@@ -63,12 +53,9 @@ export type Account = {
   message_count: number;
   created_at: string;
   updated_at: string;
-  tags: Tag[];
   aliases: string[];
-  has_password: boolean;
   has_client_id: boolean;
   has_refresh_token: boolean;
-  has_imap_password: boolean;
   imap_host: string;
   imap_port: number;
   proxy_url: string;
@@ -78,10 +65,8 @@ export type Account = {
 };
 
 export type AccountSecretsPreview = {
-  password: string;
   client_id: string;
   refresh_token_preview: string;
-  imap_password: string;
 };
 
 export type OAuthTokenResult = {
@@ -95,7 +80,6 @@ export type OAuthTokenResult = {
 
 export type OAuthSaveAccountInput = {
   email: string;
-  password?: string;
   group_id?: number | null;
   remark?: string;
   client_id: string;

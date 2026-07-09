@@ -25,10 +25,8 @@ export type AccountProviderDefinition = {
 export type ProviderReadinessInput = {
   provider?: string | null;
   account_type?: string | null;
-  has_password?: boolean | null;
   has_client_id?: boolean | null;
   has_refresh_token?: boolean | null;
-  has_imap_password?: boolean | null;
   imap_host?: string | null;
   imap_port?: number | null;
 };
@@ -186,8 +184,6 @@ export function providerReadiness(account: ProviderReadinessInput): ProviderRead
   const port = account.imap_port ?? provider.defaultImapPort;
   const hasClientId = Boolean(account.has_client_id);
   const hasRefreshToken = Boolean(account.has_refresh_token);
-  const hasImapPassword = Boolean(account.has_imap_password);
-  const hasAccountPassword = Boolean(account.has_password);
   const missing: string[] = [];
 
   if (provider.accountType !== "imap") {
@@ -200,32 +196,31 @@ export function providerReadiness(account: ProviderReadinessInput): ProviderRead
   if (!Number.isFinite(port) || port < 1 || port > 65535) missing.push("IMAP port");
 
   if (provider.id === "qq") {
-    if (!hasImapPassword) missing.push("QQ IMAP/SMTP 授权码");
+    if (!hasRefreshToken) missing.push("QQ IMAP/SMTP 授权码");
     return readinessResult(missing, provider.credentialLabel, `${provider.credentialLabel} + ${host || provider.defaultImapHost}:${port || provider.defaultImapPort}`);
   }
 
   if (provider.id === "netease_163") {
-    if (!hasImapPassword) missing.push("163 客户端授权密码");
+    if (!hasRefreshToken) missing.push("163 客户端授权密码");
     return readinessResult(missing, provider.credentialLabel, `${provider.credentialLabel} + ${host || provider.defaultImapHost}:${port || provider.defaultImapPort}`);
   }
 
   if (provider.id === "gmail") {
-    if (!hasImapPassword) missing.push("Gmail 应用专用密码");
+    if (!hasRefreshToken) missing.push("Gmail 应用专用密码");
     return readinessResult(missing, provider.credentialLabel, `${provider.credentialLabel} + ${host || provider.defaultImapHost}:${port || provider.defaultImapPort}`);
   }
 
   const hasImapOAuth = hasClientId && hasRefreshToken;
-  if (!hasImapPassword && !hasAccountPassword && !hasImapOAuth) {
-    missing.push(provider.id === "imap" ? "IMAP 密码或 OAuth refresh token" : "IMAP 密码或应用密码");
-  }
-
-  if (hasImapOAuth && !hasImapPassword && !hasAccountPassword) {
+  if (provider.id === "imap") {
+    if (!hasImapOAuth) missing.push("IMAP OAuth client ID 和 refresh token");
     return readinessResult(missing, "IMAP OAuth", `IMAP OAuth + ${host}:${port}`);
   }
-  if (hasImapPassword) {
-    return readinessResult(missing, provider.credentialLabel, `${provider.credentialLabel} + ${host}:${port}`);
+
+  if (!hasRefreshToken) {
+    missing.push("IMAP 密码或应用密码");
   }
-  return readinessResult(missing, "账号密码", `账号密码 + ${host}:${port}`);
+
+  return readinessResult(missing, provider.credentialLabel, `${provider.credentialLabel} + ${host}:${port}`);
 }
 
 function readinessResult(missing: string[], readyLabel: string, readyDetail: string): ProviderReadinessResult {

@@ -129,6 +129,8 @@ impl Database {
         } else {
             self.migrate_legacy_password_key(&password_key)?;
         }
+        self.migrate_legacy_account_secrets()?;
+        self.drop_legacy_account_secret_columns()?;
         self.audit("app.unlocked", "session", None, "local unlock")?;
         Ok(())
     }
@@ -388,9 +390,7 @@ impl Database {
         self.require_unlocked()?;
         let mut stmt = self.conn.prepare(
             "
-            SELECT g.id, g.name, COALESCE(g.description, ''), g.color,
-                   COALESCE(g.proxy_url, ''), COALESCE(g.fallback_proxy_url_1, ''),
-                   COALESCE(g.fallback_proxy_url_2, ''), g.parent_id, g.level,
+            SELECT g.id, g.name, COALESCE(g.description, ''), g.parent_id, g.level,
                    g.sort_order, COUNT(a.id) AS account_count
             FROM groups g
             LEFT JOIN accounts a ON a.group_id = g.id
@@ -403,14 +403,10 @@ impl Database {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 description: row.get(2)?,
-                color: row.get(3)?,
-                proxy_url: row.get(4)?,
-                fallback_proxy_url_1: row.get(5)?,
-                fallback_proxy_url_2: row.get(6)?,
-                parent_id: row.get(7)?,
-                level: row.get(8)?,
-                sort_order: row.get(9)?,
-                account_count: row.get(10)?,
+                parent_id: row.get(3)?,
+                level: row.get(4)?,
+                sort_order: row.get(5)?,
+                account_count: row.get(6)?,
             })
         })?;
         collect_rows(rows)
@@ -444,16 +440,12 @@ impl Database {
         self.conn.execute(
             "
             INSERT INTO groups
-            (name, description, color, proxy_url, fallback_proxy_url_1, fallback_proxy_url_2, parent_id, level, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(sort_order) + 1 FROM groups), 0))
+            (name, description, parent_id, level, sort_order)
+            VALUES (?, ?, ?, ?, COALESCE((SELECT MAX(sort_order) + 1 FROM groups), 0))
             ",
             params![
                 name,
                 input.description.unwrap_or_default(),
-                input.color.unwrap_or_else(|| "#2f6f9f".to_string()),
-                normalize_proxy_value(input.proxy_url.as_deref())?,
-                normalize_proxy_value(input.fallback_proxy_url_1.as_deref())?,
-                normalize_proxy_value(input.fallback_proxy_url_2.as_deref())?,
                 input.parent_id,
                 level
             ],
@@ -461,34 +453,6 @@ impl Database {
         let id = self.conn.last_insert_rowid();
         self.audit("group.created", "group", Some(id), name)?;
         self.get_group(id)
-    }
-
-    pub fn update_group_proxy(&self, input: UpdateGroupProxyInput) -> AppResult<Group> {
-        self.require_unlocked()?;
-        let existing_id = self
-            .conn
-            .query_row("SELECT id FROM groups WHERE id = ?", [input.id], |row| {
-                row.get::<_, i64>(0)
-            })
-            .optional()?
-            .ok_or_else(|| AppError::InvalidInput("group not found".to_string()))?;
-        self.conn.execute(
-            "
-            UPDATE groups
-            SET proxy_url = COALESCE(?, proxy_url),
-                fallback_proxy_url_1 = COALESCE(?, fallback_proxy_url_1),
-                fallback_proxy_url_2 = COALESCE(?, fallback_proxy_url_2)
-            WHERE id = ?
-            ",
-            params![
-                normalize_proxy_option(input.proxy_url.as_deref())?,
-                normalize_proxy_option(input.fallback_proxy_url_1.as_deref())?,
-                normalize_proxy_option(input.fallback_proxy_url_2.as_deref())?,
-                existing_id
-            ],
-        )?;
-        self.audit("group.proxy_updated", "group", Some(existing_id), "")?;
-        self.get_group(existing_id)
     }
 
     pub fn update_group(&self, input: UpdateGroupInput) -> AppResult<Group> {
@@ -543,10 +507,6 @@ impl Database {
             UPDATE groups
             SET name = ?,
                 description = ?,
-                color = ?,
-                proxy_url = ?,
-                fallback_proxy_url_1 = ?,
-                fallback_proxy_url_2 = ?,
                 parent_id = ?,
                 level = ?,
                 sort_order = ?
@@ -555,10 +515,6 @@ impl Database {
             params![
                 name,
                 input.description.unwrap_or_default(),
-                input.color.unwrap_or_else(|| "#2f6f9f".to_string()),
-                normalize_proxy_value(input.proxy_url.as_deref())?,
-                normalize_proxy_value(input.fallback_proxy_url_1.as_deref())?,
-                normalize_proxy_value(input.fallback_proxy_url_2.as_deref())?,
                 input.parent_id,
                 new_level,
                 input.sort_order.unwrap_or(0).max(0),
@@ -611,48 +567,6 @@ impl Database {
         Ok(())
     }
 
-    pub fn list_tags(&self) -> AppResult<Vec<Tag>> {
-        self.require_unlocked()?;
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, name, color FROM tags ORDER BY name ASC")?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Tag {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                color: row.get(2)?,
-            })
-        })?;
-        collect_rows(rows)
-    }
-
-    pub fn create_tag(&self, input: CreateTagInput) -> AppResult<Tag> {
-        self.require_unlocked()?;
-        let name = input.name.trim();
-        if name.is_empty() {
-            return Err(AppError::InvalidInput("tag name is required".to_string()));
-        }
-        self.conn.execute(
-            "INSERT INTO tags (name, color) VALUES (?, ?)",
-            params![name, input.color],
-        )?;
-        let id = self.conn.last_insert_rowid();
-        self.audit("tag.created", "tag", Some(id), name)?;
-        Ok(Tag {
-            id,
-            name: name.to_string(),
-            color: input.color,
-        })
-    }
-
-    pub fn delete_tag(&self, tag_id: i64) -> AppResult<()> {
-        self.require_unlocked()?;
-        self.conn
-            .execute("DELETE FROM tags WHERE id = ?", [tag_id])?;
-        self.audit("tag.deleted", "tag", Some(tag_id), "")?;
-        Ok(())
-    }
-
     pub fn list_accounts(&self) -> AppResult<Vec<Account>> {
         self.require_unlocked()?;
         let mut stmt = self.conn.prepare(
@@ -660,7 +574,7 @@ impl Database {
             SELECT a.id, a.email, a.group_id, g.name, COALESCE(a.remark, ''), a.status,
                    a.provider, a.account_type, a.last_refresh_status,
                    a.last_refresh_error, a.last_refresh_at, COUNT(m.id) AS message_count, a.created_at, a.updated_at,
-                   a.password_enc, a.client_id_enc, a.refresh_token_enc, a.imap_password_enc, COALESCE(a.imap_host, ''),
+                   a.client_id_enc, a.refresh_token_enc, COALESCE(a.imap_host, ''),
                    a.imap_port, COALESCE(a.proxy_url, ''), COALESCE(a.fallback_proxy_url_1, ''),
                    COALESCE(a.fallback_proxy_url_2, ''), COALESCE(a.mail_retention_days, 30)
             FROM accounts a
@@ -687,24 +601,20 @@ impl Database {
                 message_count: row.get(11)?,
                 created_at: row.get(12)?,
                 updated_at: row.get(13)?,
-                tags: Vec::new(),
                 aliases: Vec::new(),
-                has_password: !row.get::<_, String>(14)?.is_empty(),
-                has_client_id: !row.get::<_, String>(15)?.is_empty(),
-                has_refresh_token: !row.get::<_, String>(16)?.is_empty(),
-                has_imap_password: !row.get::<_, String>(17)?.is_empty(),
-                imap_host: row.get(18)?,
-                imap_port: row.get(19)?,
-                proxy_url: row.get(20)?,
-                fallback_proxy_url_1: row.get(21)?,
-                fallback_proxy_url_2: row.get(22)?,
-                mail_retention_days: row.get(23)?,
+                has_client_id: !row.get::<_, String>(14)?.is_empty(),
+                has_refresh_token: !row.get::<_, String>(15)?.is_empty(),
+                imap_host: row.get(16)?,
+                imap_port: row.get(17)?,
+                proxy_url: row.get(18)?,
+                fallback_proxy_url_1: row.get(19)?,
+                fallback_proxy_url_2: row.get(20)?,
+                mail_retention_days: row.get(21)?,
             })
         })?;
 
         let mut accounts = collect_rows(rows)?;
         for account in &mut accounts {
-            account.tags = self.tags_for_account(account.id)?;
             account.aliases = self.aliases_for_account(account.id)?;
         }
         Ok(accounts)
@@ -728,34 +638,27 @@ impl Database {
                 !row.refresh_token.trim().is_empty(),
             )?;
             let is_imap_provider = provider.credential_kind.starts_with("imap");
-            let password = crypto::encrypt_text(
-                if is_imap_provider {
-                    ""
-                } else {
-                    row.password.as_str()
-                },
-                key,
-            )?;
+            let auth_secret = if is_imap_provider {
+                row.password.as_str()
+            } else if !row.refresh_token.trim().is_empty() {
+                row.refresh_token.as_str()
+            } else {
+                row.password.as_str()
+            };
             let client_id = crypto::encrypt_text(&row.client_id, key)?;
-            let refresh_token = crypto::encrypt_text(&row.refresh_token, key)?;
-            let imap_password = crypto::encrypt_text(
-                if is_imap_provider {
-                    row.password.as_str()
-                } else {
-                    ""
-                },
-                key,
-            )?;
+            let refresh_token = crypto::encrypt_text(auth_secret, key)?;
             let changed = self.conn.execute(
                 "
                 INSERT INTO accounts
-                (email, password_enc, client_id_enc, refresh_token_enc, group_id, remark, provider, account_type,
-                 imap_host, imap_port, imap_password_enc)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (email, client_id_enc, refresh_token_enc, group_id, remark, provider, account_type,
+                 imap_host, imap_port)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(email) DO UPDATE SET
-                    password_enc = excluded.password_enc,
                     client_id_enc = excluded.client_id_enc,
-                    refresh_token_enc = excluded.refresh_token_enc,
+                    refresh_token_enc = CASE
+                        WHEN excluded.refresh_token_enc = '' THEN accounts.refresh_token_enc
+                        ELSE excluded.refresh_token_enc
+                    END,
                     group_id = COALESCE(excluded.group_id, accounts.group_id),
                     remark = excluded.remark,
                     provider = excluded.provider,
@@ -765,15 +668,10 @@ impl Database {
                         ELSE excluded.imap_host
                     END,
                     imap_port = excluded.imap_port,
-                    imap_password_enc = CASE
-                        WHEN excluded.imap_password_enc = '' THEN accounts.imap_password_enc
-                        ELSE excluded.imap_password_enc
-                    END,
                     updated_at = CURRENT_TIMESTAMP
                 ",
                 params![
                     row.email,
-                    password,
                     client_id,
                     refresh_token,
                     group_id,
@@ -782,7 +680,6 @@ impl Database {
                     provider.account_type,
                     provider.default_imap_host,
                     provider.default_imap_port,
-                    imap_password
                 ],
             )?;
             if changed > 0 {
@@ -898,13 +795,6 @@ impl Database {
             ],
         )?;
 
-        if let Some(value) = input.password {
-            let encrypted = crypto::encrypt_text(&value, key)?;
-            self.conn.execute(
-                "UPDATE accounts SET password_enc = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                params![encrypted, existing_id],
-            )?;
-        }
         if let Some(value) = input.client_id {
             let encrypted = crypto::encrypt_text(&value, key)?;
             self.conn.execute(
@@ -918,16 +808,6 @@ impl Database {
                 "UPDATE accounts SET refresh_token_enc = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 params![encrypted, existing_id],
             )?;
-        }
-        if let Some(value) = input.imap_password {
-            let encrypted = crypto::encrypt_text(&value, key)?;
-            self.conn.execute(
-                "UPDATE accounts SET imap_password_enc = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                params![encrypted, existing_id],
-            )?;
-        }
-        if let Some(tag_ids) = input.tag_ids {
-            self.replace_account_tags(existing_id, tag_ids)?;
         }
         if let Some(aliases) = input.aliases {
             self.replace_account_aliases(existing_id, &email, aliases)?;
@@ -1005,42 +885,6 @@ impl Database {
                 }
                 account_ids.len()
             }
-            "add_tags" | "remove_tags" => {
-                let mut tag_ids: Vec<i64> = input
-                    .tag_ids
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|id| *id > 0)
-                    .collect();
-                tag_ids.sort_unstable();
-                tag_ids.dedup();
-                if tag_ids.is_empty() {
-                    return Err(AppError::InvalidInput("tag_ids are required".to_string()));
-                }
-                let mut tag_stmt = self.conn.prepare("SELECT id FROM tags WHERE id = ?")?;
-                for tag_id in &tag_ids {
-                    if !tag_stmt.exists([tag_id])? {
-                        return Err(AppError::InvalidInput("tag not found".to_string()));
-                    }
-                }
-                drop(tag_stmt);
-                for account_id in &account_ids {
-                    for tag_id in &tag_ids {
-                        if action == "add_tags" {
-                            self.conn.execute(
-                                "INSERT OR IGNORE INTO account_tags (account_id, tag_id) VALUES (?, ?)",
-                                params![account_id, tag_id],
-                            )?;
-                        } else {
-                            self.conn.execute(
-                                "DELETE FROM account_tags WHERE account_id = ? AND tag_id = ?",
-                                params![account_id, tag_id],
-                            )?;
-                        }
-                    }
-                }
-                account_ids.len()
-            }
             _ => {
                 return Err(AppError::InvalidInput(
                     "unsupported batch action".to_string(),
@@ -1074,28 +918,21 @@ impl Database {
             return Err(AppError::Unauthorized);
         }
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
-        let (password_enc, client_id_enc, refresh_token_enc, imap_password_enc): (
-            String,
-            String,
-            String,
-            String,
-        ) = self
+        let (client_id_enc, refresh_token_enc): (String, String) = self
             .conn
             .query_row(
                 "
-                SELECT password_enc, client_id_enc, refresh_token_enc, imap_password_enc
+                SELECT client_id_enc, refresh_token_enc
                 FROM accounts
                 WHERE id = ?
                 ",
                 [input.account_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?
             .ok_or_else(|| AppError::InvalidInput("account not found".to_string()))?;
-        let password = crypto::decrypt_text(&password_enc, &key)?;
         let client_id = crypto::decrypt_text(&client_id_enc, &key)?;
         let refresh_token = crypto::decrypt_text(&refresh_token_enc, &key)?;
-        let imap_password = crypto::decrypt_text(&imap_password_enc, &key)?;
         self.audit(
             "account.secrets_viewed",
             "account",
@@ -1103,10 +940,8 @@ impl Database {
             "local password verified",
         )?;
         Ok(AccountSecretsPreview {
-            password,
             client_id,
             refresh_token_preview: preview_secret(&refresh_token),
-            imap_password,
         })
     }
 
@@ -1584,7 +1419,6 @@ impl Database {
         }
 
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
-        let password = crypto::encrypt_text(input.password.as_deref().unwrap_or_default(), key)?;
         let client_id_enc = crypto::encrypt_text(client_id, key)?;
         let refresh_token_enc = crypto::encrypt_text(&token.refresh_token, key)?;
         let remark = input.remark.unwrap_or_default();
@@ -1593,14 +1427,10 @@ impl Database {
         self.conn.execute(
             "
             INSERT INTO accounts
-            (email, password_enc, client_id_enc, refresh_token_enc, group_id, remark, provider,
+            (email, client_id_enc, refresh_token_enc, group_id, remark, provider,
              account_type, last_refresh_status, last_refresh_error, refresh_token_updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'authorized', NULL, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'authorized', NULL, CURRENT_TIMESTAMP)
             ON CONFLICT(email) DO UPDATE SET
-                password_enc = CASE
-                    WHEN excluded.password_enc = '' THEN accounts.password_enc
-                    ELSE excluded.password_enc
-                END,
                 client_id_enc = excluded.client_id_enc,
                 refresh_token_enc = excluded.refresh_token_enc,
                 group_id = COALESCE(excluded.group_id, accounts.group_id),
@@ -1617,7 +1447,6 @@ impl Database {
             ",
             params![
                 email.as_str(),
-                password,
                 client_id_enc,
                 refresh_token_enc,
                 input.group_id,
@@ -2140,7 +1969,7 @@ impl Database {
             "
             SELECT id, email, provider, account_type, remark,
                    COALESCE(imap_host, ''), imap_port,
-                   password_enc, client_id_enc, refresh_token_enc, imap_password_enc
+                   client_id_enc, refresh_token_enc
             FROM accounts
             WHERE id IN ({placeholders})
             ORDER BY email ASC
@@ -2158,8 +1987,6 @@ impl Database {
                 row.get::<_, i64>(6)?,
                 row.get::<_, String>(7)?,
                 row.get::<_, String>(8)?,
-                row.get::<_, String>(9)?,
-                row.get::<_, String>(10)?,
             ))
         })?;
         let rows = collect_rows(rows)?;
@@ -2179,10 +2006,8 @@ impl Database {
             "remark",
             "imap_host",
             "imap_port",
-            "password",
             "client_id",
             "refresh_token",
-            "imap_password",
         ]));
         for (
             id,
@@ -2192,10 +2017,8 @@ impl Database {
             remark,
             imap_host,
             imap_port,
-            password_enc,
             client_id_enc,
             refresh_token_enc,
-            imap_password_enc,
         ) in rows
         {
             csv.push_str(&csv_row(&[
@@ -2206,10 +2029,8 @@ impl Database {
                 remark,
                 imap_host,
                 imap_port.to_string(),
-                crypto::decrypt_text(&password_enc, &key)?,
                 crypto::decrypt_text(&client_id_enc, &key)?,
                 crypto::decrypt_text(&refresh_token_enc, &key)?,
-                crypto::decrypt_text(&imap_password_enc, &key)?,
             ]));
         }
         let file_name = timestamped_file_name("account-secrets", "csv");
@@ -2442,10 +2263,6 @@ impl Database {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE NOT NULL,
                 description TEXT DEFAULT '',
-                color TEXT NOT NULL DEFAULT '#2f6f9f',
-                proxy_url TEXT DEFAULT '',
-                fallback_proxy_url_1 TEXT DEFAULT '',
-                fallback_proxy_url_2 TEXT DEFAULT '',
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 is_system INTEGER NOT NULL DEFAULT 0,
                 parent_id INTEGER,
@@ -2457,7 +2274,6 @@ impl Database {
             CREATE TABLE IF NOT EXISTS accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT UNIQUE NOT NULL,
-                password_enc TEXT NOT NULL DEFAULT '',
                 client_id_enc TEXT NOT NULL DEFAULT '',
                 refresh_token_enc TEXT NOT NULL DEFAULT '',
                 group_id INTEGER,
@@ -2468,7 +2284,6 @@ impl Database {
                 provider TEXT NOT NULL DEFAULT 'outlook',
                 imap_host TEXT DEFAULT '',
                 imap_port INTEGER NOT NULL DEFAULT 993,
-                imap_password_enc TEXT NOT NULL DEFAULT '',
                 proxy_url TEXT DEFAULT '',
                 fallback_proxy_url_1 TEXT DEFAULT '',
                 fallback_proxy_url_2 TEXT DEFAULT '',
@@ -2490,22 +2305,6 @@ impl Database {
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS tags (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                color TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS account_tags (
-                account_id INTEGER NOT NULL,
-                tag_id INTEGER NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY(account_id, tag_id),
-                FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-                FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS retained_mail_messages (
@@ -2578,7 +2377,6 @@ impl Database {
             ",
         )?;
         self.ensure_default_data()?;
-        self.ensure_group_columns()?;
         self.ensure_account_columns()?;
         self.ensure_message_columns()?;
         self.ensure_share_columns()?;
@@ -2599,6 +2397,8 @@ impl Database {
             "idx_retry_queue_key",
         ];
         const LEGACY_TABLES: &[&str] = &[
+            "account_tags",
+            "tags",
             "project_account_events",
             "project_accounts",
             "project_group_scopes",
@@ -2614,6 +2414,8 @@ impl Database {
             "cloudflare_channels",
         ];
         const LEGACY_ACCOUNT_COLUMNS: &[&str] = &["forward_enabled", "forward_last_checked_at"];
+        const LEGACY_GROUP_COLUMNS: &[&str] =
+            &["color", "proxy_url", "fallback_proxy_url_1", "fallback_proxy_url_2"];
         const LEGACY_CONFIG_KEYS: &[&str] = &[
             "webdav_url",
             "webdav_username",
@@ -2650,6 +2452,14 @@ impl Database {
             }
         }
 
+        let group_columns = table_columns(&self.conn, "groups")?;
+        for column in LEGACY_GROUP_COLUMNS {
+            if group_columns.iter().any(|name| name == column) {
+                let sql = format!("ALTER TABLE groups DROP COLUMN {column}");
+                self.conn.execute(&sql, [])?;
+            }
+        }
+
         for key in LEGACY_CONFIG_KEYS {
             self.conn
                 .execute("DELETE FROM app_config WHERE key = ?", [key])?;
@@ -2668,10 +2478,6 @@ impl Database {
             (
                 "imap_port",
                 "ALTER TABLE accounts ADD COLUMN imap_port INTEGER NOT NULL DEFAULT 993",
-            ),
-            (
-                "imap_password_enc",
-                "ALTER TABLE accounts ADD COLUMN imap_password_enc TEXT NOT NULL DEFAULT ''",
             ),
             (
                 "proxy_url",
@@ -2696,29 +2502,6 @@ impl Database {
             (
                 "provider_sync_state",
                 "ALTER TABLE accounts ADD COLUMN provider_sync_state TEXT NOT NULL DEFAULT ''",
-            ),
-        ] {
-            if !columns.iter().any(|column| column == name) {
-                self.conn.execute(ddl, [])?;
-            }
-        }
-        Ok(())
-    }
-
-    fn ensure_group_columns(&self) -> AppResult<()> {
-        let columns = table_columns(&self.conn, "groups")?;
-        for (name, ddl) in [
-            (
-                "proxy_url",
-                "ALTER TABLE groups ADD COLUMN proxy_url TEXT DEFAULT ''",
-            ),
-            (
-                "fallback_proxy_url_1",
-                "ALTER TABLE groups ADD COLUMN fallback_proxy_url_1 TEXT DEFAULT ''",
-            ),
-            (
-                "fallback_proxy_url_2",
-                "ALTER TABLE groups ADD COLUMN fallback_proxy_url_2 TEXT DEFAULT ''",
             ),
         ] {
             if !columns.iter().any(|column| column == name) {
@@ -2763,21 +2546,11 @@ impl Database {
     fn ensure_default_data(&self) -> AppResult<()> {
         self.conn.execute(
             "
-            INSERT OR IGNORE INTO groups (id, name, description, color, sort_order, is_system)
-            VALUES (1, 'Default', 'Default mailbox group', '#d97757', 0, 1)
+            INSERT OR IGNORE INTO groups (id, name, description, sort_order, is_system)
+            VALUES (1, 'Default', 'Default mailbox group', 0, 1)
             ",
             [],
         )?;
-        for (name, color) in [
-            ("Core", "#d97757"),
-            ("Warmup", "#8a7a70"),
-            ("Issue", "#c05f42"),
-        ] {
-            self.conn.execute(
-                "INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)",
-                params![name, color],
-            )?;
-        }
         Ok(())
     }
 
@@ -2809,6 +2582,76 @@ impl Database {
         Ok(())
     }
 
+    fn migrate_legacy_account_secrets(&self) -> AppResult<()> {
+        if self.get_config("migrated_account_secrets_v1")?.is_some() {
+            return Ok(());
+        }
+        let columns = table_columns(&self.conn, "accounts")?;
+        let has_password = columns.iter().any(|name| name == "password_enc");
+        let has_imap_password = columns.iter().any(|name| name == "imap_password_enc");
+        if !has_password && !has_imap_password {
+            self.set_config("migrated_account_secrets_v1", "1")?;
+            return Ok(());
+        }
+        let key = match self.crypto_key.as_ref() {
+            Some(key) => *key,
+            None => return Ok(()),
+        };
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT id, password_enc, client_id_enc, refresh_token_enc, imap_password_enc
+            FROM accounts
+            ",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, password_enc, _client_id_enc, refresh_token_enc, imap_password_enc) = row?;
+            let refresh_token = crypto::decrypt_text(&refresh_token_enc, &key)?;
+            let imap_password = crypto::decrypt_text(&imap_password_enc, &key)?;
+            let password = crypto::decrypt_text(&password_enc, &key)?;
+            let merged = if !refresh_token.trim().is_empty() {
+                refresh_token
+            } else if !imap_password.trim().is_empty() {
+                imap_password
+            } else {
+                password
+            };
+            if merged.trim().is_empty() {
+                continue;
+            }
+            let encrypted = crypto::encrypt_text(&merged, &key)?;
+            self.conn.execute(
+                "
+                UPDATE accounts
+                SET refresh_token_enc = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                ",
+                params![encrypted, id],
+            )?;
+        }
+        self.set_config("migrated_account_secrets_v1", "1")?;
+        Ok(())
+    }
+
+    fn drop_legacy_account_secret_columns(&self) -> AppResult<()> {
+        let columns = table_columns(&self.conn, "accounts")?;
+        for column in ["password_enc", "imap_password_enc"] {
+            if columns.iter().any(|name| name == column) {
+                let sql = format!("ALTER TABLE accounts DROP COLUMN {column}");
+                self.conn.execute(&sql, [])?;
+            }
+        }
+        Ok(())
+    }
+
     fn migrate_legacy_password_key(&mut self, old_key: &[u8; 32]) -> AppResult<()> {
         let workspace_key = crypto::random_workspace_key();
         let runtime_key = crypto::derive_workspace_key(&workspace_key)?;
@@ -2820,17 +2663,33 @@ impl Database {
         let password_key = crypto::derive_key(DEFAULT_LOGIN_PASSWORD, &salt);
         let workspace_key_enc = crypto::encrypt_text(&workspace_key, &password_key)?;
 
+        let columns = table_columns(&self.conn, "accounts")?;
+        let has_legacy_secrets = columns.iter().any(|name| name == "password_enc")
+            || columns.iter().any(|name| name == "imap_password_enc");
         let tx = self.conn.transaction()?;
-        for (id, password, client_id, refresh_token, imap_password) in accounts {
-            tx.execute(
-                "
-                UPDATE accounts
-                SET password_enc = ?, client_id_enc = ?, refresh_token_enc = ?, imap_password_enc = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                ",
-                params![password, client_id, refresh_token, imap_password, id],
-            )?;
+        if has_legacy_secrets {
+            for (id, password, client_id, refresh_token, imap_password) in accounts {
+                tx.execute(
+                    "
+                    UPDATE accounts
+                    SET password_enc = ?, client_id_enc = ?, refresh_token_enc = ?, imap_password_enc = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    ",
+                    params![password, client_id, refresh_token, imap_password, id],
+                )?;
+            }
+        } else {
+            for (id, _password, client_id, refresh_token, _imap_password) in accounts {
+                tx.execute(
+                    "
+                    UPDATE accounts
+                    SET client_id_enc = ?, refresh_token_enc = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    ",
+                    params![client_id, refresh_token, id],
+                )?;
+            }
         }
         for (key, value) in config_secrets {
             tx.execute(
@@ -2900,9 +2759,42 @@ impl Database {
         old_key: &[u8; 32],
         new_key: &[u8; 32],
     ) -> AppResult<Vec<(i64, String, String, String, String)>> {
+        let columns = table_columns(&self.conn, "accounts")?;
+        let has_legacy_secrets = columns.iter().any(|name| name == "password_enc")
+            || columns.iter().any(|name| name == "imap_password_enc");
+        if has_legacy_secrets {
+            let mut stmt = self.conn.prepare(
+                "
+                SELECT id, password_enc, client_id_enc, refresh_token_enc, imap_password_enc
+                FROM accounts
+                ",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })?;
+            let mut values = Vec::new();
+            for row in rows {
+                let (id, password, client_id, refresh_token, imap_password) = row?;
+                values.push((
+                    id,
+                    reencrypt_secret_value(&password, old_key, new_key)?,
+                    reencrypt_secret_value(&client_id, old_key, new_key)?,
+                    reencrypt_secret_value(&refresh_token, old_key, new_key)?,
+                    reencrypt_secret_value(&imap_password, old_key, new_key)?,
+                ));
+            }
+            return Ok(values);
+        }
+
         let mut stmt = self.conn.prepare(
             "
-            SELECT id, password_enc, client_id_enc, refresh_token_enc, imap_password_enc
+            SELECT id, client_id_enc, refresh_token_enc
             FROM accounts
             ",
         )?;
@@ -2911,19 +2803,17 @@ impl Database {
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
             ))
         })?;
         let mut values = Vec::new();
         for row in rows {
-            let (id, password, client_id, refresh_token, imap_password) = row?;
+            let (id, client_id, refresh_token) = row?;
             values.push((
                 id,
-                reencrypt_secret_value(&password, old_key, new_key)?,
+                String::new(),
                 reencrypt_secret_value(&client_id, old_key, new_key)?,
                 reencrypt_secret_value(&refresh_token, old_key, new_key)?,
-                reencrypt_secret_value(&imap_password, old_key, new_key)?,
+                String::new(),
             ));
         }
         Ok(values)
@@ -2961,9 +2851,7 @@ impl Database {
         self.conn
             .query_row(
                 "
-                SELECT g.id, g.name, COALESCE(g.description, ''), g.color,
-                       COALESCE(g.proxy_url, ''), COALESCE(g.fallback_proxy_url_1, ''),
-                       COALESCE(g.fallback_proxy_url_2, ''), g.parent_id, g.level,
+                SELECT g.id, g.name, COALESCE(g.description, ''), g.parent_id, g.level,
                        g.sort_order, COUNT(a.id) AS account_count
                 FROM groups g
                 LEFT JOIN accounts a ON a.group_id = g.id
@@ -2976,14 +2864,10 @@ impl Database {
                         id: row.get(0)?,
                         name: row.get(1)?,
                         description: row.get(2)?,
-                        color: row.get(3)?,
-                        proxy_url: row.get(4)?,
-                        fallback_proxy_url_1: row.get(5)?,
-                        fallback_proxy_url_2: row.get(6)?,
-                        parent_id: row.get(7)?,
-                        level: row.get(8)?,
-                        sort_order: row.get(9)?,
-                        account_count: row.get(10)?,
+                        parent_id: row.get(3)?,
+                        level: row.get(4)?,
+                        sort_order: row.get(5)?,
+                        account_count: row.get(6)?,
                     })
                 },
             )
@@ -3034,26 +2918,6 @@ impl Database {
             )?;
         }
         Ok(())
-    }
-
-    fn tags_for_account(&self, account_id: i64) -> AppResult<Vec<Tag>> {
-        let mut stmt = self.conn.prepare(
-            "
-            SELECT t.id, t.name, t.color
-            FROM tags t
-            JOIN account_tags at ON at.tag_id = t.id
-            WHERE at.account_id = ?
-            ORDER BY t.name
-            ",
-        )?;
-        let rows = stmt.query_map([account_id], |row| {
-            Ok(Tag {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                color: row.get(2)?,
-            })
-        })?;
-        collect_rows(rows)
     }
 
     fn aliases_for_account(&self, account_id: i64) -> AppResult<Vec<String>> {
@@ -3159,19 +3023,6 @@ impl Database {
         Ok(())
     }
 
-    fn replace_account_tags(&self, account_id: i64, tag_ids: Vec<i64>) -> AppResult<()> {
-        self.conn.execute(
-            "DELETE FROM account_tags WHERE account_id = ?",
-            [account_id],
-        )?;
-        for tag_id in tag_ids {
-            self.conn.execute(
-                "INSERT OR IGNORE INTO account_tags (account_id, tag_id) VALUES (?, ?)",
-                params![account_id, tag_id],
-            )?;
-        }
-        Ok(())
-    }
 
 
 
@@ -3187,13 +3038,11 @@ impl Database {
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
         let mut stmt = self.conn.prepare(
             "
-            SELECT a.id, a.email, a.provider, a.account_type, a.password_enc, a.client_id_enc,
-                   a.refresh_token_enc, COALESCE(a.imap_host, ''), a.imap_port, a.imap_password_enc,
+            SELECT a.id, a.email, a.provider, a.account_type, a.client_id_enc,
+                   a.refresh_token_enc, COALESCE(a.imap_host, ''), a.imap_port,
                    COALESCE(a.proxy_url, ''), COALESCE(a.fallback_proxy_url_1, ''),
-                   COALESCE(a.fallback_proxy_url_2, ''), COALESCE(g.proxy_url, ''),
-                   COALESCE(g.fallback_proxy_url_1, ''), COALESCE(g.fallback_proxy_url_2, '')
+                   COALESCE(a.fallback_proxy_url_2, '')
             FROM accounts a
-            LEFT JOIN groups g ON g.id = a.group_id
             WHERE a.status = 'active' AND (?1 IS NULL OR a.id = ?1)
             ORDER BY a.sort_order ASC, a.email ASC
             ",
@@ -3207,15 +3056,10 @@ impl Database {
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, i64>(8)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, String>(8)?,
                 row.get::<_, String>(9)?,
                 row.get::<_, String>(10)?,
-                row.get::<_, String>(11)?,
-                row.get::<_, String>(12)?,
-                row.get::<_, String>(13)?,
-                row.get::<_, String>(14)?,
-                row.get::<_, String>(15)?,
             ))
         })?;
 
@@ -3226,36 +3070,25 @@ impl Database {
                 email,
                 provider,
                 account_type,
-                password,
                 client_id,
                 refresh_token,
                 imap_host,
                 imap_port,
-                imap_password,
                 account_proxy,
                 account_proxy_1,
                 account_proxy_2,
-                group_proxy,
-                group_proxy_1,
-                group_proxy_2,
             ) = row?;
-            let mut proxy_chain =
+            let proxy_chain =
                 proxy_chain_from_values(&[&account_proxy, &account_proxy_1, &account_proxy_2])?;
-            if proxy_chain.is_empty() {
-                proxy_chain =
-                    proxy_chain_from_values(&[&group_proxy, &group_proxy_1, &group_proxy_2])?;
-            }
             credentials.push(AccountCredentials {
                 id,
                 email,
                 provider,
                 account_type,
-                password: crypto::decrypt_text(&password, key)?,
                 client_id: crypto::decrypt_text(&client_id, key)?,
                 refresh_token: crypto::decrypt_text(&refresh_token, key)?,
                 imap_host,
                 imap_port,
-                imap_password: crypto::decrypt_text(&imap_password, key)?,
                 proxy_chain,
             });
         }
@@ -4673,7 +4506,7 @@ mod project_tests {
         DownloadAttachmentInput, ExportAccountSecretsInput, ExportAccountsInput,
         ExportMailMessagesInput, MailMessageQuery, MarkMailMessagesInput,
         RefreshInput, RevealAccountSecretsInput, RevokeMailShareInput,
-        LoginInput, UpdateAccountInput, UpdateGroupInput, UpdateGroupProxyInput,
+        LoginInput, UpdateAccountInput, UpdateGroupInput,
         GenerateWorkspaceKeyInput, UpdateWorkspaceKeyRecordInput,
     };
     use rusqlite::{params, Connection};
@@ -4800,8 +4633,8 @@ mod project_tests {
         assert_eq!(qq.provider, "qq");
         assert_eq!(qq.account_type, "imap");
         assert_eq!(qq.imap_host, "imap.qq.com");
-        assert!(qq.has_imap_password);
-        assert!(!qq.has_password);
+        assert!(qq.has_refresh_token);
+        assert!(!qq.has_client_id);
 
         let netease = accounts
             .iter()
@@ -4810,7 +4643,7 @@ mod project_tests {
         assert_eq!(netease.provider, "netease_163");
         assert_eq!(netease.account_type, "imap");
         assert_eq!(netease.imap_host, "imap.163.com");
-        assert!(netease.has_imap_password);
+        assert!(netease.has_refresh_token);
 
         let gmail = accounts
             .iter()
@@ -4819,9 +4652,8 @@ mod project_tests {
         assert_eq!(gmail.provider, "gmail");
         assert_eq!(gmail.account_type, "imap");
         assert_eq!(gmail.imap_host, "imap.gmail.com");
-        assert!(gmail.has_imap_password);
+        assert!(gmail.has_refresh_token);
         assert!(!gmail.has_client_id);
-        assert!(!gmail.has_refresh_token);
     }
 
     #[test]
@@ -4859,11 +4691,7 @@ mod project_tests {
             .create_group(CreateGroupInput {
                 name: "Batch".to_string(),
                 description: None,
-                color: None,
                 parent_id: None,
-                proxy_url: None,
-                fallback_proxy_url_1: None,
-                fallback_proxy_url_2: None,
             })
             .expect("create group");
         db.conn
@@ -4878,19 +4706,12 @@ mod project_tests {
                 [],
             )
             .expect("insert accounts");
-        db.conn
-            .execute(
-                "INSERT INTO tags (id, name, color) VALUES (10, 'BatchCore', '#111827'), (11, 'BatchWarmup', '#374151')",
-                [],
-            )
-            .expect("insert tags");
 
         let moved = db
             .batch_accounts(AccountBatchInput {
                 account_ids: vec![1, 2, 2, 999],
                 action: "move_group".to_string(),
                 group_id: Some(batch_group.id),
-                tag_ids: None,
             })
             .expect("move accounts");
         assert_eq!(moved.refreshed, 2);
@@ -4905,36 +4726,6 @@ mod project_tests {
             )
             .expect("moved count");
         assert_eq!(moved_count, 2);
-
-        db.batch_accounts(AccountBatchInput {
-            account_ids: vec![1, 2],
-            action: "add_tags".to_string(),
-            group_id: None,
-            tag_ids: Some(vec![10, 11]),
-        })
-        .expect("add tags");
-        let tag_count: i64 = db
-            .conn
-            .query_row("SELECT COUNT(*) FROM account_tags", [], |row| row.get(0))
-            .expect("tag count");
-        assert_eq!(tag_count, 4);
-
-        db.batch_accounts(AccountBatchInput {
-            account_ids: vec![1, 2],
-            action: "remove_tags".to_string(),
-            group_id: None,
-            tag_ids: Some(vec![11]),
-        })
-        .expect("remove tags");
-        let warmup_count: i64 = db
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM account_tags WHERE tag_id = 11",
-                [],
-                |row| row.get(0),
-            )
-            .expect("warmup tag count");
-        assert_eq!(warmup_count, 0);
 
         let selected_export = db
             .export_accounts(ExportAccountsInput {
@@ -4951,7 +4742,6 @@ mod project_tests {
             account_ids: vec![1, 2],
             action: "delete".to_string(),
             group_id: None,
-            tag_ids: None,
         })
         .expect("delete accounts");
         assert_eq!(db.list_accounts().expect("accounts").len(), 1);
@@ -4991,10 +4781,8 @@ mod project_tests {
                 password: "admin123".to_string(),
             })
             .expect("reveal secrets");
-        assert_eq!(secrets.password, "account-password");
         assert_eq!(secrets.client_id, "client-id-value");
         assert_eq!(secrets.refresh_token_preview, "refr...alue");
-        assert_eq!(secrets.imap_password, "");
 
         let denied = db.reveal_account_secrets(RevealAccountSecretsInput {
             account_id: 1,
@@ -5026,7 +4814,6 @@ mod project_tests {
         assert_eq!(exported.item_count, 1);
         let csv = std::fs::read_to_string(&exported.path).expect("read secret export");
         assert!(csv.contains("secret@example.com"));
-        assert!(csv.contains("account-password"));
         assert!(csv.contains("client-id-value"));
         assert!(csv.contains("refresh-token-value"));
     }
@@ -5081,8 +4868,8 @@ mod project_tests {
                 password: "admin123".to_string(),
             })
             .expect("reveal migrated secrets");
-        assert_eq!(secrets.password, "legacy-password");
         assert_eq!(secrets.client_id, "legacy-client");
+        assert_eq!(secrets.refresh_token_preview, "lega...resh");
 
         db.lock();
         assert!(matches!(
@@ -5202,11 +4989,8 @@ mod project_tests {
             fallback_proxy_url_1: None,
             fallback_proxy_url_2: None,
             mail_retention_days: None,
-            password: None,
             client_id: None,
             refresh_token: None,
-            imap_password: None,
-            tag_ids: None,
             aliases: Some(aliases.into_iter().map(str::to_string).collect()),
         };
 
@@ -5243,7 +5027,7 @@ mod project_tests {
     }
 
     #[test]
-    fn account_proxy_chain_inherits_group_and_allows_override() {
+    fn account_proxy_chain_uses_account_proxies() {
         let conn = Connection::open_in_memory().expect("open memory db");
         let mut db = Database {
             conn,
@@ -5251,13 +5035,6 @@ mod project_tests {
             crypto_key: Some([7; 32]),
         };
         db.initialize_schema().expect("schema");
-        db.update_group_proxy(UpdateGroupProxyInput {
-            id: 1,
-            proxy_url: Some("http://group-proxy:8080".to_string()),
-            fallback_proxy_url_1: Some("https://group-backup:8443".to_string()),
-            fallback_proxy_url_2: None,
-        })
-        .expect("set group proxy");
         db.conn
             .execute(
                 "INSERT INTO accounts (id, email, status, group_id) VALUES (1, 'proxy@example.com', 'active', 1)",
@@ -5265,11 +5042,8 @@ mod project_tests {
             )
             .expect("insert account");
 
-        let inherited = db.account_credentials(Some(1)).expect("credentials");
-        assert_eq!(
-            inherited[0].proxy_chain,
-            vec!["http://group-proxy:8080", "https://group-backup:8443"]
-        );
+        let empty = db.account_credentials(Some(1)).expect("credentials");
+        assert!(empty[0].proxy_chain.is_empty());
 
         db.update_account(UpdateAccountInput {
             id: 1,
@@ -5285,11 +5059,8 @@ mod project_tests {
             fallback_proxy_url_1: Some("http://account-proxy:8080".to_string()),
             fallback_proxy_url_2: Some("https://account-backup:8443".to_string()),
             mail_retention_days: Some(90),
-            password: None,
             client_id: None,
             refresh_token: None,
-            imap_password: None,
-            tag_ids: None,
             aliases: None,
         })
         .expect("set account proxy");
@@ -5303,14 +5074,6 @@ mod project_tests {
             overridden[0].proxy_chain,
             vec!["http://account-proxy:8080", "https://account-backup:8443"]
         );
-
-        let invalid = db.update_group_proxy(UpdateGroupProxyInput {
-            id: 1,
-            proxy_url: Some("socks5://127.0.0.1:1080".to_string()),
-            fallback_proxy_url_1: None,
-            fallback_proxy_url_2: None,
-        });
-        assert!(matches!(invalid, Err(AppError::InvalidInput(_))));
     }
 
     #[test]
@@ -5326,22 +5089,14 @@ mod project_tests {
             .create_group(CreateGroupInput {
                 name: "Child".to_string(),
                 description: None,
-                color: None,
                 parent_id: Some(1),
-                proxy_url: None,
-                fallback_proxy_url_1: None,
-                fallback_proxy_url_2: None,
             })
             .expect("create child");
         let grandchild = db
             .create_group(CreateGroupInput {
                 name: "Grandchild".to_string(),
                 description: None,
-                color: None,
                 parent_id: Some(child.id),
-                proxy_url: None,
-                fallback_proxy_url_1: None,
-                fallback_proxy_url_2: None,
             })
             .expect("create grandchild");
         db.conn
@@ -5356,12 +5111,8 @@ mod project_tests {
                 id: child.id,
                 name: "Child Root".to_string(),
                 description: Some("moved".to_string()),
-                color: Some("#111827".to_string()),
                 parent_id: None,
                 sort_order: Some(2),
-                proxy_url: None,
-                fallback_proxy_url_1: None,
-                fallback_proxy_url_2: None,
             })
             .expect("move child");
         assert_eq!(moved.level, 1);
@@ -5371,12 +5122,8 @@ mod project_tests {
             id: child.id,
             name: "Cycle".to_string(),
             description: None,
-            color: None,
             parent_id: Some(grandchild.id),
             sort_order: None,
-            proxy_url: None,
-            fallback_proxy_url_1: None,
-            fallback_proxy_url_2: None,
         });
         assert!(matches!(cycle, Err(AppError::InvalidInput(_))));
 

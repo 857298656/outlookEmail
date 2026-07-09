@@ -35,13 +35,19 @@ describe("providerRegistry capabilities", () => {
   });
 
   it("checks provider readiness from non-secret account fields", () => {
-    expect(providerReadiness({ provider: "gmail", has_imap_password: true, imap_host: "imap.gmail.com", imap_port: 993 }).status).toBe("ready");
-    expect(providerReadiness({ provider: "gmail", has_client_id: true, has_refresh_token: true }).missing).toContain("Gmail 应用专用密码");
+    expect(providerReadiness({ provider: "gmail", has_refresh_token: true, imap_host: "imap.gmail.com", imap_port: 993 }).status).toBe("ready");
+    expect(
+      providerReadiness({
+        provider: "gmail",
+        has_refresh_token: false,
+        imap_host: "imap.gmail.com",
+        imap_port: 993
+      }).missing
+    ).toContain("Gmail 应用专用密码");
     expect(
       providerReadiness({
         provider: "qq",
-        has_password: true,
-        has_imap_password: false,
+        has_refresh_token: false,
         imap_host: "imap.qq.com",
         imap_port: 993
       }).missing
@@ -49,12 +55,12 @@ describe("providerRegistry capabilities", () => {
     expect(
       providerReadiness({
         provider: "netease_163",
-        has_imap_password: true,
+        has_refresh_token: true,
         imap_host: "imap.163.com",
         imap_port: 993
       }).detail
     ).toContain("imap.163.com:993");
-    expect(providerReadiness({ provider: "imap_custom", has_imap_password: true, imap_host: "", imap_port: 993 }).missing).toContain(
+    expect(providerReadiness({ provider: "imap_custom", has_refresh_token: true, imap_host: "", imap_port: 993 }).missing).toContain(
       "IMAP host"
     );
   });

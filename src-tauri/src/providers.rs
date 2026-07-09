@@ -1045,31 +1045,36 @@ impl imap::Authenticator for XOAuth2Authenticator {
     }
 }
 
-fn is_gmail_imap_account(account: &AccountCredentials) -> bool {
-    account.provider.eq_ignore_ascii_case("gmail")
-        || account.account_type.eq_ignore_ascii_case("gmail")
-}
-
 fn imap_auth_secret(account: &AccountCredentials) -> AppResult<ImapAuthSecret> {
-    let password = if account.imap_password.trim().is_empty() {
-        account.password.trim()
-    } else {
-        account.imap_password.trim()
-    };
-    if !password.is_empty() {
-        return Ok(ImapAuthSecret::Password(password.to_string()));
-    }
-    if is_gmail_imap_account(account) {
+    if account.provider.eq_ignore_ascii_case("imap") {
+        if !account.client_id.trim().is_empty() && !account.refresh_token.trim().is_empty() {
+            return refresh_imap_oauth_access_token(account).map(ImapAuthSecret::OAuth2);
+        }
         return Err(AppError::InvalidInput(
-            "Gmail IMAP requires an app password; enable IMAP and save it as the IMAP password"
-                .to_string(),
+            "IMAP OAuth requires client ID and refresh token".to_string(),
         ));
     }
+
+    if let Some(def) = mail_provider_definition(&account.provider) {
+        if def.credential_kind.starts_with("imap") {
+            if !account.refresh_token.trim().is_empty() {
+                return Ok(ImapAuthSecret::Password(
+                    account.refresh_token.trim().to_string(),
+                ));
+            }
+            return Err(AppError::InvalidInput(format!(
+                "{} requires an app password or auth code",
+                def.id
+            )));
+        }
+    }
+
     if !account.client_id.trim().is_empty() && !account.refresh_token.trim().is_empty() {
         return refresh_imap_oauth_access_token(account).map(ImapAuthSecret::OAuth2);
     }
+
     Err(AppError::InvalidInput(
-        "IMAP password or OAuth refresh token is required".to_string(),
+        "IMAP credentials are missing".to_string(),
     ))
 }
 
@@ -1976,12 +1981,10 @@ mod tests {
                 email: "user@example.com".to_string(),
                 provider: provider.to_string(),
                 account_type: "imap".to_string(),
-                password: String::new(),
                 client_id: String::new(),
                 refresh_token: String::new(),
                 imap_host: String::new(),
                 imap_port: 993,
-                imap_password: String::new(),
                 proxy_chain: Vec::new(),
             }
         }

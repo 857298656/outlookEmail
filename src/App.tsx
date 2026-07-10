@@ -32,6 +32,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { api } from "./api";
+import loginLogo from "./assets/login-logo.png";
 import { Toast } from "./components/Toast";
 import type { ToastMessage } from "./components/Toast";
 import { buildSandboxedEmailHtml } from "./lib/emailHtml";
@@ -486,7 +487,7 @@ function App() {
         const account = importedAccounts[index];
         setBusyMessage(`正在刷新导入账号 ${index + 1}/${importedAccounts.length}：${account.email}`);
         try {
-          const refreshResult = await api.runRefreshJob(account.id, "all", 0);
+          const refreshResult = await api.refreshAccountAll(account.id);
           if (refreshResult.success) refreshSucceeded += 1;
           else refreshFailed += 1;
         } catch {
@@ -514,19 +515,35 @@ function App() {
 
   async function saveOAuthAccount(input: OAuthSaveAccountInput) {
     setBusy(true);
+    setBusyMessage("正在保存 OAuth 账号...");
     setError(null);
     setNotice(null);
     try {
       const result = await api.saveOAuthAccount(input);
-      setNotice(`OAuth 账号已保存：${result.account.email}（${result.refresh_token_preview}）`);
-      await loadWorkspace(result.account.id, folder);
+      setBusyMessage(`正在刷新账号邮件：${result.account.email}`);
+      let refreshSuffix = "";
+      try {
+        const refreshResult = await api.refreshAccountAll(result.account.id);
+        refreshSuffix = refreshResult.success
+          ? `，${formatResultMessage(refreshResult.message)}`
+          : `，刷新失败：${formatResultMessage(refreshResult.message)}`;
+      } catch (err) {
+        refreshSuffix = `，刷新失败：${readError(err)}`;
+      }
+      setMailPage(0);
+      if (result.account.group_id != null) {
+        setSelectedGroupId(result.account.group_id);
+      }
+      await loadWorkspace(result.account.id, folder, mailFilters, 0);
       await loadStatus();
+      setNotice(`OAuth 账号已保存：${result.account.email}（${result.refresh_token_preview}）${refreshSuffix}`);
       return result;
     } catch (err) {
       setError(readError(err));
       throw err;
     } finally {
       setBusy(false);
+      setBusyMessage("");
     }
   }
 
@@ -718,7 +735,7 @@ function App() {
               runAction(
                 async () => {
                   if (!selectedAccountId) return;
-                  const result = await api.runRefreshJob(selectedAccountId);
+                  const result = await api.refreshAccountFromSettings(selectedAccountId);
                   setNotice(formatResultMessage(result.message));
                   await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
                   await loadStatus();
@@ -1115,9 +1132,7 @@ function LoginScreen({
             onSubmit(username, password);
           }}
         >
-        <div className="lockMark" aria-hidden="true">
-          <span />
-        </div>
+        <img className="loginLogo" src={loginLogo} alt="" aria-hidden="true" />
         <div className="lockCopy">
           <h1>OutlookEmail</h1>
         </div>
@@ -2884,7 +2899,6 @@ function OAuthAccountSaveDialog({
     try {
       await onSaveOAuthAccount({
         email: draft.email.trim(),
-        password: draft.password || undefined,
         group_id: draft.group_id ?? undefined,
         client_id: preview?.client_id ?? activeClientId,
         redirect_uri: redirectUri,

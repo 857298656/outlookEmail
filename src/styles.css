@@ -1501,11 +1501,11 @@ button:disabled {
 }
 
 .groupSettingsDialog {
-  width: min(820px, calc(100vw - 56px));
+  width: min(720px, calc(100vw - 56px));
 }
 
 .accountAuthDialog {
-  width: min(920px, calc(100vw - 56px));
+  width: min(720px, calc(100vw - 56px));
 }
 
 .accountAuthDialogBody > .panel {
@@ -2596,31 +2596,14 @@ code {
   box-shadow: none;
 }
 
-.lockMark {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 64px;
-  height: 64px;
+.loginLogo {
+  display: block;
+  width: 88px;
+  height: auto;
   margin-bottom: 18px;
-  color: var(--skin-accent);
-}
-
-.lockMark span {
-  width: 60px;
-  height: 60px;
-  background: repeating-conic-gradient(from 3deg, var(--skin-accent) 0deg 8deg, transparent 8deg 24deg);
-  -webkit-mask: radial-gradient(circle, transparent 0 15px, #000 16px 100%);
-  mask: radial-gradient(circle, transparent 0 15px, #000 16px 100%);
-}
-
-.lockMark::after {
-  position: absolute;
-  width: 14px;
-  height: 14px;
-  border-radius: 999px;
-  background: var(--skin-accent);
-  content: "";
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .lockCopy {

@@ -1504,7 +1504,7 @@ impl Database {
             ));
         }
 
-        let folder = input.folder.unwrap_or_else(|| "all".to_string());
+        let folder = input.folder.unwrap_or_else(|| "inbox_junk".to_string());
         let top = self.refresh_top_for_input(input.top)?;
         let mut refreshed = 0_usize;
         let mut failed = 0_usize;
@@ -2219,7 +2219,7 @@ impl Database {
             match self.refresh_accounts_with_trigger(
                 RefreshInput {
                     account_id: None,
-                    folder: Some("all".to_string()),
+                    folder: Some("inbox_junk".to_string()),
                     top: Some(
                         settings
                             .scheduler_refresh_top

@@ -837,7 +837,19 @@ export const api = {
   downloadAllAttachments: (input: { account_id: number; message_id: string; folder?: string }) =>
     call<ExportResult>("download_all_attachments", { input }),
   getMailRawContent: (messageId: number) => call<MailRawContent>("get_mail_raw_content", { messageId }),
-  runRefreshJob: (accountId?: number, folder = "all", top?: number) => {
+  /** Backend maps top=0 to MAIL_REFRESH_MAX_TOP; syncs inbox + junk only (no deleted items). */
+  refreshAccountAll: (accountId: number, folder = "inbox_junk") =>
+    call<JobResult>("run_refresh_job", {
+      input: { account_id: accountId, folder, top: 0 },
+      accountId
+    }),
+  /** Uses scheduler_refresh_top from settings (default 25). Syncs inbox + junk only. */
+  refreshAccountFromSettings: (accountId?: number, folder = "inbox_junk") =>
+    call<JobResult>("run_refresh_job", {
+      input: { account_id: accountId, folder },
+      accountId
+    }),
+  runRefreshJob: (accountId?: number, folder = "inbox_junk", top?: number) => {
     const input: { account_id?: number; folder: string; top?: number } = { account_id: accountId, folder };
     if (top !== undefined) input.top = top;
     return call<JobResult>("run_refresh_job", { input, accountId });

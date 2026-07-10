@@ -854,7 +854,8 @@ fn folders_for(folder: &str) -> Vec<&'static str> {
         "inbox" => vec!["inbox"],
         "junk" | "junkemail" => vec!["junkemail"],
         "deleted" | "deleteditems" => vec!["deleteditems"],
-        _ => vec!["inbox", "junkemail", "deleteditems"],
+        "inbox_junk" | "all" => vec!["inbox", "junkemail"],
+        _ => vec!["inbox", "junkemail"],
     }
 }
 
@@ -1857,6 +1858,16 @@ fn recipients_to_string(value: Option<Vec<GraphRecipient>>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folders_for_default_skips_deleted_items() {
+        assert_eq!(
+            folders_for("inbox_junk"),
+            vec!["inbox", "junkemail"]
+        );
+        assert_eq!(folders_for("all"), vec!["inbox", "junkemail"]);
+        assert_eq!(folders_for("unknown"), vec!["inbox", "junkemail"]);
+    }
 
     #[test]
     fn classifies_imap_special_use_and_common_mailbox_names() {

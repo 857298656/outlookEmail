@@ -351,7 +351,7 @@ pub fn run_refresh_job(state: State<'_, AppState>, input: Option<RefreshInput>, 
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     let refresh_input = input.unwrap_or(RefreshInput {
         account_id,
-        folder: Some("all".to_string()),
+        folder: Some("inbox_junk".to_string()),
         top: None,
     });
     match catch_unwind(AssertUnwindSafe(|| db.refresh_accounts(refresh_input))) {

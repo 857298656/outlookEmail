@@ -45,6 +45,8 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
           releaseName: OutlookEmail Desktop v__VERSION__
@@ -52,8 +54,11 @@ jobs:
             Windows 安装包（NSIS）。
 
             下载 `OutlookEmail Desktop_*_x64-setup.exe` 后双击安装即可。
+            已安装旧版本的用户可在应用内检查更新，或重新下载安装包覆盖安装。
 
             首次运行若出现 Windows SmartScreen 提示，请选择「更多信息」→「仍要运行」。
           releaseDraft: false
           prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
           args: ""

@@ -220,3 +220,57 @@ export type MailShareRecord = {
 export type SchedulerStatus = {
   last_refresh_at: string | null;
 };
+
+export type TempEmail = {
+  id: number;
+  email: string;
+  provider: "gptmail" | "duckmail" | "cloudflare";
+  provider_base_url: string;
+  cloudflare_channel_id: number | null;
+  cloudflare_channel_name: string | null;
+  message_count: number;
+  last_checked_at: string | null;
+  created_at: string;
+};
+
+export type TempEmailMessage = {
+  id: string;
+  sender: string;
+  recipients: string;
+  subject: string;
+  body_preview: string;
+  body: string | null;
+  body_type: "text" | "html";
+  received_at: string;
+};
+
+export type GenerateTempEmailInput = {
+  provider: "gptmail" | "duckmail" | "cloudflare";
+  base_url?: string;
+  api_key?: string;
+  prefix?: string;
+  domain?: string;
+  username?: string;
+  password?: string;
+  cloudflare_channel_id?: number;
+};
+
+export type CloudflareChannel = {
+  id: number;
+  name: string;
+  worker_url: string;
+  email_domains: string[];
+  enabled: boolean;
+  has_admin_password: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SaveCloudflareChannelInput = {
+  id?: number;
+  name: string;
+  worker_url: string;
+  admin_password?: string;
+  email_domains: string[];
+  enabled?: boolean;
+};

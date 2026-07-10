@@ -1400,6 +1400,104 @@ button:disabled {
   align-items: stretch;
 }
 
+.tempEmailManagementGrid {
+  grid-template-columns: 220px minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.tempProviderPanel,
+.tempEmailInventoryPanel {
+  min-height: calc(100vh - 120px);
+}
+
+.tempProviderList,
+.tempProviderItem,
+.tempInbox,
+.tempMessageList {
+  display: grid;
+  gap: 8px;
+}
+
+.tempProviderItem {
+  gap: 3px;
+  border-bottom: 1px solid #eef2f7;
+  padding: 12px 2px;
+}
+
+.tempProviderItem small,
+.tempEmailInventoryPanel .panelHeader small,
+.tempInboxHeader small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.tempEmailTable .tableHeader,
+.tempEmailTable .tableRow {
+  grid-template-columns: minmax(240px, 1.2fr) 110px 70px minmax(130px, .7fr) 76px;
+}
+
+.tempInbox {
+  margin-top: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.tempInboxHeader,
+.tempMessageDetail header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: #f8fafc;
+}
+
+.tempInboxHeader > div,
+.tempMessageDetail header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.tempMessageList {
+  max-height: 250px;
+  overflow: auto;
+}
+
+.tempMessageRow {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid #eef2f7;
+  background: #fff;
+  color: #273444;
+  padding: 10px 14px;
+  text-align: left;
+}
+
+.tempMessageRow.active { background: var(--skin-selected); }
+.tempMessageRow span, .tempMessageRow small { overflow: hidden; color: #64748b; text-overflow: ellipsis; white-space: nowrap; }
+.tempInboxEmpty { padding: 28px; color: #94a3b8; text-align: center; }
+
+.tempMessageDetail { border-top: 1px solid #e5e7eb; }
+.tempMessageDetail h3 { margin: 0; font-size: 15px; }
+.tempMessageDetail iframe { width: 100%; min-height: 320px; border: 0; background: #fff; }
+.tempMessageDetail pre { min-height: 180px; margin: 0; padding: 16px; overflow: auto; color: #273444; font: 13px/1.65 "Segoe UI", sans-serif; white-space: pre-wrap; }
+.tempEmailCreateDialog { width: min(620px, calc(100vw - 32px)); }
+.tempCreateGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.domainDiscovery { display: flex; align-items: center; gap: 10px; margin-top: -4px; }
+.cloudflareChannelDialog { width: min(820px, calc(100vw - 32px)); }
+.cloudflareChannelBody { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; }
+.cloudflareChannelList { display: grid; align-content: start; gap: 6px; max-height: 430px; overflow: auto; }
+.cloudflareChannelItem { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 42px; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; color: #273444; padding: 8px 10px; text-align: left; }
+.cloudflareChannelItem.active { border-color: var(--skin-accent); background: var(--skin-accent-soft); }
+.cloudflareChannelItem span { display: grid; gap: 2px; min-width: 0; }
+.cloudflareChannelItem small { color: #64748b; font-size: 11px; }
+.cloudflareChannelForm { min-width: 0; }
+.channelDomainsInput { min-height: 90px; resize: vertical; }
+.dialogFooterSpacer { flex: 1; }
+
 .groupInventoryPanel,
 .accountInventoryPanel {
   min-height: calc(100vh - 120px);
@@ -2389,6 +2487,102 @@ button:disabled {
   gap: 10px;
 }
 
+.updateDialog {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.updateDialogBody {
+  gap: 16px;
+}
+
+.updateDialogVersions {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #faf9f8;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.updateDialogVersionRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #75726e;
+  font-size: 14px;
+}
+
+.updateDialogVersionRow strong {
+  color: #111111;
+  font-size: 15px;
+}
+
+.updateDialogVersionRowNext strong {
+  color: var(--skin-accent, #b5725f);
+}
+
+.updateDialogSection {
+  display: grid;
+  gap: 8px;
+}
+
+.updateDialogSectionLabel {
+  color: #46413a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.updateDialogHint {
+  margin: 0;
+  color: #75726e;
+  line-height: 1.5;
+}
+
+.updateDialogNotes {
+  margin: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: #faf9f8;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  line-height: 1.5;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.updateDialogProgress {
+  display: grid;
+  gap: 8px;
+}
+
+.updateDialogProgressTrack {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.updateDialogProgressBar {
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--skin-accent, #b5725f), #d28f7d);
+  transition: width 0.2s ease;
+}
+
+.updateSettingsMeta {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.updateSettingsHint {
+  margin: 0 0 12px;
+  color: #75726e;
+  line-height: 1.5;
+}
+
 .workspaceKeyCard {
   display: grid;
   gap: 12px;
@@ -2755,7 +2949,8 @@ code {
 }
 
 @media (max-width: 820px) {
-  .accountManagementGrid {
+  .accountManagementGrid,
+  .tempEmailManagementGrid {
     grid-template-columns: 1fr;
   }
 
@@ -2763,6 +2958,17 @@ code {
   .accountInventoryPanel {
     min-height: auto;
   }
+
+  .tempProviderPanel,
+  .tempEmailInventoryPanel {
+    min-height: auto;
+  }
+
+  .tempCreateGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .cloudflareChannelBody { grid-template-columns: 1fr; }
 
   .groupManageGrid {
     grid-template-columns: 1fr;

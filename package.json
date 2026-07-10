@@ -1,6 +1,6 @@
 {
   "name": "outlook-email-desktop",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "packageManager": "pnpm@9.15.9",
   "type": "module",
@@ -16,6 +16,8 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-process": "^2.0.0",
+    "@tauri-apps/plugin-updater": "^2.0.0",
     "@vitejs/plugin-react": "^6.0.3",
     "lucide-react": "^1.23.0",
     "react": "^19.0.0",

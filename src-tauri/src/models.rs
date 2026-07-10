@@ -150,6 +150,73 @@ pub struct Settings {
     pub scheduler_refresh_top: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TempEmail {
+    pub id: i64,
+    pub email: String,
+    pub provider: String,
+    pub provider_base_url: String,
+    pub cloudflare_channel_id: Option<i64>,
+    pub cloudflare_channel_name: Option<String>,
+    pub message_count: i64,
+    pub last_checked_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GenerateTempEmailInput {
+    pub provider: String,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub prefix: Option<String>,
+    pub domain: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub cloudflare_channel_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TempEmailProviderConfig {
+    pub provider: String,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub cloudflare_channel_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CloudflareChannel {
+    pub id: i64,
+    pub name: String,
+    pub worker_url: String,
+    pub email_domains: Vec<String>,
+    pub enabled: bool,
+    pub has_admin_password: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SaveCloudflareChannelInput {
+    pub id: Option<i64>,
+    pub name: String,
+    pub worker_url: String,
+    pub admin_password: Option<String>,
+    pub email_domains: Vec<String>,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TempEmailMessage {
+    pub id: String,
+    pub sender: String,
+    pub recipients: String,
+    pub subject: String,
+    pub body_preview: String,
+    pub body: Option<String>,
+    pub body_type: String,
+    pub received_at: String,
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {

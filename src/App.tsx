@@ -12,6 +12,7 @@ import {
   Lock,
   LogOut,
   Mail,
+  Clock3,
   Menu,
   Minus,
   PanelLeftClose,
@@ -30,11 +31,21 @@ import {
   XCircle
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { Update } from "@tauri-apps/plugin-updater";
 import type { CSSProperties, ReactNode } from "react";
 import { api } from "./api";
 import loginLogo from "./assets/login-logo.png";
 import { Toast } from "./components/Toast";
 import type { ToastMessage } from "./components/Toast";
+import { UpdateDialog } from "./components/UpdateDialog";
+import {
+  appVersion,
+  checkForAppUpdate,
+  formatUpdateError,
+  installAppUpdate,
+  summarizeUpdate
+} from "./lib/appUpdater";
+import type { AppUpdateSummary } from "./lib/appUpdater";
 import { buildSandboxedEmailHtml } from "./lib/emailHtml";
 import { formatMessageListPreview } from "./lib/mailPreview";
 import { extractVerificationCode } from "./lib/verificationCode";
@@ -69,9 +80,10 @@ import type {
   Settings,
   UpdateLoginPasswordInput,
   WorkspaceKeyRecord
+  , TempEmail, TempEmailMessage, GenerateTempEmailInput, CloudflareChannel, SaveCloudflareChannelInput
 } from "./types";
 
-type View = "mail" | "accounts" | "settings";
+type View = "mail" | "accounts" | "temp_mail" | "settings";
 type MailFilters = {
   search: string;
   readState: "all" | "read" | "unread";
@@ -204,6 +216,8 @@ function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [tempEmails, setTempEmails] = useState<TempEmail[]>([]);
+  const [cloudflareChannels, setCloudflareChannels] = useState<CloudflareChannel[]>([]);
   const [messages, setMessages] = useState<MailMessage[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [workspaceKeyRecords, setWorkspaceKeyRecords] = useState<WorkspaceKeyRecord[]>([]);
@@ -236,6 +250,11 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastMessage | null>(null);
+  const pendingUpdateRef = useRef<Update | null>(null);
+  const [updatePrompt, setUpdatePrompt] = useState<AppUpdateSummary | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [updateError, setUpdateError] = useState<string | null>(null);
 
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const selectedMessage = messages.find((message) => message.id === selectedMessageId);
@@ -430,10 +449,16 @@ function App() {
   }, [status?.unlocked]);
 
   useEffect(() => {
+    if (!status?.unlocked || view !== "temp_mail") return;
+    Promise.all([api.listTempEmails(), api.listCloudflareChannels()]).then(([emails, channels]) => { setTempEmails(emails); setCloudflareChannels(channels); }).catch((err) => setError(readError(err)));
+  }, [status?.unlocked, view]);
+
+  useEffect(() => {
     if (!status?.unlocked) return;
     loadWorkspace().catch((err) => setError(readError(err)));
     loadMailShares().catch((err) => setError(readError(err)));
     loadSettingsData().catch((err) => setError(readError(err)));
+    probeForAppUpdate(true).catch(() => undefined);
   }, [status?.unlocked]);
 
   useEffect(() => {
@@ -455,6 +480,51 @@ function App() {
 
   function showToast(message: string) {
     setToast({ id: Date.now(), message });
+  }
+
+  async function probeForAppUpdate(silent: boolean) {
+    if (!isTauriRuntime()) {
+      if (!silent) showToast("仅桌面客户端支持检查更新");
+      return;
+    }
+
+    try {
+      const update = await checkForAppUpdate();
+      if (update) {
+        pendingUpdateRef.current = update;
+        setUpdatePrompt(summarizeUpdate(update));
+        setUpdateError(null);
+        return;
+      }
+
+      pendingUpdateRef.current = null;
+      setUpdatePrompt(null);
+      if (!silent) showToast("当前已是最新版本");
+    } catch (err) {
+      if (!silent) showToast(`检查更新失败：${formatUpdateError(err)}`);
+    }
+  }
+
+  async function installPendingUpdate() {
+    const update = pendingUpdateRef.current;
+    if (!update) return;
+
+    setUpdateBusy(true);
+    setUpdateError(null);
+    setUpdateProgress(0);
+    try {
+      await installAppUpdate(update, setUpdateProgress);
+    } catch (err) {
+      setUpdateError(formatUpdateError(err));
+      setUpdateBusy(false);
+    }
+  }
+
+  function dismissUpdatePrompt() {
+    if (updateBusy) return;
+    setUpdatePrompt(null);
+    setUpdateError(null);
+    setUpdateProgress(0);
   }
 
   async function runAction(action: () => Promise<void>, success?: string, loadingMessage = "处理中...") {
@@ -624,6 +694,16 @@ function App() {
           }}
         >
           <Users size={20} />
+        </IconButton>
+        <IconButton
+          active={view === "temp_mail"}
+          title="临时邮箱"
+          onClick={() => {
+            setView("temp_mail");
+            setRailMenuOpen(false);
+          }}
+        >
+          <Clock3 size={20} />
         </IconButton>
         <div className="railSpacer" />
         <div className="railAccountArea" ref={railMenuRef}>
@@ -927,6 +1007,29 @@ function App() {
           />
         )}
 
+        {view === "temp_mail" && (
+          <TempEmailView
+            tempEmails={tempEmails}
+            cloudflareChannels={cloudflareChannels}
+            busy={busy}
+            onGenerate={(input) => runAction(async () => {
+              const created = await api.generateTempEmail(input);
+              setTempEmails(await api.listTempEmails());
+              setNotice(`临时邮箱已创建：${created.email}`);
+            }, undefined, "正在创建临时邮箱...")}
+            onDelete={(id) => runAction(async () => {
+              await api.deleteTempEmail(id);
+              setTempEmails(await api.listTempEmails());
+            }, "临时邮箱已删除")}
+            onSaveCloudflareChannel={(input) => runAction(async () => {
+              await api.saveCloudflareChannel(input); setCloudflareChannels(await api.listCloudflareChannels());
+            }, "Cloudflare 渠道已保存")}
+            onDeleteCloudflareChannel={(id) => runAction(async () => {
+              await api.deleteCloudflareChannel(id); setCloudflareChannels(await api.listCloudflareChannels());
+            }, "Cloudflare 渠道已删除")}
+          />
+        )}
+
 
         {view === "settings" && settings && (
           <SettingsView
@@ -978,10 +1081,23 @@ function App() {
                 await loadSettingsData();
               })
             }
+            appVersion={appVersion}
+            onCheckForUpdate={() => probeForAppUpdate(false)}
           />
         )}
       </main>
       </div>
+      {updatePrompt && (
+        <UpdateDialog
+          currentVersion={appVersion}
+          update={updatePrompt}
+          busy={updateBusy}
+          progress={updateProgress}
+          error={updateError}
+          onInstall={installPendingUpdate}
+          onDismiss={dismissUpdatePrompt}
+        />
+      )}
     </div>
   );
 }
@@ -1936,6 +2052,119 @@ function groupSubtreeDepth(groups: Group[], groupId: number): number {
   const children = groups.filter((group) => group.parent_id === groupId);
   if (children.length === 0) return 0;
   return 1 + Math.max(...children.map((group) => groupSubtreeDepth(groups, group.id)));
+}
+
+function TempEmailView({ tempEmails, cloudflareChannels, busy, onGenerate, onDelete, onSaveCloudflareChannel, onDeleteCloudflareChannel }: {
+  tempEmails: TempEmail[];
+  cloudflareChannels: CloudflareChannel[];
+  busy: boolean;
+  onGenerate: (input: GenerateTempEmailInput) => void;
+  onDelete: (id: number) => void;
+  onSaveCloudflareChannel: (input: SaveCloudflareChannelInput) => void;
+  onDeleteCloudflareChannel: (id: number) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [channelSettingsOpen, setChannelSettingsOpen] = useState(false);
+  const [selected, setSelected] = useState<TempEmail>();
+  const [messages, setMessages] = useState<TempEmailMessage[]>([]);
+  const [message, setMessage] = useState<TempEmailMessage>();
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const visible = useMemo(() => {
+    const tokens = searchTokens(search);
+    return tempEmails.filter((item) => matchesSearchTokens([item.email, item.provider, item.provider_base_url], tokens));
+  }, [search, tempEmails]);
+
+  async function openMailbox(item: TempEmail) {
+    setSelected(item);
+    setMessage(undefined);
+    setLoadingMessages(true);
+    setLocalError("");
+    try { setMessages(await api.listTempEmailMessages(item.id)); }
+    catch (err) { setLocalError(readError(err)); setMessages([]); }
+    finally { setLoadingMessages(false); }
+  }
+
+  async function openMessage(item: TempEmailMessage) {
+    if (!selected) return;
+    setLocalError("");
+    try { setMessage(await api.getTempEmailMessage(selected.id, item.id)); }
+    catch (err) { setLocalError(readError(err)); }
+  }
+
+  return (
+    <section className="managementGrid tempEmailManagementGrid">
+      {createOpen && <TempEmailCreateDialog cloudflareChannels={cloudflareChannels} busy={busy} onClose={() => setCreateOpen(false)} onGenerate={(input) => { onGenerate(input); setCreateOpen(false); }} />}
+      {channelSettingsOpen && <CloudflareChannelDialog channels={cloudflareChannels} busy={busy} onClose={() => setChannelSettingsOpen(false)} onSave={onSaveCloudflareChannel} onDelete={onDeleteCloudflareChannel} />}
+      <aside className="panel tempProviderPanel">
+        <div className="panelHeader"><h2>服务商</h2></div>
+        <div className="tempProviderList">
+          <div className="tempProviderItem"><strong>GPTMail</strong><small>API Key 模式</small></div>
+          <div className="tempProviderItem"><strong>DuckMail</strong><small>账号令牌模式</small></div>
+          <div className="tempProviderItem"><strong>Cloudflare</strong><small>{cloudflareChannels.length} 个 Worker 渠道</small><button className="button compact secondary" onClick={() => setChannelSettingsOpen(true)}><SettingsIcon size={14} />渠道配置</button></div>
+        </div>
+      </aside>
+      <section className="panel accountInventoryPanel tempEmailInventoryPanel">
+        <div className="panelHeader">
+          <div><h2>临时邮箱</h2><small>{tempEmails.length} 个地址</small></div>
+          <button className="button compact primary" disabled={busy} onClick={() => setCreateOpen(true)}><Plus size={14} />生成邮箱</button>
+        </div>
+        <label className="searchBox accountInventorySearch"><Search size={15} /><input value={search} placeholder="搜索邮箱或服务商" onChange={(event) => setSearch(event.target.value)} /></label>
+        <div className="table tempEmailTable">
+          <div className="tableHeader"><span>邮箱</span><span>服务商</span><span>邮件</span><span>最近检查</span><span>操作</span></div>
+          {visible.map((item) => <div className={selected?.id === item.id ? "tableRow active" : "tableRow"} key={item.id} onClick={() => void openMailbox(item)}>
+            <span className="accountText"><strong>{item.email}</strong><small>{item.provider_base_url}</small></span>
+            <span className="providerBadge">{item.provider === "duckmail" ? "DuckMail" : item.provider === "cloudflare" ? `Cloudflare${item.cloudflare_channel_name ? ` · ${item.cloudflare_channel_name}` : ""}` : "GPTMail"}</span>
+            <span>{item.message_count}</span><span>{item.last_checked_at ? formatDate(item.last_checked_at) : "未检查"}</span>
+            <span className="rowActions accountRowActions">
+              <button className="iconMini" title="刷新收件箱" disabled={loadingMessages} onClick={(event) => { event.stopPropagation(); void openMailbox(item); }}><RefreshCw size={15} /></button>
+              <button className="iconMini danger" title="删除临时邮箱" disabled={busy} onClick={(event) => { event.stopPropagation(); onDelete(item.id); }}><Trash2 size={15} /></button>
+            </span>
+          </div>)}
+          {visible.length === 0 && <div className="tableEmptyRow">暂无临时邮箱</div>}
+        </div>
+        {selected && <div className="tempInbox">
+          <div className="tempInboxHeader"><div><strong>{selected.email}</strong><small>{messages.length} 封邮件</small></div>{loadingMessages && <Loader2 className="spin" size={17} />}</div>
+          {localError && <div className="formError">{localError}</div>}
+          <div className="tempMessageList">{messages.map((item) => <button key={item.id} className={message?.id === item.id ? "tempMessageRow active" : "tempMessageRow"} onClick={() => void openMessage(item)}><strong>{item.subject || "无主题"}</strong><span>{item.sender}</span><small>{item.body_preview}</small></button>)}{!loadingMessages && messages.length === 0 && <div className="tempInboxEmpty">收件箱暂无邮件</div>}</div>
+          {message && <article className="tempMessageDetail"><header><div><h3>{message.subject || "无主题"}</h3><small>{message.sender} · {message.received_at || "时间未知"}</small></div><button className="iconMini" title="关闭邮件" onClick={() => setMessage(undefined)}><X size={16} /></button></header>{message.body_type === "html" ? <iframe title={message.subject || "临时邮箱邮件"} sandbox="" srcDoc={buildSandboxedEmailHtml(message.body || "")} /> : <pre>{message.body}</pre>}</article>}
+        </div>}
+      </section>
+    </section>
+  );
+}
+
+function TempEmailCreateDialog({ cloudflareChannels, busy, onClose, onGenerate }: { cloudflareChannels: CloudflareChannel[]; busy: boolean; onClose: () => void; onGenerate: (input: GenerateTempEmailInput) => void }) {
+  const [provider, setProvider] = useState<"gptmail" | "duckmail" | "cloudflare">("gptmail");
+  const [baseUrl, setBaseUrl] = useState(""); const [apiKey, setApiKey] = useState("");
+  const [username, setUsername] = useState(""); const [domain, setDomain] = useState(""); const [password, setPassword] = useState("");
+  const [domains, setDomains] = useState<string[]>([]); const [domainBusy, setDomainBusy] = useState(false); const [domainError, setDomainError] = useState("");
+  const [channelId, setChannelId] = useState<number | "">(cloudflareChannels.find((item) => item.enabled)?.id ?? "");
+  const canSubmit = provider === "gptmail" || (provider === "duckmail" ? username.trim().length >= 3 && domain.trim().length > 0 && password.length >= 6 : channelId !== "" && domain.trim().length > 0 && (username.trim().length === 0 || username.trim().length >= 3));
+  return <div className="oauthDialogBackdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}><div className="oauthDialog tempEmailCreateDialog" role="dialog" aria-modal="true" aria-labelledby="tempEmailCreateTitle">
+    <div className="oauthDialogHeader"><div><span className="oauthDialogIcon"><Clock3 size={18} /></span><h2 id="tempEmailCreateTitle">生成临时邮箱</h2></div><button className="iconMini" title="关闭" disabled={busy} onClick={onClose}><X size={18} /></button></div>
+    <div className="oauthDialogBody"><div className="segmentedControl"><button className={provider === "gptmail" ? "active" : ""} onClick={() => setProvider("gptmail")}>GPTMail</button><button className={provider === "duckmail" ? "active" : ""} onClick={() => setProvider("duckmail")}>DuckMail</button><button className={provider === "cloudflare" ? "active" : ""} onClick={() => { setProvider("cloudflare"); setDomains([]); setDomain(""); }}>Cloudflare</button></div>
+      {provider === "cloudflare" ? <label className="field">Cloudflare 渠道<select className="select" value={channelId} onChange={(event) => { setChannelId(event.target.value ? Number(event.target.value) : ""); setDomains([]); setDomain(""); }}><option value="">选择渠道</option>{cloudflareChannels.filter((item) => item.enabled).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : <><label className="field">服务地址<input className="input" value={baseUrl} placeholder={provider === "gptmail" ? "https://mail.chatgpt.org.uk" : "https://api.duckmail.sbs"} onChange={(event) => setBaseUrl(event.target.value)} /></label><label className="field">API Key（可选）<input className="input" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></label></>}
+      <div className="tempCreateGrid"><label className="field">{provider === "gptmail" ? "邮箱前缀（可选）" : provider === "cloudflare" ? "用户名（可选）" : "用户名"}<input className="input" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label className="field">{provider === "gptmail" ? "指定域名（可选）" : "域名"}{provider !== "gptmail" && domains.length > 0 ? <select className="select" value={domain} onChange={(event) => setDomain(event.target.value)}><option value="">选择域名</option>{domains.map((item) => <option key={item} value={item}>{item}</option>)}</select> : <input className="input" value={domain} readOnly={provider === "cloudflare"} onChange={(event) => setDomain(event.target.value)} />}</label></div>
+      {(provider === "duckmail" || provider === "cloudflare") && <div className="domainDiscovery"><button className="button compact secondary" disabled={domainBusy || (provider === "cloudflare" && channelId === "")} onClick={async () => { setDomainBusy(true); setDomainError(""); try { const items = await api.listTempEmailDomains(provider === "cloudflare" ? { provider, cloudflare_channel_id: Number(channelId) } : { provider, base_url: baseUrl.trim() || undefined, api_key: apiKey.trim() || undefined }); setDomains(items); if (items.length > 0) setDomain(items[0]); else setDomainError("服务商没有返回可用域名"); } catch (err) { setDomainError(readError(err)); } finally { setDomainBusy(false); } }}>{domainBusy ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}获取可用域名</button>{domainError && <span className="formError">{domainError}</span>}</div>}
+      {provider === "duckmail" && <label className="field">邮箱密码<input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>}
+    </div><div className="oauthDialogFooter"><button className="button secondary" disabled={busy} onClick={onClose}>取消</button><button className="button primary" disabled={busy || !canSubmit} onClick={() => onGenerate({ provider, base_url: baseUrl.trim() || undefined, api_key: apiKey.trim() || undefined, prefix: provider === "gptmail" ? username.trim() || undefined : undefined, username: provider !== "gptmail" ? username.trim() || undefined : undefined, domain: domain.trim() || undefined, password: provider === "duckmail" ? password : undefined, cloudflare_channel_id: provider === "cloudflare" ? Number(channelId) : undefined })}><Plus size={15} />创建邮箱</button></div>
+  </div></div>;
+}
+
+function CloudflareChannelDialog({ channels, busy, onClose, onSave, onDelete }: { channels: CloudflareChannel[]; busy: boolean; onClose: () => void; onSave: (input: SaveCloudflareChannelInput) => void; onDelete: (id: number) => void }) {
+  const [editingId, setEditingId] = useState<number | undefined>();
+  const editing = channels.find((item) => item.id === editingId);
+  const [name, setName] = useState(""); const [workerUrl, setWorkerUrl] = useState(""); const [adminPassword, setAdminPassword] = useState(""); const [domains, setDomains] = useState(""); const [enabled, setEnabled] = useState(true);
+  useEffect(() => { setName(editing?.name ?? ""); setWorkerUrl(editing?.worker_url ?? ""); setAdminPassword(""); setDomains(editing?.email_domains.join("\n") ?? ""); setEnabled(editing?.enabled ?? true); }, [editingId, editing]);
+  const domainList = domains.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
+  return <div className="oauthDialogBackdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}><div className="oauthDialog cloudflareChannelDialog" role="dialog" aria-modal="true" aria-labelledby="cloudflareChannelTitle">
+    <div className="oauthDialogHeader"><div><span className="oauthDialogIcon"><SettingsIcon size={18} /></span><h2 id="cloudflareChannelTitle">Cloudflare 渠道</h2></div><button className="iconMini" title="关闭" disabled={busy} onClick={onClose}><X size={18} /></button></div>
+    <div className="oauthDialogBody cloudflareChannelBody"><div className="cloudflareChannelList"><button className={!editingId ? "cloudflareChannelItem active" : "cloudflareChannelItem"} onClick={() => setEditingId(undefined)}><Plus size={14} /><span>新增渠道</span></button>{channels.map((item) => <button key={item.id} className={editingId === item.id ? "cloudflareChannelItem active" : "cloudflareChannelItem"} onClick={() => setEditingId(item.id)}><span><strong>{item.name}</strong><small>{item.enabled ? "已启用" : "已停用"} · {item.email_domains.length} 个域名</small></span></button>)}</div>
+      <div className="cloudflareChannelForm"><label className="field">渠道名称<input className="input" value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field">Worker 地址<input className="input" value={workerUrl} placeholder="https://temp-mail.example.workers.dev" onChange={(event) => setWorkerUrl(event.target.value)} /></label><label className="field">管理员密码{editing?.has_admin_password && <small>留空保留现有密码</small>}<input className="input" type="password" value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} /></label><label className="field">邮箱域名<textarea className="textarea channelDomainsInput" value={domains} placeholder="mail.example.com" onChange={(event) => setDomains(event.target.value)} /></label><label className="toggleLine"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span>启用渠道</span></label></div>
+    </div><div className="oauthDialogFooter">{editing && <button className="button danger" disabled={busy} onClick={() => { onDelete(editing.id); setEditingId(undefined); }}>删除渠道</button>}<span className="dialogFooterSpacer" /><button className="button secondary" disabled={busy} onClick={onClose}>关闭</button><button className="button primary" disabled={busy || !name.trim() || !workerUrl.trim() || domainList.length === 0 || (!editing && !adminPassword)} onClick={() => onSave({ id: editingId, name: name.trim(), worker_url: workerUrl.trim(), admin_password: adminPassword || undefined, email_domains: domainList, enabled })}><CheckCircle2 size={15} />保存渠道</button></div>
+  </div></div>;
 }
 
 function AccountsView({
@@ -3409,7 +3638,9 @@ function SettingsView({
   onRefreshWorkspaceKeyRecords,
   onDeleteWorkspaceKeyRecord,
   onShowToast,
-  onClearLocalData
+  onClearLocalData,
+  appVersion,
+  onCheckForUpdate
 }: {
   status: AppStatus;
   settings: Settings;
@@ -3425,6 +3656,8 @@ function SettingsView({
   onDeleteWorkspaceKeyRecord: (recordId: number) => Promise<void> | void;
   onShowToast: (message: string) => void;
   onClearLocalData: (input: ClearLocalDataInput) => void;
+  appVersion: string;
+  onCheckForUpdate: () => void | Promise<void>;
 }) {
   const [draft, setDraft] = useState(settings);
   const [clearLocal, setClearLocal] = useState({
@@ -3541,6 +3774,19 @@ function SettingsView({
         <button className="button primary" disabled={busy || !settingsChanged} onClick={() => onSave(draft)}>
           {busy ? <Loader2 className="spin" size={16} /> : <SettingsIcon size={16} />}
           保存设置
+        </button>
+      </div>
+
+      <div className="panel">
+        <div className="panelHeader">
+          <h2>应用更新</h2>
+          <Download size={18} />
+        </div>
+        <p className="updateSettingsMeta">当前版本 v{appVersion}</p>
+        <p className="updateSettingsHint">启动后会自动检查 GitHub Release；也可在此手动检查更新。</p>
+        <button className="button primary" disabled={busy} onClick={() => onCheckForUpdate()}>
+          <RefreshCw size={16} />
+          检查更新
         </button>
       </div>
 

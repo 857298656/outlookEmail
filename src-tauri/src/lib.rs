@@ -6,6 +6,7 @@ mod import;
 mod models;
 mod providers;
 mod scheduler;
+mod temp_mail;
 
 use commands::*;
 use db::Database;
@@ -19,10 +20,14 @@ pub fn run() {
     let database = Database::open().expect("failed to initialize local database");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
         .manage(AppState {
             db: Mutex::new(database),
         })
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             scheduler::start(app.handle().clone());
             Ok(())
         })
@@ -70,6 +75,15 @@ pub fn run() {
             generate_workspace_key,
             update_workspace_key_record,
             delete_workspace_key_record,
+            list_temp_emails,
+            generate_temp_email,
+            list_temp_email_domains,
+            list_cloudflare_channels,
+            save_cloudflare_channel,
+            delete_cloudflare_channel,
+            list_temp_email_messages,
+            get_temp_email_message,
+            delete_temp_email,
             run_refresh_job
         ])
         .run(tauri::generate_context!())

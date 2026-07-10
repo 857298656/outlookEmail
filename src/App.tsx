@@ -2451,13 +2451,14 @@ function GroupSettingsDialog({
 }
 
 type OAuthAccountSaveDraft = {
-  provider: string;
   email: string;
   password: string;
   client_id: string;
   group_id: number | null;
   callback_url: string;
 };
+
+const OAUTH_ACCOUNT_PROVIDER = "graph";
 
 type ImportProviderChoice = "gmail" | "qq" | "netease_163";
 
@@ -2721,7 +2722,6 @@ function OAuthAccountSaveDialog({
       ? selectedGroupId
       : groups[0]?.id ?? null;
   const [draft, setDraft] = useState<OAuthAccountSaveDraft>({
-    provider: "graph",
     email: "",
     password: "",
     client_id: "",
@@ -2731,7 +2731,6 @@ function OAuthAccountSaveDialog({
   const [authUrl, setAuthUrl] = useState("");
   const [oauthCodeVerifier, setOauthCodeVerifier] = useState("");
   const [preview, setPreview] = useState<{
-    provider: string;
     email: string;
     password: string;
     client_id: string;
@@ -2746,8 +2745,8 @@ function OAuthAccountSaveDialog({
   const [localError, setLocalError] = useState<string | null>(null);
   const [localNotice, setLocalNotice] = useState<string | null>(null);
   const redirectUri = settings?.oauth_redirect_uri || defaultOAuthRedirectUri;
-  const selectedProvider = accountProviderDefinition(draft.provider);
-  const defaultClientId = draft.provider === "graph" ? settings?.graph_client_id || defaultGraphClientId : "";
+  const oauthProvider = accountProviderDefinition(OAUTH_ACCOUNT_PROVIDER);
+  const defaultClientId = settings?.graph_client_id || defaultGraphClientId;
   const activeClientId = draft.client_id.trim() || defaultClientId;
   const loading = busy || localBusy !== null;
 
@@ -2777,7 +2776,7 @@ function OAuthAccountSaveDialog({
       client_id: clientId,
       redirect_uri: redirectUri,
       login_hint: draft.email.trim() || undefined,
-      provider: draft.provider,
+      provider: OAUTH_ACCOUNT_PROVIDER,
       code_verifier: codeVerifier || undefined
     })
       .then((url) => {
@@ -2793,10 +2792,10 @@ function OAuthAccountSaveDialog({
     return () => {
       cancelled = true;
     };
-  }, [activeClientId, draft.email, draft.provider, redirectUri, onGenerateOAuthUrl]);
+  }, [activeClientId, draft.email, redirectUri, onGenerateOAuthUrl]);
 
   function updateDraft(next: Partial<OAuthAccountSaveDraft>) {
-    const shouldResetPreview = "provider" in next || "client_id" in next || "callback_url" in next;
+    const shouldResetPreview = "client_id" in next || "callback_url" in next;
     setDraft((current) => ({ ...current, ...next }));
     if (shouldResetPreview) {
       setPreview(null);
@@ -2806,7 +2805,7 @@ function OAuthAccountSaveDialog({
   }
 
   function validateBase(requireCallback: boolean) {
-    if (!activeClientId.trim()) return `请填写 ${selectedProvider.label} Client ID`;
+    if (!activeClientId.trim()) return `请填写 ${oauthProvider.label} Client ID`;
     if (requireCallback && !draft.callback_url.trim()) return "请粘贴授权后的完整回调 URL";
     return null;
   }
@@ -2854,7 +2853,7 @@ function OAuthAccountSaveDialog({
         client_id: activeClientId,
         redirect_uri: redirectUri,
         code_or_url: draft.callback_url.trim(),
-        provider: draft.provider,
+        provider: OAUTH_ACCOUNT_PROVIDER,
         code_verifier: oauthCodeVerifier || undefined
       });
       if (!result.refresh_token) {
@@ -2863,7 +2862,6 @@ function OAuthAccountSaveDialog({
       const group = groups.find((item) => item.id === draft.group_id);
       const clientId = activeClientId;
       setPreview({
-        provider: draft.provider,
         email: draft.email.trim(),
         password: draft.password,
         client_id: clientId,
@@ -2904,7 +2902,7 @@ function OAuthAccountSaveDialog({
         redirect_uri: redirectUri,
         code_or_url: preview ? undefined : draft.callback_url.trim(),
         refresh_token: preview?.refresh_token,
-        provider: draft.provider,
+        provider: OAUTH_ACCOUNT_PROVIDER,
         code_verifier: oauthCodeVerifier || undefined
       });
       onClose();
@@ -2941,12 +2939,6 @@ function OAuthAccountSaveDialog({
             <p>预览只需要回调 URL；保存账号时需要邮箱，密码和目标分组可稍后补充。</p>
             <div className="oauthFieldGrid">
               <label className="field grow">
-                服务商
-                <select className="select" value={draft.provider} onChange={(event) => updateDraft({ provider: event.target.value })}>
-                  <option value="graph">Outlook</option>
-                </select>
-              </label>
-              <label className="field grow">
                 邮箱账号
                 <input
                   className="input"
@@ -2966,7 +2958,7 @@ function OAuthAccountSaveDialog({
                 />
               </label>
               <label className="field grow">
-                {selectedProvider.label} Client ID
+                {oauthProvider.label} Client ID
                 <input
                   className="input"
                   value={draft.client_id}
@@ -2994,7 +2986,7 @@ function OAuthAccountSaveDialog({
           <section className="oauthStep">
             <h3>步骤 1: 打开授权页面</h3>
             <div className="oauthUrlLine">
-              <input className="input grow monoInput" readOnly value={authUrl} placeholder={`正在准备 ${selectedProvider.label} 授权链接`} />
+              <input className="input grow monoInput" readOnly value={authUrl} placeholder={`正在准备 ${oauthProvider.label} 授权链接`} />
               <button className="button secondary" disabled={loading || !authUrl} onClick={handleCopyUrl}>
                 <Copy size={16} />
                 复制
@@ -3025,10 +3017,6 @@ function OAuthAccountSaveDialog({
                 保存预览
               </div>
               <div className="oauthFieldGrid">
-                <label className="field grow">
-                  服务商
-                  <input className="input" readOnly value={accountProviderLabel(preview.provider)} />
-                </label>
                 <label className="field grow">
                   邮箱
                   <input className="input" readOnly value={draft.email.trim() || "未填写"} />

@@ -1,0 +1,18 @@
+# Git commit message（Source Control「Generate commit message」）
+
+为本仓库自动生成的 Git commit message 必须使用**简体中文**。
+
+格式沿用 Conventional Commits：
+
+- 类型：`feat` / `fix` / `docs` / `style` / `refactor` / `test` / `ci` / `chore`
+- 结构：`<type>: <简短中文说明>`
+- 说明一句说清「为什么改」，避免罗列文件名
+- 正文（如有）也用简体中文，每条要点单独一行
+
+示例：
+
+- `ci: 修复 Release 工作流 pnpm 版本冲突`
+- `fix: 阻止邮件刷新时同步已删除文件夹`
+- `docs: 用中文重写 README 并更新功能说明`
+
+不要使用英文提交说明，除非改动内容本身就是英文专有名词（如 OAuth、IMAP、NSIS）。

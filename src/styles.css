@@ -93,6 +93,31 @@ button:disabled {
   font-weight: 700;
 }
 
+.globalLoadingContent {
+  display: grid;
+  min-width: min(360px, calc(100vw - 120px));
+  gap: 8px;
+}
+
+.globalLoadingProgress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.globalLoadingProgress progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--skin-accent, #2563eb);
+}
+
+.globalLoadingProgress span {
+  color: #64748b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .rail {
   display: flex;
   flex-direction: column;

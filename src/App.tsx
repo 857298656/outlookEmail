@@ -248,6 +248,7 @@ function App() {
   const [railMenuStyle, setRailMenuStyle] = useState<CSSProperties>({});
   const [busy, setBusy] = useState(false);
   const [busyMessage, setBusyMessage] = useState("");
+  const [busyProgress, setBusyProgress] = useState<{ completed: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastMessage | null>(null);
@@ -568,6 +569,7 @@ function App() {
   async function runAction(action: () => Promise<void>, success?: string, loadingMessage = "处理中...") {
     setBusy(true);
     setBusyMessage(loadingMessage);
+    setBusyProgress(null);
     setError(null);
     setNotice(null);
     try {
@@ -578,6 +580,7 @@ function App() {
     } finally {
       setBusy(false);
       setBusyMessage("");
+      setBusyProgress(null);
     }
   }
 
@@ -700,7 +703,7 @@ function App() {
     <div className={`appContainer ${skin.className}`} style={skin.style}>
       <AppWindowChrome />
       <div className={railExpanded ? "appShell railExpanded" : "appShell"}>
-        {busy && <GlobalLoadingOverlay message={busyMessage || "处理中..."} />}
+        {busy && <GlobalLoadingOverlay message={busyMessage || "处理中..."} progress={busyProgress} />}
       <aside className={railExpanded ? "rail expanded" : "rail"} ref={railRef}>
         <div className="railHeader">
           <span className="brandName">OutlookEmail</span>
@@ -821,6 +824,7 @@ function App() {
             page={mailPage}
             totalCount={mailTotalCount}
             busy={busy}
+            refreshTop={settings?.scheduler_refresh_top ?? 25}
             onGroupChange={(groupId) => {
               setSelectedGroupId(groupId);
               const groupAccountIds =
@@ -864,6 +868,48 @@ function App() {
                 },
                 undefined,
                 "正在刷新当前账号邮件..."
+              )
+            }
+            onRefreshAllAccounts={() =>
+              runAction(
+                async () => {
+                  let succeeded = 0;
+                  const failedAccounts: Array<{ email: string; reason: string }> = [];
+                  setBusyProgress({ completed: 0, total: accounts.length });
+                  for (let index = 0; index < accounts.length; index += 1) {
+                    const account = accounts[index];
+                    setBusyMessage(`正在拉取账号 ${index + 1}/${accounts.length}：${account.email}`);
+                    try {
+                      const result = await api.refreshAccountFromSettings(account.id);
+                      if (result.success) succeeded += 1;
+                      else {
+                        failedAccounts.push({
+                          email: account.email,
+                          reason: formatResultMessage(result.message)
+                        });
+                      }
+                    } catch (err) {
+                      failedAccounts.push({
+                        email: account.email,
+                        reason: readError(err)
+                      });
+                    }
+                    setBusyProgress({ completed: index + 1, total: accounts.length });
+                  }
+                  setBusyMessage("账号拉取完成，正在更新本地邮件列表...");
+                  await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
+                  await loadStatus();
+                  setNotice(`全部账号拉取完成：成功 ${succeeded} 个，失败 ${failedAccounts.length} 个`);
+                  if (failedAccounts.length > 0) {
+                    setError(
+                      `拉取失败账号：${failedAccounts
+                        .map((account) => `${account.email}（${account.reason}）`)
+                        .join("；")}`
+                    );
+                  }
+                },
+                undefined,
+                "正在按设置拉取全部账号邮件..."
               )
             }
             onMessageSelect={setSelectedMessageId}
@@ -990,19 +1036,6 @@ function App() {
             groups={groups}
             accounts={accounts}
             busy={busy}
-            refreshTop={settings?.scheduler_refresh_top ?? 25}
-            onRefreshAllAccounts={() =>
-              runAction(
-                async () => {
-                  const result = await api.refreshAllAccountsFromSettings();
-                  setNotice(formatResultMessage(result.message));
-                  await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
-                  await loadStatus();
-                },
-                undefined,
-                "正在按设置拉取全部账号邮件..."
-              )
-            }
             onCreateGroup={(input) =>
               runAction(async () => {
                 await api.createGroup(input);
@@ -1381,12 +1414,30 @@ function LoginScreen({
   );
 }
 
-function GlobalLoadingOverlay({ message }: { message: string }) {
+function GlobalLoadingOverlay({
+  message,
+  progress
+}: {
+  message: string;
+  progress?: { completed: number; total: number } | null;
+}) {
+  const progressPercent = progress && progress.total > 0
+    ? Math.round((progress.completed / progress.total) * 100)
+    : 0;
+
   return (
     <div className="globalLoadingOverlay" role="status" aria-live="polite">
       <div className="globalLoadingPanel">
         <Loader2 className="spin" size={24} />
-        <strong>{message}</strong>
+        <div className="globalLoadingContent">
+          <strong>{message}</strong>
+          {progress && progress.total > 0 && (
+            <div className="globalLoadingProgress">
+              <progress value={progress.completed} max={progress.total} />
+              <span>已完成 {progress.completed}/{progress.total}（{progressPercent}%）</span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1407,10 +1458,12 @@ function MailWorkspace({
   page,
   totalCount,
   busy,
+  refreshTop,
   onGroupChange,
   onAccountSelect,
   onFolderChange,
   onRefreshCurrentAccount,
+  onRefreshAllAccounts,
   onMessageSelect,
   onMessageClose,
   onToggleMessageSelect,
@@ -1446,10 +1499,12 @@ function MailWorkspace({
   page: number;
   totalCount: number;
   busy: boolean;
+  refreshTop: number;
   onGroupChange: (groupId: number | "all") => void;
   onAccountSelect: (accountId: number) => void;
   onFolderChange: (folder: string) => void;
   onRefreshCurrentAccount: () => void;
+  onRefreshAllAccounts: () => void;
   onMessageSelect: (messageId: number) => void;
   onMessageClose: () => void;
   onToggleMessageSelect: (messageId: number) => void;
@@ -1755,6 +1810,16 @@ function MailWorkspace({
         <div className="paneHeader">
           <h2>账号</h2>
           <div className="paneHeaderActions">
+            <button
+              className="iconMini"
+              type="button"
+              title={`刷新全部账号邮件（设置中的默认刷新邮件数：${refreshTop}）`}
+              aria-label={`刷新全部账号邮件，默认刷新邮件数 ${refreshTop}`}
+              disabled={accounts.length === 0 || busy}
+              onClick={onRefreshAllAccounts}
+            >
+              {busy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+            </button>
             <button className="iconMini" title="导入账号" onClick={() => setImportDialogOpen(true)} disabled={busy}>
               <Upload size={16} />
             </button>
@@ -2323,8 +2388,6 @@ function AccountsView({
   groups,
   accounts,
   busy,
-  refreshTop,
-  onRefreshAllAccounts,
   onCreateGroup,
   onUpdateGroup,
   onDeleteGroup,
@@ -2337,8 +2400,6 @@ function AccountsView({
   groups: Group[];
   accounts: Account[];
   busy: boolean;
-  refreshTop: number;
-  onRefreshAllAccounts: () => void;
   onCreateGroup: (input: Parameters<typeof api.createGroup>[0]) => void;
   onUpdateGroup: (input: Parameters<typeof api.updateGroup>[0]) => void;
   onDeleteGroup: (groupId: number) => void;
@@ -2461,16 +2522,6 @@ function AccountsView({
         <div className="panelHeader">
           <h2>账号</h2>
           <div className="rowActions">
-            <button
-              className="iconMini"
-              type="button"
-              title={`刷新全部账号邮件（设置中的默认刷新邮件数：${refreshTop}）`}
-              aria-label={`刷新全部账号邮件，默认刷新邮件数 ${refreshTop}`}
-              disabled={accounts.length === 0 || busy}
-              onClick={onRefreshAllAccounts}
-            >
-              <RefreshCw size={15} />
-            </button>
             <button className="iconMini" title="导出账号" disabled={accounts.length === 0 || busy} onClick={() => onExportAccounts()}>
               <Download size={15} />
             </button>

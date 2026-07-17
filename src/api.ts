@@ -17,6 +17,10 @@ import type {
   MailMessageQuery,
   MailRawContent,
   MailShareRecord,
+  MarkdownCategory,
+  MarkdownDocument,
+  MarkdownFileContent,
+  MarkdownFileWriteResult,
   OAuthSaveAccountInput,
   OAuthSaveAccountResult,
   OAuthTokenResult,
@@ -66,6 +70,8 @@ let mockSchedulerStatus: SchedulerStatus = {
 let mockMailShareRecords: MailShareRecord[] = [];
 let mockTempEmails: TempEmail[] = [];
 let mockCloudflareChannels: CloudflareChannel[] = [];
+let mockMarkdownCategories: MarkdownCategory[] = [];
+let mockMarkdownDocuments: MarkdownDocument[] = [];
 
 function isTauriRuntime() {
   return "__TAURI_INTERNALS__" in window;
@@ -179,6 +185,126 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         .map((item) => (item.parent_id === groupId ? { ...item, parent_id: group?.parent_id ?? null, level: Math.max(1, item.level - 1) } : item));
       return undefined as T;
     }
+    case "list_markdown_categories":
+      return mockMarkdownCategories.map((category) => ({
+        ...category,
+        document_count: mockMarkdownDocuments.filter((document) => document.category_id === category.id).length
+      })) as T;
+    case "create_markdown_category": {
+      const input = args?.input as { name: string; parent_id?: number | null };
+      const now = new Date().toISOString();
+      const category: MarkdownCategory = {
+        id: Date.now(),
+        name: input.name.trim(),
+        parent_id: input.parent_id ?? null,
+        sort_order: mockMarkdownCategories.length,
+        document_count: 0,
+        created_at: now,
+        updated_at: now
+      };
+      mockMarkdownCategories = [...mockMarkdownCategories, category];
+      return category as T;
+    }
+    case "update_markdown_category": {
+      const input = args?.input as { id: number; name: string; parent_id?: number | null; sort_order?: number };
+      mockMarkdownCategories = mockMarkdownCategories.map((category) =>
+        category.id === input.id
+          ? {
+              ...category,
+              name: input.name.trim(),
+              parent_id: input.parent_id ?? null,
+              sort_order: input.sort_order ?? category.sort_order,
+              updated_at: new Date().toISOString()
+            }
+          : category
+      );
+      return mockMarkdownCategories.find((category) => category.id === input.id) as T;
+    }
+    case "delete_markdown_category": {
+      const categoryId = args?.categoryId as number;
+      const removedIds = new Set<number>([categoryId]);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        mockMarkdownCategories.forEach((category) => {
+          if (category.parent_id !== null && removedIds.has(category.parent_id) && !removedIds.has(category.id)) {
+            removedIds.add(category.id);
+            changed = true;
+          }
+        });
+      }
+      mockMarkdownCategories = mockMarkdownCategories.filter((category) => !removedIds.has(category.id));
+      mockMarkdownDocuments = mockMarkdownDocuments.map((document) =>
+        document.category_id !== null && removedIds.has(document.category_id)
+          ? { ...document, category_id: null, category_name: null }
+          : document
+      );
+      return undefined as T;
+    }
+    case "list_markdown_documents": {
+      const categoryId = args?.categoryId as number | undefined;
+      const search = String(args?.search ?? "").trim().toLocaleLowerCase();
+      return mockMarkdownDocuments
+        .filter((document) => categoryId === undefined || document.category_id === categoryId)
+        .filter((document) => !search || `${document.title}\n${document.content}`.toLocaleLowerCase().includes(search))
+        .sort((left, right) => right.updated_at.localeCompare(left.updated_at)) as T;
+    }
+    case "get_markdown_document":
+      return mockMarkdownDocuments.find((document) => document.id === args?.documentId) as T;
+    case "create_markdown_document": {
+      const input = args?.input as {
+        title?: string;
+        content?: string;
+        category_id?: number | null;
+        source_path?: string | null;
+      };
+      const now = new Date().toISOString();
+      const category = mockMarkdownCategories.find((item) => item.id === input.category_id);
+      const document: MarkdownDocument = {
+        id: Date.now(),
+        title: input.title?.trim() || "未命名文档",
+        content: input.content ?? "",
+        category_id: input.category_id ?? null,
+        category_name: category?.name ?? null,
+        source_path: input.source_path ?? null,
+        created_at: now,
+        updated_at: now
+      };
+      mockMarkdownDocuments = [document, ...mockMarkdownDocuments];
+      return document as T;
+    }
+    case "update_markdown_document": {
+      const input = args?.input as {
+        id: number;
+        title: string;
+        content: string;
+        category_id?: number | null;
+        source_path?: string | null;
+      };
+      const category = mockMarkdownCategories.find((item) => item.id === input.category_id);
+      mockMarkdownDocuments = mockMarkdownDocuments.map((document) =>
+        document.id === input.id
+          ? {
+              ...document,
+              ...input,
+              category_id: input.category_id ?? null,
+              category_name: category?.name ?? null,
+              source_path: input.source_path ?? null,
+              updated_at: new Date().toISOString()
+            }
+          : document
+      );
+      return mockMarkdownDocuments.find((document) => document.id === input.id) as T;
+    }
+    case "delete_markdown_document":
+      mockMarkdownDocuments = mockMarkdownDocuments.filter((document) => document.id !== args?.documentId);
+      return undefined as T;
+    case "read_markdown_file":
+    case "write_markdown_file":
+    case "write_markdown_export_file":
+      throw new Error("本地文件读写仅在 Tauri 桌面应用中可用");
+    case "export_markdown_folder":
+      throw new Error("文件夹导出仅在 Tauri 桌面应用中可用");
     case "update_account": {
       const input = args?.input as Partial<Account> & {
         id: number;
@@ -811,6 +937,40 @@ export const api = {
     sort_order?: number;
   }) => call<Group>("update_group", { input }),
   deleteGroup: (groupId: number) => call<void>("delete_group", { groupId }),
+  listMarkdownCategories: () => call<MarkdownCategory[]>("list_markdown_categories"),
+  createMarkdownCategory: (name: string, parentId?: number | null) =>
+    call<MarkdownCategory>("create_markdown_category", { input: { name, parent_id: parentId ?? null } }),
+  updateMarkdownCategory: (input: { id: number; name: string; parent_id?: number | null; sort_order?: number }) =>
+    call<MarkdownCategory>("update_markdown_category", { input }),
+  deleteMarkdownCategory: (categoryId: number) =>
+    call<void>("delete_markdown_category", { categoryId }),
+  listMarkdownDocuments: (categoryId?: number, search?: string) =>
+    call<MarkdownDocument[]>("list_markdown_documents", { categoryId, search }),
+  getMarkdownDocument: (documentId: number) =>
+    call<MarkdownDocument>("get_markdown_document", { documentId }),
+  createMarkdownDocument: (input: {
+    title?: string;
+    content?: string;
+    category_id?: number | null;
+    source_path?: string | null;
+  }) => call<MarkdownDocument>("create_markdown_document", { input }),
+  updateMarkdownDocument: (input: {
+    id: number;
+    title: string;
+    content: string;
+    category_id?: number | null;
+    source_path?: string | null;
+  }) => call<MarkdownDocument>("update_markdown_document", { input }),
+  deleteMarkdownDocument: (documentId: number) =>
+    call<void>("delete_markdown_document", { documentId }),
+  readMarkdownFile: (path: string) =>
+    call<MarkdownFileContent>("read_markdown_file", { path }),
+  writeMarkdownFile: (path: string, content: string) =>
+    call<MarkdownFileWriteResult>("write_markdown_file", { path, content }),
+  writeMarkdownExportFile: (path: string, bytes: number[]) =>
+    call<MarkdownFileWriteResult>("write_markdown_export_file", { path, bytes }),
+  exportMarkdownFolder: (categoryId: number, directory: string) =>
+    call<ExportResult>("export_markdown_folder", { categoryId, directory }),
   listAccounts: () => call<Account[]>("list_accounts"),
   updateAccount: (input: {
     id: number;

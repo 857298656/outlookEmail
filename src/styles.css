@@ -431,6 +431,1455 @@ button:disabled {
   background: var(--skin-subtle);
 }
 
+.markdownLibraryHeader {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  height: 52px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--skin-border);
+}
+
+.markdownLibraryHeader > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.markdownLibraryHeader h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.markdownFileActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--skin-border);
+}
+
+.markdownFileActions .button {
+  justify-content: center;
+  min-width: 0;
+}
+
+.markdownCategorySection {
+  flex: 0 0 auto;
+  max-height: 240px;
+  overflow: auto;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--skin-border);
+}
+
+.markdownSectionTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 7px;
+  color: var(--skin-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.markdownCategoryRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px 26px;
+  align-items: center;
+}
+
+.markdownCategory {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 32px;
+  min-width: 0;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #334155;
+  text-align: left;
+}
+
+.markdownCategory:hover,
+.markdownCategory.active {
+  background: var(--skin-hover);
+}
+
+.markdownCategory.active {
+  color: var(--skin-accent);
+  font-weight: 700;
+}
+
+.markdownCategory span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdownCategory small {
+  color: var(--skin-muted);
+  font-size: 11px;
+}
+
+.markdownCategoryAction {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--skin-muted);
+  opacity: 0;
+}
+
+.markdownCategoryRow:hover .markdownCategoryAction {
+  opacity: 1;
+}
+
+.markdownCategoryAction:hover {
+  background: var(--skin-hover);
+  color: var(--skin-ink);
+}
+
+.markdownCategoryAction.danger:hover {
+  color: #b42318;
+}
+
+.markdownNewCategory {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 4px;
+  margin-top: 7px;
+}
+
+.markdownNewCategory input {
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--skin-border);
+  border-radius: 5px;
+  outline: none;
+  font-size: 12px;
+}
+
+.markdownNewCategory input:focus {
+  border-color: var(--skin-accent);
+}
+
+.markdownNewCategory button {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--skin-border);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--skin-ink);
+}
+
+.markdownSearch {
+  flex: 0 0 auto;
+  margin: 10px 12px;
+}
+
+.markdownDocumentList {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid var(--skin-border);
+}
+
+.markdownDocumentItem {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  padding: 11px 13px;
+  border: 0;
+  border-bottom: 1px solid var(--skin-border);
+  background: transparent;
+  color: var(--skin-ink);
+  text-align: left;
+}
+
+.markdownDocumentItem:hover {
+  background: var(--skin-hover);
+}
+
+.markdownDocumentItem.active {
+  background: var(--skin-accent-soft);
+  box-shadow: inset 3px 0 0 var(--skin-accent);
+}
+
+.markdownDocumentTitle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.markdownDocumentTitle strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdownDocumentItem > small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--skin-muted);
+  font-size: 11px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.markdownDocumentMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #8a8681;
+  font-size: 10px;
+}
+
+.markdownDocumentMeta span,
+.markdownDocumentMeta time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdownEmptyList {
+  padding: 30px 12px;
+  color: var(--skin-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.markdownEditorHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 58px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--skin-border);
+}
+
+.markdownTitleFields {
+  display: flex;
+  flex: 1 1 320px;
+  align-items: center;
+  gap: 8px;
+  min-width: 240px;
+}
+
+.markdownTitleInput {
+  flex: 1 1 auto;
+  min-width: 140px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  outline: none;
+  color: var(--skin-ink);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.markdownTitleInput:hover,
+.markdownTitleInput:focus {
+  border-color: var(--skin-border);
+  background: var(--skin-subtle);
+}
+
+.markdownCategorySelect {
+  width: 128px;
+  height: 34px;
+  font-size: 12px;
+}
+
+.markdownHeaderActions {
+  display: flex;
+  flex-wrap: wrap;
+  flex: 0 1 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.markdownModeSwitch {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--skin-border);
+  border-radius: 5px;
+}
+
+.markdownModeSwitch button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid var(--skin-border);
+  background: #fff;
+  color: var(--skin-muted);
+}
+
+.markdownModeSwitch button:last-child {
+  border-right: 0;
+}
+
+.markdownModeSwitch button.active {
+  background: var(--skin-accent-soft);
+  color: var(--skin-accent);
+}
+
+.markdownToolbar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 42px;
+  overflow-x: auto;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--skin-border);
+  background: var(--skin-subtle);
+}
+
+.markdownToolbar button {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #475569;
+}
+
+.markdownToolbar button:hover {
+  border-color: var(--skin-border);
+  background: #fff;
+  color: var(--skin-accent);
+}
+
+.markdownToolbarDivider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--skin-border);
+}
+
+.markdownEditorBody {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.markdownEditorBody.mode-split {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.markdownEditorBody.mode-edit,
+.markdownEditorBody.mode-preview {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.markdownSourceEditor {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  resize: none;
+  padding: 22px 24px 80px;
+  overflow: auto;
+  border: 0;
+  outline: none;
+  background: #fff;
+  color: #1e293b;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.7;
+  tab-size: 2;
+}
+
+.mode-split .markdownSourceEditor {
+  border-right: 1px solid var(--skin-border);
+}
+
+.markdownPreview {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 22px 30px 80px;
+  overflow: auto;
+  color: #1f2937;
+  font-size: 15px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.markdownPreview > :first-child {
+  margin-top: 0;
+}
+
+.markdownPreview h1,
+.markdownPreview h2,
+.markdownPreview h3,
+.markdownPreview h4 {
+  margin: 1.4em 0 0.55em;
+  color: #111827;
+  line-height: 1.3;
+}
+
+.markdownPreview h1,
+.markdownPreview h2 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--skin-border);
+}
+
+.markdownPreview p,
+.markdownPreview ul,
+.markdownPreview ol,
+.markdownPreview blockquote {
+  margin: 0 0 1em;
+}
+
+.markdownPreview a {
+  color: #2563eb;
+}
+
+.markdownPreview blockquote {
+  padding: 2px 0 2px 14px;
+  border-left: 4px solid var(--skin-accent-border);
+  color: #64748b;
+}
+
+.markdownPreview code {
+  padding: 0.14em 0.35em;
+  border-radius: 4px;
+  background: #f1f5f9;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.markdownPreview pre {
+  padding: 14px 16px;
+  overflow: auto;
+  border: 1px solid #dbe3ed;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.markdownPreview pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.markdownPreview table {
+  width: 100%;
+  margin: 1em 0;
+  border-collapse: collapse;
+}
+
+.markdownPreview th,
+.markdownPreview td {
+  padding: 7px 10px;
+  border: 1px solid var(--skin-border);
+  text-align: left;
+}
+
+.markdownPreview th {
+  background: var(--skin-subtle);
+}
+
+.markdownPreview img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+
+.markdownPreview li.task-list-item {
+  list-style: none;
+}
+
+.markdownStatusBar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 12px;
+  overflow: hidden;
+  border-top: 1px solid var(--skin-border);
+  background: var(--skin-subtle);
+  color: var(--skin-muted);
+  font-size: 11px;
+}
+
+.markdownError {
+  color: #b42318;
+}
+
+.markdownSourcePath {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdownNotice,
+.markdownError {
+  flex: 0 1 auto;
+  max-width: 36%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdownNotice {
+  color: #15803d;
+}
+
+.markdownWelcome h2,
+.markdownWelcome p {
+  margin: 0;
+}
+
+.markdownWelcome > div {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Markdown notebook: file tree + WYSIWYG paper editor. */
+.mainSurface.markdownSurface {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.markdownSurface > .toast {
+  z-index: 80;
+}
+
+.markdownWorkspace {
+  position: relative;
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr);
+  gap: 0;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #e8e8e8;
+  transition: grid-template-columns 160ms ease;
+}
+
+.markdownWorkspace.library-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
+.markdownLibrary {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  border-right: 1px solid #dedede;
+  border-radius: 0;
+  background: #f7f7f7;
+}
+
+.library-collapsed .markdownLibrary {
+  visibility: hidden;
+  opacity: 0;
+}
+
+.markdownLibraryToolbar {
+  display: flex;
+  flex: 0 0 48px;
+  align-items: center;
+  justify-content: space-around;
+  padding: 0 7px;
+  border-bottom: 1px solid #e2e2e2;
+  background: #fff;
+}
+
+.markdownLibraryToolbar button,
+.markdownHeaderIcon,
+.markdownInfoHeader button,
+.markdownTreeSearch button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #747474;
+}
+
+.markdownLibraryToolbar button:hover,
+.markdownHeaderIcon:hover,
+.markdownHeaderIcon.active,
+.markdownInfoHeader button:hover {
+  background: #ededed;
+  color: #303030;
+}
+
+.markdownTreeSearch {
+  display: flex;
+  flex: 0 0 32px;
+  align-items: center;
+  gap: 6px;
+  margin: 7px 9px;
+  padding: 0 8px;
+  border: 1px solid #dedede;
+  border-radius: 5px;
+  background: #fff;
+  color: #8b8b8b;
+}
+
+.markdownTreeSearch:focus-within {
+  border-color: #a7a7a7;
+}
+
+.markdownTreeSearch input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-size: 12px;
+}
+
+.markdownTreeSearch button {
+  width: 20px;
+  height: 20px;
+}
+
+.markdownTree {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 1px 0 14px;
+  overflow: auto;
+}
+
+.markdownTreeFolder,
+.markdownTreeNote,
+.markdownFolderDraft {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  height: 31px;
+  padding: 0 8px 0 calc(9px + var(--tree-depth, 0) * 17px);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #3f3f3f;
+  text-align: left;
+}
+
+.markdownTreeFolder {
+  gap: 4px;
+}
+
+.markdownFolderDraft {
+  gap: 4px;
+  padding-left: calc(9px + var(--tree-depth, 0) * 17px);
+  background: #e9e9e9;
+}
+
+.markdownFolderDraft svg {
+  flex: 0 0 auto;
+  color: #666;
+}
+
+.markdownFolderDraft input {
+  min-width: 0;
+  height: 24px;
+  flex: 1 1 auto;
+  margin-right: 7px;
+  padding: 0 5px;
+  border: 1px solid #4b8df8;
+  border-radius: 2px;
+  outline: 0;
+  background: #fff;
+  color: #222;
+  font: inherit;
+}
+
+.markdownTreeNote {
+  gap: 7px;
+  padding-left: calc(29px + var(--tree-depth, 0) * 17px);
+}
+
+.markdownTreeFolder:hover,
+.markdownTreeNote:hover,
+.markdownTreeFolder.active {
+  background: #ececec;
+}
+
+.markdownTreeNote.active {
+  background: #dedede;
+  color: #202020;
+}
+
+.markdownTreeFolder span,
+.markdownTreeNote span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdownTreeFolder svg,
+.markdownTreeNote svg {
+  flex: 0 0 auto;
+  color: #666;
+}
+
+.markdownTreeEmpty {
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  padding: 42px 18px;
+  color: #909090;
+  font-size: 12px;
+  text-align: center;
+}
+
+.markdownTreeEmpty button {
+  padding: 6px 11px;
+  border: 1px solid #d4d4d4;
+  border-radius: 5px;
+  background: #fff;
+  color: #555;
+}
+
+.markdownEditorPanel {
+  position: relative;
+  display: grid;
+  grid-template-rows: 48px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: #e8e8e8;
+}
+
+.markdownDocumentHeader {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0 10px 0 7px;
+  border-bottom: 1px solid #dedede;
+  background: #fff;
+}
+
+.markdownDocumentTitleInput {
+  flex: 1 1 auto;
+  min-width: 80px;
+  height: 36px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 4px;
+  outline: 0;
+  background: transparent;
+  color: #222;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.markdownDocumentTitleInput:focus,
+.markdownDocumentTitleInput:hover {
+  background: #f5f5f5;
+}
+
+.markdownDocumentActions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+
+.markdownSaveState {
+  flex: 0 0 auto;
+  max-width: 140px;
+  margin-right: 3px;
+  overflow: hidden;
+  color: #858585;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdownSaveState.state-dirty {
+  color: #9a641b;
+}
+
+.markdownSaveState.state-saving {
+  color: #3674a8;
+}
+
+.markdownSaveState.state-saved {
+  color: #598257;
+}
+
+.markdownSaveState.state-error {
+  color: #b42318;
+}
+
+.markdownActionsAnchor {
+  position: relative;
+}
+
+.markdownEditorCanvas {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: #e5e5e5;
+}
+
+.markdownCrepeRoot {
+  min-height: 100%;
+}
+
+.markdownCrepeRoot > .milkdown {
+  min-height: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.025);
+}
+
+.markdownCrepeRoot .milkdown .ProseMirror {
+  min-height: calc(100vh - 165px);
+  padding: 54px 54px 120px;
+  color: #202020;
+  font-family: Inter, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.markdownCrepeRoot .milkdown .ProseMirror h1 {
+  font-size: 34px;
+}
+
+.markdownCrepeRoot .milkdown .ProseMirror h2 {
+  font-size: 26px;
+}
+
+.markdownCrepeRoot .milkdown .ProseMirror h1,
+.markdownCrepeRoot .milkdown .ProseMirror h2 {
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e1e4e8;
+}
+
+.markdownCrepeRoot .milkdown .ProseMirror .markdownInlineLinkSyntax,
+.markdownCrepeRoot .milkdown .ProseMirror .markdownInlineLinkEditor {
+  color: #a4afbf;
+}
+
+.markdownCrepeRoot .milkdown .ProseMirror .markdownInlineLinkInput {
+  min-width: 8ch;
+  max-width: min(48ch, 55vw);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  caret-color: #075dcc;
+  color: #a4afbf;
+  cursor: text;
+  font: inherit;
+  line-height: inherit;
+  vertical-align: baseline;
+}
+
+.markdownCrepeRoot .milkdown .ProseMirror .markdownInlineLinkInput:focus {
+  caret-color: #075dcc;
+}
+
+.markdownCrepeRoot .milkdown .ProseMirror .markdownInlineLinkInput::selection {
+  background: #cfe3ff;
+  color: #075dcc;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block {
+  margin: 14px 0 18px;
+  padding: 45px 52px 16px 18px;
+  overflow: visible;
+  border-radius: 6px;
+  background: #f4f6f8;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block.selected {
+  outline: 1px solid #d9e0e7;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .tools {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 8px;
+  left: 12px;
+  display: flex;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .tools .language-button {
+  display: none;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block:focus-within .tools .language-button,
+.markdownCrepeRoot .milkdown .milkdown-code-block:has(.cm-focused) .tools .language-button {
+  display: flex;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .tools .tools-button-group {
+  margin-left: auto;
+  pointer-events: auto;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .tools .copy-button {
+  display: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 5px;
+  opacity: 1;
+  background: transparent;
+  font-size: 0;
+  line-height: 0;
+  gap: 0;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block:focus-within .tools .copy-button,
+.markdownCrepeRoot .milkdown .milkdown-code-block:has(.cm-focused) .tools .copy-button {
+  display: flex;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .tools .copy-button:hover {
+  background: #e5e8eb;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .tools .copy-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-gutters {
+  display: none;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-editor,
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-scroller,
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-content,
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-activeLine {
+  background: transparent;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-scroller,
+.markdownCrepeRoot .milkdown .milkdown-code-block .milkdown-code-block-placeholder {
+  color: #171717;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-content,
+.markdownCrepeRoot .milkdown .milkdown-code-block .milkdown-code-block-placeholder {
+  min-height: 22px;
+  margin: 0;
+  padding: 0;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-content {
+  caret-color: #171717 !important;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-cursor,
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-dropCursor {
+  visibility: visible !important;
+  border-left: 1.5px solid #171717 !important;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-line {
+  padding: 0;
+  color: #171717;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-focused {
+  outline: none;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-block-handle {
+  display: none !important;
+}
+
+.markdownCrepeRoot .milkdown .markdownTableToolbar {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  min-height: 34px;
+  margin: 10px 0 0;
+  padding: 3px 9px;
+  border: 1px solid #d8dde2;
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  background: #ececec;
+  box-sizing: border-box;
+}
+
+.markdownCrepeRoot .milkdown .ProseMirror-focused .markdownTableToolbar,
+.markdownCrepeRoot .milkdown .markdownTableToolbar:focus-within {
+  display: flex;
+}
+
+.markdownCrepeRoot .milkdown .markdownTableToolbar button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #686868;
+  cursor: pointer;
+}
+
+.markdownCrepeRoot .milkdown .markdownTableToolbar button:hover,
+.markdownCrepeRoot .milkdown .markdownTableToolbar button.active {
+  background: #dcdcdc;
+  color: #333;
+}
+
+.markdownCrepeRoot .milkdown .markdownTableToolbar button:disabled {
+  background: transparent;
+  color: #aaa;
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.markdownCrepeRoot .milkdown .markdownTableToolbar button svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.8;
+}
+
+.markdownCrepeRoot .milkdown .markdownTableToolbarDivider {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: #d2d2d2;
+}
+
+.markdownCrepeRoot .milkdown .markdownTableToolbar + .milkdown-table-block,
+.markdownCrepeRoot .milkdown .markdownTableToolbar + table,
+.markdownCrepeRoot .milkdown .markdownTableToolbar + .tableWrapper {
+  margin-top: 0;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-table-block,
+.markdownCrepeRoot .milkdown .ProseMirror > table,
+.markdownCrepeRoot .milkdown .ProseMirror > .tableWrapper {
+  width: 100%;
+  margin-bottom: 18px;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-table-block .tableWrapper,
+.markdownCrepeRoot .milkdown .milkdown-table-block table,
+.markdownCrepeRoot .milkdown .ProseMirror > table,
+.markdownCrepeRoot .milkdown .ProseMirror > .tableWrapper table {
+  width: 100%;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-table-block table,
+.markdownCrepeRoot .milkdown .ProseMirror > table,
+.markdownCrepeRoot .milkdown .ProseMirror > .tableWrapper table {
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-table-block th,
+.markdownCrepeRoot .milkdown .milkdown-table-block td,
+.markdownCrepeRoot .milkdown .ProseMirror > table th,
+.markdownCrepeRoot .milkdown .ProseMirror > table td,
+.markdownCrepeRoot .milkdown .ProseMirror > .tableWrapper th,
+.markdownCrepeRoot .milkdown .ProseMirror > .tableWrapper td {
+  min-width: 0;
+  height: 40px;
+  padding: 4px 12px;
+  border: 1px solid #d8dde2;
+  background: #fff;
+  box-sizing: border-box;
+  caret-color: #202020;
+  cursor: text;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-table-block tr:nth-child(even) td,
+.markdownCrepeRoot .milkdown .ProseMirror > table tr:nth-child(even) td,
+.markdownCrepeRoot .milkdown .ProseMirror > .tableWrapper tr:nth-child(even) td {
+  background: #f5f7f9;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-table-block th p,
+.markdownCrepeRoot .milkdown .milkdown-table-block td p,
+.markdownCrepeRoot .milkdown .ProseMirror > table th p,
+.markdownCrepeRoot .milkdown .ProseMirror > table td p,
+.markdownCrepeRoot .milkdown .ProseMirror > .tableWrapper th p,
+.markdownCrepeRoot .milkdown .ProseMirror > .tableWrapper td p {
+  min-height: 20px;
+  margin: 0;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-table-block .handle,
+.markdownCrepeRoot .milkdown .milkdown-table-block .drag-preview {
+  display: none !important;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar {
+  position: sticky;
+  z-index: 15;
+  top: 0;
+  border-bottom: 1px solid #e5e5e5;
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(8px);
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar .top-bar-inner {
+  justify-content: flex-start;
+  min-height: 44px;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar .top-bar-item {
+  width: 28px;
+  height: 28px;
+  margin: 5px 3px;
+  padding: 4px;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar .top-bar-item svg {
+  width: 19px;
+  height: 19px;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar .top-bar-item svg.markdownStrokeIcon {
+  fill: none;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar .top-bar-item.active {
+  background: var(--crepe-color-selected);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--crepe-color-primary), transparent 72%);
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar .top-bar-divider {
+  height: 20px;
+  margin: 8px;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar .top-bar-inner > .top-bar-divider:first-child {
+  display: none;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar .top-bar-item[data-tooltip] {
+  position: relative;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar .top-bar-item[data-tooltip]::after {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 8px);
+  left: 50%;
+  padding: 6px 9px;
+  transform: translate(-50%, -2px);
+  border-radius: 4px;
+  background: rgba(45, 45, 45, 0.94);
+  color: #fff;
+  content: attr(data-tooltip);
+  font-family: Inter, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 100ms ease 450ms,
+    transform 100ms ease 450ms;
+  white-space: nowrap;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar .top-bar-item[data-tooltip]:hover::after {
+  transform: translate(-50%, 0);
+  opacity: 1;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar .top-bar-item[data-tooltip]:first-child::after {
+  left: 0;
+  transform: translate(0, -2px);
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar .top-bar-item[data-tooltip]:first-child:hover::after {
+  transform: translate(0, 0);
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar .top-bar-item[data-tooltip]:last-child::after {
+  right: 0;
+  left: auto;
+  transform: translate(0, -2px);
+}
+
+.markdownCrepeRoot .milkdown .milkdown-top-bar .top-bar-item[data-tooltip]:last-child:hover::after {
+  transform: translate(0, 0);
+}
+
+.markdownCrepeRoot .milkdown .milkdown-toolbar .toolbar-item {
+  width: 28px;
+  height: 28px;
+  margin: 3px;
+  padding: 5px;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-toolbar .toolbar-item svg {
+  width: 18px;
+  height: 18px;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-toolbar .divider {
+  height: 20px;
+  margin: 7px 5px;
+}
+
+.markdownBusy {
+  position: absolute;
+  inset: 48px 0 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #666;
+  font-size: 13px;
+  backdrop-filter: blur(2px);
+}
+
+.markdownPopupMenu {
+  z-index: 100;
+  width: 224px;
+  padding: 7px 0;
+  border: 1px solid #ddd;
+  border-radius: 7px;
+  background: #fff;
+  box-shadow: 0 7px 24px rgba(0, 0, 0, 0.19);
+}
+
+.markdownFolderMenu,
+.markdownDocumentContextMenu {
+  position: fixed;
+}
+
+.markdownDocumentContextMenu {
+  width: 292px;
+  padding: 8px 0;
+}
+
+.markdownDocumentContextMenu button {
+  height: 49px;
+  gap: 14px;
+  padding: 0 24px;
+  font-size: 15px;
+}
+
+.markdownDocumentContextMenu button svg {
+  flex: 0 0 auto;
+  color: #777;
+}
+
+.markdownDocumentContextMenu .markdownMenuDivider {
+  margin: 7px 0;
+}
+
+.markdownDocumentMenu {
+  position: absolute;
+  top: 39px;
+  right: 0;
+}
+
+.markdownPopupMenu button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 39px;
+  padding: 0 18px;
+  border: 0;
+  background: transparent;
+  color: #454545;
+  font-size: 13px;
+  text-align: left;
+}
+
+.markdownPopupMenu button:hover {
+  background: #f0f0f0;
+}
+
+.markdownPopupMenu button.danger {
+  color: #b42318;
+}
+
+.markdownMenuDivider {
+  height: 1px;
+  margin: 5px 0;
+  background: #e1e1e1;
+}
+
+.markdownInfoDrawer {
+  position: absolute;
+  z-index: 30;
+  top: 48px;
+  right: 0;
+  bottom: 0;
+  width: 300px;
+  padding: 0 18px;
+  overflow: auto;
+  border-left: 1px solid #dedede;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: -6px 0 18px rgba(0, 0, 0, 0.07);
+}
+
+.markdownInfoHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 52px;
+  border-bottom: 1px solid #e7e7e7;
+}
+
+.markdownInfoDrawer dl {
+  margin: 13px 0;
+}
+
+.markdownInfoDrawer dl > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 0;
+  font-size: 12px;
+}
+
+.markdownInfoDrawer dt {
+  color: #8a8a8a;
+}
+
+.markdownInfoDrawer dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #454545;
+  text-overflow: ellipsis;
+}
+
+.markdownInfoDrawer label {
+  display: grid;
+  gap: 7px;
+  color: #777;
+  font-size: 12px;
+}
+
+.markdownInfoDrawer select {
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid #d7d7d7;
+  border-radius: 5px;
+  background: #fff;
+}
+
+.markdownToast {
+  position: absolute;
+  z-index: 90;
+  left: 50%;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(620px, 75%);
+  padding: 10px 14px;
+  transform: translateX(-50%);
+  border: 1px solid #d9d9d9;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.13);
+  color: #426543;
+  font-size: 12px;
+}
+
+.markdownToast.error {
+  color: #b42318;
+}
+
+.markdownToast button {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: currentColor;
+}
+
+.markdownWelcome {
+  grid-row: 1 / -1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  min-height: 0;
+  padding: 30px;
+  color: #777;
+  background: #fff;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .markdownWorkspace {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+
+  .markdownCrepeRoot .milkdown .ProseMirror {
+    padding-inline: 28px;
+  }
+
+  .markdownSaveState {
+    display: none;
+  }
+}
+
 .pane {
   min-width: 0;
   min-height: 0;
@@ -1679,6 +3128,28 @@ button:disabled {
   justify-content: flex-end;
   border-top: 1px solid #eef2f7;
   background: #fff;
+}
+
+.markdownLeaveBackdrop {
+  z-index: 120;
+}
+
+.markdownLeaveDialog {
+  width: min(480px, calc(100vw - 40px));
+}
+
+.markdownLeaveMessage {
+  margin: 0;
+  color: #2f2c29;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.markdownLeaveHint {
+  margin: -4px 0 0;
+  color: #807a74;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .importDialog {

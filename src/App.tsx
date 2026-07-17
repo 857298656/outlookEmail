@@ -1,4 +1,5 @@
 import {
+  BookOpenText,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -19,6 +20,7 @@ import {
   PanelLeftOpen,
   Plus,
   RefreshCw,
+  Save,
   Search,
   Settings as SettingsIcon,
   Share2,
@@ -30,7 +32,7 @@ import {
   X,
   XCircle
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Update } from "@tauri-apps/plugin-updater";
 import type { CSSProperties, ReactNode } from "react";
 import { api } from "./api";
@@ -84,7 +86,15 @@ import type {
   , TempEmail, TempEmailMessage, GenerateTempEmailInput, CloudflareChannel, SaveCloudflareChannelInput, ImportTempEmailsInput, GenerateTempEmailsBatchInput
 } from "./types";
 
-type View = "mail" | "accounts" | "temp_mail" | "settings";
+type View = "mail" | "accounts" | "markdown" | "temp_mail" | "settings";
+type MarkdownLeaveHandlers = {
+  save: () => Promise<boolean>;
+  discard: () => void;
+};
+type PendingMarkdownLeave =
+  | { kind: "view"; view: View }
+  | { kind: "close" }
+  | { kind: "logout" };
 type MailFilters = {
   search: string;
   readState: "all" | "read" | "unread";
@@ -103,6 +113,9 @@ const defaultGraphClientId = "6daa9f56-5e67-4cb6-ae52-ef89ef912d36";
 const defaultOAuthRedirectUri = "http://localhost:8080";
 const loginWindowSize = { width: 600, height: 600, minWidth: 600, minHeight: 600 };
 const workspaceWindowSize = { width: 1360, height: 860, minWidth: 1100, minHeight: 720 };
+const MarkdownWorkspace = lazy(() =>
+  import("./components/MarkdownWorkspace").then((module) => ({ default: module.MarkdownWorkspace }))
+);
 const themePresets = [
   { id: "default", label: "默认", rail: "#f3f0ea", railText: "#46413a", surface: "#ffffff", subtle: "#faf9f8" },
   { id: "graphite", label: "石墨", rail: "#ecebea", railText: "#3a3a38", surface: "#ffffff", subtle: "#f3f2f0" },
@@ -240,6 +253,14 @@ function App() {
   const [mailTotalCount, setMailTotalCount] = useState(0);
   const [selectedMessageIds, setSelectedMessageIds] = useState<number[]>([]);
   const [view, setView] = useState<View>("mail");
+  const [markdownDirty, setMarkdownDirty] = useState(false);
+  const [pendingMarkdownLeave, setPendingMarkdownLeave] = useState<PendingMarkdownLeave | null>(null);
+  const [markdownLeaveBusy, setMarkdownLeaveBusy] = useState(false);
+  const [markdownLeaveError, setMarkdownLeaveError] = useState<string | null>(null);
+  const viewRef = useRef<View>("mail");
+  const markdownDirtyRef = useRef(false);
+  const pendingMarkdownLeaveRef = useRef<PendingMarkdownLeave | null>(null);
+  const markdownLeaveHandlersRef = useRef<MarkdownLeaveHandlers | null>(null);
   const [railExpanded, setRailExpanded] = useState(false);
   const [railMenuOpen, setRailMenuOpen] = useState(false);
   const railRef = useRef<HTMLElement | null>(null);
@@ -266,6 +287,109 @@ function App() {
   const railIdentity = selectedAccount?.email ?? accounts[0]?.email ?? "管理员";
   const railInitial = railIdentity === "管理员" ? "管" : railIdentity.slice(0, 1).toUpperCase();
   const skin = buildSkin(settings);
+
+  const handleMarkdownDirtyChange = useCallback((dirty: boolean) => {
+    markdownDirtyRef.current = dirty;
+    setMarkdownDirty(dirty);
+  }, []);
+
+  const handleRegisterMarkdownLeaveHandlers = useCallback((handlers: MarkdownLeaveHandlers | null) => {
+    markdownLeaveHandlersRef.current = handlers;
+  }, []);
+
+  function setMarkdownLeaveRequest(request: PendingMarkdownLeave | null) {
+    pendingMarkdownLeaveRef.current = request;
+    setPendingMarkdownLeave(request);
+    setMarkdownLeaveError(null);
+  }
+
+  function requestView(nextView: View) {
+    setRailMenuOpen(false);
+    if (view === "markdown" && nextView !== "markdown" && markdownDirty) {
+      setMarkdownLeaveRequest({ kind: "view", view: nextView });
+      return;
+    }
+    setView(nextView);
+  }
+
+  function requestLogout() {
+    setRailMenuOpen(false);
+    if (view === "markdown" && markdownDirty) {
+      setMarkdownLeaveRequest({ kind: "logout" });
+      return;
+    }
+    void runAction(async () => {
+      setStatus(await api.lock());
+    });
+  }
+
+  function requestAppWindowClose() {
+    if (!isTauriRuntime()) return;
+    if (viewRef.current === "markdown" && markdownDirtyRef.current) {
+      if (!pendingMarkdownLeaveRef.current) {
+        setMarkdownLeaveRequest({ kind: "close" });
+      }
+      return;
+    }
+    void getCurrentWindow().destroy().catch((err) => setError(readError(err)));
+  }
+
+  async function completeMarkdownLeave(saveFirst: boolean) {
+    const request = pendingMarkdownLeaveRef.current;
+    if (!request || markdownLeaveBusy) return;
+    setMarkdownLeaveBusy(true);
+    setMarkdownLeaveError(null);
+    try {
+      if (saveFirst) {
+        const saved = await markdownLeaveHandlersRef.current?.save();
+        if (!saved) {
+          setMarkdownLeaveError("Markdown 保存失败，请检查笔记标题或错误提示后重试。");
+          return;
+        }
+      } else {
+        markdownLeaveHandlersRef.current?.discard();
+      }
+
+      handleMarkdownDirtyChange(false);
+
+      if (request.kind === "close") {
+        await getCurrentWindow().destroy();
+      } else if (request.kind === "logout") {
+        setMarkdownLeaveRequest(null);
+        await runAction(async () => {
+          setStatus(await api.lock());
+        });
+      } else {
+        setMarkdownLeaveRequest(null);
+        setView(request.view);
+      }
+    } catch (err) {
+      setMarkdownLeaveError(
+        request.kind === "close" ? `关闭窗口失败：${readError(err)}` : readError(err)
+      );
+    } finally {
+      setMarkdownLeaveBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const appWindow = getCurrentWindow();
+    const unlistenPromise = appWindow.onCloseRequested((event) => {
+      if (viewRef.current !== "markdown" || !markdownDirtyRef.current) return;
+      event.preventDefault();
+      if (!pendingMarkdownLeaveRef.current) {
+        setMarkdownLeaveRequest({ kind: "close" });
+      }
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten()).catch(() => undefined);
+    };
+  }, []);
 
   useEffect(() => {
     if (!railMenuOpen) return;
@@ -467,6 +591,7 @@ function App() {
   }, [status?.unlocked]);
 
   useEffect(() => {
+    if (isTauriRuntime()) return;
     function handleBeforeUnload(event: BeforeUnloadEvent) {
       if (!busy) return;
       event.preventDefault();
@@ -701,7 +826,7 @@ function App() {
 
   return (
     <div className={`appContainer ${skin.className}`} style={skin.style}>
-      <AppWindowChrome />
+      <AppWindowChrome onClose={requestAppWindowClose} />
       <div className={railExpanded ? "appShell railExpanded" : "appShell"}>
         {busy && <GlobalLoadingOverlay message={busyMessage || "处理中..."} progress={busyProgress} />}
       <aside className={railExpanded ? "rail expanded" : "rail"} ref={railRef}>
@@ -719,30 +844,28 @@ function App() {
         <IconButton
           active={view === "mail"}
           title="邮箱"
-          onClick={() => {
-            setView("mail");
-            setRailMenuOpen(false);
-          }}
+          onClick={() => requestView("mail")}
         >
           <Inbox size={20} />
         </IconButton>
         <IconButton
           active={view === "accounts"}
           title="账号"
-          onClick={() => {
-            setView("accounts");
-            setRailMenuOpen(false);
-          }}
+          onClick={() => requestView("accounts")}
         >
           <Users size={20} />
         </IconButton>
         <IconButton
+          active={view === "markdown"}
+          title="Markdown"
+          onClick={() => requestView("markdown")}
+        >
+          <BookOpenText size={20} />
+        </IconButton>
+        <IconButton
           active={view === "temp_mail"}
           title="临时邮箱"
-          onClick={() => {
-            setView("temp_mail");
-            setRailMenuOpen(false);
-          }}
+          onClick={() => requestView("temp_mail")}
         >
           <Clock3 size={20} />
         </IconButton>
@@ -754,8 +877,7 @@ function App() {
               <button
                 className="railMenuItem"
                 onClick={() => {
-                  setView("settings");
-                  setRailMenuOpen(false);
+                  requestView("settings");
                 }}
               >
                 <SettingsIcon size={18} />
@@ -768,12 +890,7 @@ function App() {
               <div className="railMenuDivider" />
               <button
                 className="railMenuItem"
-                onClick={() =>
-                  runAction(async () => {
-                    setRailMenuOpen(false);
-                    setStatus(await api.lock());
-                  })
-                }
+                onClick={requestLogout}
               >
                 <LogOut size={18} />
                 <span>退出登录</span>
@@ -795,18 +912,20 @@ function App() {
         </div>
       </aside>
 
-      <main className="mainSurface">
+      <main className={view === "markdown" ? "mainSurface markdownSurface" : "mainSurface"}>
         <Toast toast={toast} />
-        <header className="topBar">
-          <div>
-            <h1>OutlookEmail 桌面版</h1>
-            <p>{status.account_count} 个账号 · {status.message_count} 封缓存邮件</p>
-          </div>
-          <div className="topActions">
-            {notice && <span className="notice" title={notice}>{notice}</span>}
-            {error && <span className="errorText" title={error}>{error}</span>}
-          </div>
-        </header>
+        {view !== "markdown" && (
+          <header className="topBar">
+            <div>
+              <h1>OutlookEmail 桌面版</h1>
+              <p>{status.account_count} 个账号 · {status.message_count} 封缓存邮件</p>
+            </div>
+            <div className="topActions">
+              {notice && <span className="notice" title={notice}>{notice}</span>}
+              {error && <span className="errorText" title={error}>{error}</span>}
+            </div>
+          </header>
+        )}
 
         {view === "mail" && (
           <MailWorkspace
@@ -1159,6 +1278,14 @@ function App() {
           />
         )}
 
+        {view === "markdown" && (
+          <Suspense fallback={<div className="centerScreen"><Loader2 className="spin" size={26} /></div>}>
+            <MarkdownWorkspace
+              onDirtyChange={handleMarkdownDirtyChange}
+              onRegisterLeaveHandlers={handleRegisterMarkdownLeaveHandlers}
+            />
+          </Suspense>
+        )}
 
         {view === "settings" && settings && (
           <SettingsView
@@ -1214,6 +1341,73 @@ function App() {
         )}
       </main>
       </div>
+      {pendingMarkdownLeave && (
+        <div className="oauthDialogBackdrop markdownLeaveBackdrop">
+          <section
+            className="oauthDialog markdownLeaveDialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="markdownLeaveTitle"
+            aria-describedby="markdownLeaveDescription"
+          >
+            <header className="oauthDialogHeader">
+              <div>
+                <span className="oauthDialogIcon"><BookOpenText size={20} /></span>
+                <h2 id="markdownLeaveTitle">Markdown 尚未保存</h2>
+              </div>
+              <button
+                type="button"
+                className="iconMini"
+                title="取消离开"
+                aria-label="取消离开"
+                disabled={markdownLeaveBusy}
+                onClick={() => setMarkdownLeaveRequest(null)}
+              >
+                <X size={17} />
+              </button>
+            </header>
+            <div className="oauthDialogBody">
+              <p id="markdownLeaveDescription" className="markdownLeaveMessage">
+                当前笔记仍在编辑且尚未保存。
+                {pendingMarkdownLeave.kind === "close"
+                  ? "是否保存后关闭窗口？"
+                  : pendingMarkdownLeave.kind === "logout"
+                    ? "是否保存后退出登录？"
+                    : "是否保存后离开 Markdown 页面？"}
+              </p>
+              <p className="markdownLeaveHint">选择“继续”将放弃尚未保存的修改，并继续执行刚才的操作。</p>
+              {markdownLeaveError && <div className="formError">{markdownLeaveError}</div>}
+            </div>
+            <footer className="oauthDialogFooter">
+              <button
+                type="button"
+                className="button secondary"
+                disabled={markdownLeaveBusy}
+                onClick={() => setMarkdownLeaveRequest(null)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="button secondary"
+                disabled={markdownLeaveBusy}
+                onClick={() => void completeMarkdownLeave(false)}
+              >
+                继续
+              </button>
+              <button
+                type="button"
+                className="button primary"
+                disabled={markdownLeaveBusy}
+                onClick={() => void completeMarkdownLeave(true)}
+              >
+                {markdownLeaveBusy ? <Loader2 className="spin" size={15} /> : <Save size={15} />}
+                保存 Markdown
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
       {(updateDialogOpen || updatePrompt) && (
         <UpdateDialog
           currentVersion={appVersion}
@@ -1231,8 +1425,8 @@ function App() {
   );
 }
 
-function AppWindowChrome() {
-  const appWindow = isTauriRuntime() ? getCurrentWindow() : null;
+function AppWindowChrome({ onClose }: { onClose: () => void }) {
+  const appWindow = useMemo(() => (isTauriRuntime() ? getCurrentWindow() : null), []);
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -1286,7 +1480,7 @@ function AppWindowChrome() {
           type="button"
           className="appChromeButton appChromeClose"
           aria-label="关闭"
-          onClick={() => appWindow.close()}
+          onClick={onClose}
         >
           <X size={14} strokeWidth={2.1} />
         </button>
@@ -1296,7 +1490,7 @@ function AppWindowChrome() {
 }
 
 function LoginWindowChrome() {
-  const appWindow = isTauriRuntime() ? getCurrentWindow() : null;
+  const appWindow = useMemo(() => (isTauriRuntime() ? getCurrentWindow() : null), []);
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -1339,7 +1533,7 @@ function LoginWindowChrome() {
         >
           {maximized ? <Copy size={13} strokeWidth={2.1} /> : <Square size={12} strokeWidth={2.1} />}
         </button>
-        <button type="button" className="loginChromeButton loginChromeClose" aria-label="关闭" onClick={() => appWindow.close()}>
+        <button type="button" className="loginChromeButton loginChromeClose" aria-label="关闭" onClick={() => void appWindow.destroy()}>
           <X size={14} strokeWidth={2.1} />
         </button>
       </div>

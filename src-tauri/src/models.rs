@@ -272,11 +272,6 @@ impl Default for Settings {
     }
 }
 
-
-
-
-
-
 #[derive(Debug, Clone, Serialize)]
 pub struct LocalRetentionSummary {
     pub database_path: String,
@@ -315,7 +310,6 @@ pub struct SchedulerStatus {
     pub last_refresh_at: Option<String>,
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateGroupInput {
     pub name: String,
@@ -331,7 +325,6 @@ pub struct UpdateGroupInput {
     pub parent_id: Option<i64>,
     pub sort_order: Option<i64>,
 }
-
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImportAccountsInput {
@@ -354,12 +347,74 @@ pub struct JobResult {
     pub failed: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct MarkdownCategory {
+    pub id: i64,
+    pub name: String,
+    pub parent_id: Option<i64>,
+    pub sort_order: i64,
+    pub document_count: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
 
+#[derive(Debug, Clone, Serialize)]
+pub struct MarkdownDocument {
+    pub id: i64,
+    pub title: String,
+    pub content: String,
+    pub category_id: Option<i64>,
+    pub category_name: Option<String>,
+    pub source_path: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateMarkdownCategoryInput {
+    pub name: String,
+    pub parent_id: Option<i64>,
+}
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateMarkdownCategoryInput {
+    pub id: i64,
+    pub name: String,
+    pub parent_id: Option<i64>,
+    pub sort_order: Option<i64>,
+}
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateMarkdownDocumentInput {
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub category_id: Option<i64>,
+    pub source_path: Option<String>,
+}
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateMarkdownDocumentInput {
+    pub id: i64,
+    pub title: String,
+    pub content: String,
+    pub category_id: Option<i64>,
+    pub source_path: Option<String>,
+}
 
+#[derive(Debug, Clone, Serialize)]
+pub struct MarkdownFileContent {
+    pub path: String,
+    pub file_name: String,
+    pub content: String,
+    pub size: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MarkdownFileWriteResult {
+    pub path: String,
+    pub file_name: String,
+    pub size: i64,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateAccountInput {
@@ -536,7 +591,6 @@ pub struct ExportAccountSecretsInput {
     pub password: String,
     pub confirm: String,
 }
-
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RefreshInput {

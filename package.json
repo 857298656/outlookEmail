@@ -1,6 +1,6 @@
 {
   "name": "outlook-email-desktop",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "packageManager": "pnpm@9.15.9",
   "type": "module",
@@ -15,10 +15,15 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@milkdown/crepe": "^7.21.3",
+    "@milkdown/kit": "^7.21.3",
     "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-process": "^2.0.0",
     "@tauri-apps/plugin-updater": "^2.0.0",
     "@vitejs/plugin-react": "^6.0.3",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
     "lucide-react": "^1.23.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

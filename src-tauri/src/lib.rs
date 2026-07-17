@@ -20,6 +20,7 @@ pub fn run() {
     let database = Database::open().expect("failed to initialize local database");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .manage(AppState {
             db: Mutex::new(database),
@@ -42,6 +43,19 @@ pub fn run() {
             create_group,
             update_group,
             delete_group,
+            list_markdown_categories,
+            create_markdown_category,
+            update_markdown_category,
+            delete_markdown_category,
+            list_markdown_documents,
+            get_markdown_document,
+            create_markdown_document,
+            update_markdown_document,
+            delete_markdown_document,
+            read_markdown_file,
+            write_markdown_file,
+            write_markdown_export_file,
+            export_markdown_folder,
             list_accounts,
             update_account,
             import_accounts,

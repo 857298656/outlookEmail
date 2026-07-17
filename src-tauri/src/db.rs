@@ -272,7 +272,9 @@ impl Database {
                     })
                 },
             )
-            .map_err(|_| AppError::Internal("failed to load generated workspace key record".to_string()))?;
+            .map_err(|_| {
+                AppError::Internal("failed to load generated workspace key record".to_string())
+            })?;
         self.audit(
             "workspace_key.generated",
             "workspace_key",
@@ -566,6 +568,280 @@ impl Database {
             &format!("level {level}"),
         )?;
         Ok(())
+    }
+
+    pub fn list_markdown_categories(&self) -> AppResult<Vec<MarkdownCategory>> {
+        self.require_unlocked()?;
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT c.id, c.name, c.parent_id, c.sort_order, COUNT(d.id), c.created_at, c.updated_at
+            FROM markdown_categories c
+            LEFT JOIN markdown_documents d ON d.category_id = c.id
+            GROUP BY c.id
+            ORDER BY c.sort_order ASC, c.name COLLATE NOCASE ASC
+            ",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(MarkdownCategory {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                parent_id: row.get(2)?,
+                sort_order: row.get(3)?,
+                document_count: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+        collect_rows(rows)
+    }
+
+    pub fn create_markdown_category(
+        &self,
+        input: CreateMarkdownCategoryInput,
+    ) -> AppResult<MarkdownCategory> {
+        self.require_unlocked()?;
+        let name = validate_markdown_category_name(&input.name)?;
+        validate_markdown_parent(&self.conn, None, input.parent_id)?;
+        self.conn.execute(
+            "
+            INSERT INTO markdown_categories (name, parent_id, sort_order)
+            VALUES (?, ?, COALESCE((SELECT MAX(sort_order) + 1 FROM markdown_categories WHERE parent_id IS ?), 0))
+            ",
+            params![name, input.parent_id, input.parent_id],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        self.audit(
+            "markdown.category_created",
+            "markdown_category",
+            Some(id),
+            name,
+        )?;
+        self.get_markdown_category(id)
+    }
+
+    pub fn update_markdown_category(
+        &self,
+        input: UpdateMarkdownCategoryInput,
+    ) -> AppResult<MarkdownCategory> {
+        self.require_unlocked()?;
+        let name = validate_markdown_category_name(&input.name)?;
+        validate_markdown_parent(&self.conn, Some(input.id), input.parent_id)?;
+        let changed = self.conn.execute(
+            "
+            UPDATE markdown_categories
+            SET name = ?, parent_id = ?, sort_order = COALESCE(?, sort_order), updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            ",
+            params![name, input.parent_id, input.sort_order.map(|value| value.max(0)), input.id],
+        )?;
+        if changed == 0 {
+            return Err(AppError::InvalidInput(
+                "markdown category not found".to_string(),
+            ));
+        }
+        self.audit(
+            "markdown.category_updated",
+            "markdown_category",
+            Some(input.id),
+            name,
+        )?;
+        self.get_markdown_category(input.id)
+    }
+
+    pub fn delete_markdown_category(&self, category_id: i64) -> AppResult<()> {
+        self.require_unlocked()?;
+        let exists = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM markdown_categories WHERE id = ?",
+                [category_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Err(AppError::InvalidInput(
+                "markdown category not found".to_string(),
+            ));
+        }
+        self.conn.execute(
+            "
+            WITH RECURSIVE descendants(id) AS (
+                SELECT id FROM markdown_categories WHERE id = ?
+                UNION ALL
+                SELECT c.id FROM markdown_categories c
+                JOIN descendants d ON c.parent_id = d.id
+            )
+            UPDATE markdown_documents
+            SET category_id = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE category_id IN (SELECT id FROM descendants)
+            ",
+            [category_id],
+        )?;
+        self.conn.execute(
+            "
+            WITH RECURSIVE descendants(id) AS (
+                SELECT id FROM markdown_categories WHERE id = ?
+                UNION ALL
+                SELECT c.id FROM markdown_categories c
+                JOIN descendants d ON c.parent_id = d.id
+            )
+            DELETE FROM markdown_categories WHERE id IN (SELECT id FROM descendants)
+            ",
+            [category_id],
+        )?;
+        self.audit(
+            "markdown.category_deleted",
+            "markdown_category",
+            Some(category_id),
+            "",
+        )?;
+        Ok(())
+    }
+
+    pub fn list_markdown_documents(
+        &self,
+        category_id: Option<i64>,
+        search: Option<String>,
+    ) -> AppResult<Vec<MarkdownDocument>> {
+        self.require_unlocked()?;
+        let search = search.unwrap_or_default().trim().to_string();
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT d.id, d.title, d.content, d.category_id, c.name, d.source_path,
+                   d.created_at, d.updated_at
+            FROM markdown_documents d
+            LEFT JOIN markdown_categories c ON c.id = d.category_id
+            WHERE (?1 IS NULL OR d.category_id = ?1)
+              AND (?2 = '' OR d.title LIKE '%' || ?2 || '%' COLLATE NOCASE
+                           OR d.content LIKE '%' || ?2 || '%' COLLATE NOCASE)
+            ORDER BY d.updated_at DESC, d.id DESC
+            ",
+        )?;
+        let rows = stmt.query_map(params![category_id, search], map_markdown_document_row)?;
+        collect_rows(rows)
+    }
+
+    pub fn get_markdown_document(&self, document_id: i64) -> AppResult<MarkdownDocument> {
+        self.require_unlocked()?;
+        self.conn
+            .query_row(
+                "
+                SELECT d.id, d.title, d.content, d.category_id, c.name, d.source_path,
+                       d.created_at, d.updated_at
+                FROM markdown_documents d
+                LEFT JOIN markdown_categories c ON c.id = d.category_id
+                WHERE d.id = ?
+                ",
+                [document_id],
+                map_markdown_document_row,
+            )
+            .optional()?
+            .ok_or_else(|| AppError::InvalidInput("markdown document not found".to_string()))
+    }
+
+    pub fn create_markdown_document(
+        &self,
+        input: CreateMarkdownDocumentInput,
+    ) -> AppResult<MarkdownDocument> {
+        self.require_unlocked()?;
+        validate_markdown_category_reference(&self.conn, input.category_id)?;
+        let title = validate_markdown_title(input.title.as_deref().unwrap_or("未命名文档"))?;
+        let content = validate_markdown_content(input.content.unwrap_or_default())?;
+        let source_path = normalize_markdown_source_path(input.source_path);
+        self.conn.execute(
+            "
+            INSERT INTO markdown_documents (title, content, category_id, source_path)
+            VALUES (?, ?, ?, ?)
+            ",
+            params![title, content, input.category_id, source_path],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        self.audit(
+            "markdown.document_created",
+            "markdown_document",
+            Some(id),
+            title,
+        )?;
+        self.get_markdown_document(id)
+    }
+
+    pub fn update_markdown_document(
+        &self,
+        input: UpdateMarkdownDocumentInput,
+    ) -> AppResult<MarkdownDocument> {
+        self.require_unlocked()?;
+        validate_markdown_category_reference(&self.conn, input.category_id)?;
+        let title = validate_markdown_title(&input.title)?;
+        let content = validate_markdown_content(input.content)?;
+        let source_path = normalize_markdown_source_path(input.source_path);
+        let changed = self.conn.execute(
+            "
+            UPDATE markdown_documents
+            SET title = ?, content = ?, category_id = ?, source_path = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            ",
+            params![title, content, input.category_id, source_path, input.id],
+        )?;
+        if changed == 0 {
+            return Err(AppError::InvalidInput(
+                "markdown document not found".to_string(),
+            ));
+        }
+        self.audit(
+            "markdown.document_updated",
+            "markdown_document",
+            Some(input.id),
+            title,
+        )?;
+        self.get_markdown_document(input.id)
+    }
+
+    pub fn delete_markdown_document(&self, document_id: i64) -> AppResult<()> {
+        self.require_unlocked()?;
+        let changed = self
+            .conn
+            .execute("DELETE FROM markdown_documents WHERE id = ?", [document_id])?;
+        if changed == 0 {
+            return Err(AppError::InvalidInput(
+                "markdown document not found".to_string(),
+            ));
+        }
+        self.audit(
+            "markdown.document_deleted",
+            "markdown_document",
+            Some(document_id),
+            "",
+        )?;
+        Ok(())
+    }
+
+    fn get_markdown_category(&self, category_id: i64) -> AppResult<MarkdownCategory> {
+        self.conn
+            .query_row(
+                "
+                SELECT c.id, c.name, c.parent_id, c.sort_order, COUNT(d.id), c.created_at, c.updated_at
+                FROM markdown_categories c
+                LEFT JOIN markdown_documents d ON d.category_id = c.id
+                WHERE c.id = ?
+                GROUP BY c.id
+                ",
+                [category_id],
+                |row| {
+                    Ok(MarkdownCategory {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        parent_id: row.get(2)?,
+                        sort_order: row.get(3)?,
+                        document_count: row.get(4)?,
+                        created_at: row.get(5)?,
+                        updated_at: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| AppError::InvalidInput("markdown category not found".to_string()))
     }
 
     pub fn list_accounts(&self) -> AppResult<Vec<Account>> {
@@ -945,18 +1221,6 @@ impl Database {
             refresh_token_preview: preview_secret(&refresh_token),
         })
     }
-
-
-
-
-
-
-
-
-
-
-
-
 
     pub fn list_messages(
         &self,
@@ -2050,16 +2314,6 @@ impl Database {
         })
     }
 
-
-
-
-
-
-
-
-
-
-
     pub fn local_retention_summary(&self) -> AppResult<LocalRetentionSummary> {
         self.require_unlocked()?;
         let (attachment_file_count, attachments_size) = dir_stats(&attachment_dir(&self.db_path)?)?;
@@ -2190,24 +2444,12 @@ impl Database {
         })
     }
 
-
-
-
-
-
-
-
-
-
     pub fn scheduler_status(&self) -> AppResult<SchedulerStatus> {
         self.require_unlocked()?;
         Ok(SchedulerStatus {
             last_refresh_at: self.get_config("scheduler_last_refresh_at")?,
-
         })
     }
-
-
 
     pub fn run_due_scheduled_jobs(&self) -> AppResult<()> {
         if !self.is_unlocked() {
@@ -2249,8 +2491,6 @@ impl Database {
             self.set_config("scheduler_last_refresh_at", &now.to_rfc3339())?;
         }
 
-
-
         Ok(())
     }
 
@@ -2261,8 +2501,15 @@ impl Database {
         )?;
         let rows = statement.query_map([], |row| {
             Ok(TempEmail {
-                id: row.get(0)?, email: row.get(1)?, provider: row.get(2)?, provider_base_url: row.get(3)?,
-                cloudflare_channel_id: row.get(4)?, cloudflare_channel_name: row.get(5)?, message_count: row.get(6)?, last_checked_at: row.get(7)?, created_at: row.get(8)?,
+                id: row.get(0)?,
+                email: row.get(1)?,
+                provider: row.get(2)?,
+                provider_base_url: row.get(3)?,
+                cloudflare_channel_id: row.get(4)?,
+                cloudflare_channel_name: row.get(5)?,
+                message_count: row.get(6)?,
+                last_checked_at: row.get(7)?,
+                created_at: row.get(8)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
@@ -2271,7 +2518,10 @@ impl Database {
     pub fn generate_temp_email(&self, input: GenerateTempEmailInput) -> AppResult<TempEmail> {
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
         let channel_id = input.cloudflare_channel_id;
-        let channel = match channel_id { Some(id) => Some(self.cloudflare_channel_credentials(id)?), None => None };
+        let channel = match channel_id {
+            Some(id) => Some(self.cloudflare_channel_credentials(id)?),
+            None => None,
+        };
         let created = temp_mail::create(input, channel.as_ref())?;
         self.conn.execute(
             "INSERT INTO temp_emails (email, provider, provider_base_url, api_key_enc, password_enc, token_enc, provider_account_id, cloudflare_channel_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -2284,12 +2534,18 @@ impl Database {
         self.get_temp_email(id)
     }
 
-    pub fn import_temp_emails(&self, input: ImportTempEmailsInput) -> AppResult<ImportTempEmailsResult> {
+    pub fn import_temp_emails(
+        &self,
+        input: ImportTempEmailsInput,
+    ) -> AppResult<ImportTempEmailsResult> {
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
         let provider = input.provider.trim().to_lowercase();
-        let (base_url, api_key) = temp_mail::imported_provider_config(&provider, input.base_url, input.api_key)?;
+        let (base_url, api_key) =
+            temp_mail::imported_provider_config(&provider, input.base_url, input.api_key)?;
         if input.raw.trim().is_empty() {
-            return Err(AppError::InvalidInput("temporary email import text is required".to_string()));
+            return Err(AppError::InvalidInput(
+                "temporary email import text is required".to_string(),
+            ));
         }
 
         let mut imported = 0;
@@ -2302,14 +2558,19 @@ impl Database {
 
         for (line_index, raw_line) in input.raw.lines().enumerate() {
             let line = raw_line.trim();
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
 
             if provider == "cloudflare" {
                 if let Some(channel_name) = cloudflare_import_header(line) {
                     match channel_name {
                         Some(name) => match self.cloudflare_channel_id_by_name(&name) {
                             Ok(id) => current_channel_id = Some(id),
-                            Err(err) => { current_channel_id = None; errors.push(format!("line {}: {}", line_index + 1, err)); }
+                            Err(err) => {
+                                current_channel_id = None;
+                                errors.push(format!("line {}: {}", line_index + 1, err));
+                            }
                         },
                         None => current_channel_id = input.cloudflare_channel_id,
                     }
@@ -2318,33 +2579,79 @@ impl Database {
             }
 
             let parsed = match provider.as_str() {
-                "gptmail" => Some((line.to_string(), String::new(), String::new(), String::new(), None, base_url.clone(), api_key.clone())),
+                "gptmail" => Some((
+                    line.to_string(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    None,
+                    base_url.clone(),
+                    api_key.clone(),
+                )),
                 "duckmail" => {
                     let mut parts = line.splitn(3, "----");
                     let email = parts.next().unwrap_or_default().trim().to_string();
                     let password = parts.next().unwrap_or_default().trim().to_string();
-                    if password.is_empty() { None } else {
-                        let token = match temp_mail::authenticate_duckmail(&base_url, &email, &password) {
-                            Ok(token) => token,
-                            Err(_) => { token_failures.push(email.clone()); String::new() }
-                        };
-                        Some((email, password, token, String::new(), None, base_url.clone(), api_key.clone()))
+                    if password.is_empty() {
+                        None
+                    } else {
+                        let token =
+                            match temp_mail::authenticate_duckmail(&base_url, &email, &password) {
+                                Ok(token) => token,
+                                Err(_) => {
+                                    token_failures.push(email.clone());
+                                    String::new()
+                                }
+                            };
+                        Some((
+                            email,
+                            password,
+                            token,
+                            String::new(),
+                            None,
+                            base_url.clone(),
+                            api_key.clone(),
+                        ))
                     }
                 }
                 "cloudflare" => {
-                    let email = line.split("----").next().unwrap_or_default().trim().to_string();
+                    let email = line
+                        .split("----")
+                        .next()
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
                     match current_channel_id {
                         Some(channel_id) => match self.cloudflare_channel_credentials(channel_id) {
-                            Ok(channel) => Some((email, String::new(), String::new(), String::new(), Some(channel_id), channel.worker_url, String::new())),
-                            Err(err) => { errors.push(format!("line {}: {}", line_index + 1, err)); None }
+                            Ok(channel) => Some((
+                                email,
+                                String::new(),
+                                String::new(),
+                                String::new(),
+                                Some(channel_id),
+                                channel.worker_url,
+                                String::new(),
+                            )),
+                            Err(err) => {
+                                errors.push(format!("line {}: {}", line_index + 1, err));
+                                None
+                            }
                         },
-                        None => { errors.push(format!("line {}: Cloudflare channel is required", line_index + 1)); None }
+                        None => {
+                            errors.push(format!(
+                                "line {}: Cloudflare channel is required",
+                                line_index + 1
+                            ));
+                            None
+                        }
                     }
                 }
                 _ => unreachable!(),
             };
 
-            let Some((email, password, token, account_id, channel_id, item_base_url, item_api_key)) = parsed else {
+            let Some((email, password, token, account_id, channel_id, item_base_url, item_api_key)) =
+                parsed
+            else {
                 skipped += 1;
                 continue;
             };
@@ -2354,35 +2661,81 @@ impl Database {
                 continue;
             }
 
-            let existing_id = self.conn.query_row("SELECT id FROM temp_emails WHERE email = ? COLLATE NOCASE", [&email], |row| row.get::<_, i64>(0)).optional()?;
+            let existing_id = self
+                .conn
+                .query_row(
+                    "SELECT id FROM temp_emails WHERE email = ? COLLATE NOCASE",
+                    [&email],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?;
             self.conn.execute(
                 "INSERT INTO temp_emails (email, provider, provider_base_url, api_key_enc, password_enc, token_enc, provider_account_id, cloudflare_channel_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(email) DO UPDATE SET provider = excluded.provider, provider_base_url = excluded.provider_base_url, api_key_enc = excluded.api_key_enc, password_enc = excluded.password_enc, token_enc = excluded.token_enc, provider_account_id = excluded.provider_account_id, cloudflare_channel_id = excluded.cloudflare_channel_id, updated_at = CURRENT_TIMESTAMP",
                 params![email, provider, item_base_url, crypto::encrypt_text(&item_api_key, key)?, crypto::encrypt_text(&password, key)?, crypto::encrypt_text(&token, key)?, account_id, channel_id],
             )?;
             let id = existing_id.unwrap_or_else(|| self.conn.last_insert_rowid());
-            if existing_id.is_some() { updated += 1; } else { imported += 1; }
+            if existing_id.is_some() {
+                updated += 1;
+            } else {
+                imported += 1;
+            }
             imported_ids.push(id);
         }
 
         if imported + updated == 0 {
-            return Err(AppError::InvalidInput(errors.first().cloned().unwrap_or_else(|| "no valid temporary emails were found".to_string())));
+            return Err(AppError::InvalidInput(
+                errors
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "no valid temporary emails were found".to_string()),
+            ));
         }
-        let emails = imported_ids.into_iter().filter_map(|id| self.get_temp_email(id).ok()).collect();
-        Ok(ImportTempEmailsResult { imported, updated, skipped, token_failures, errors, emails })
+        let emails = imported_ids
+            .into_iter()
+            .filter_map(|id| self.get_temp_email(id).ok())
+            .collect();
+        Ok(ImportTempEmailsResult {
+            imported,
+            updated,
+            skipped,
+            token_failures,
+            errors,
+            emails,
+        })
     }
 
-    pub fn generate_temp_emails_batch(&self, input: GenerateTempEmailsBatchInput) -> AppResult<GenerateTempEmailsBatchResult> {
+    pub fn generate_temp_emails_batch(
+        &self,
+        input: GenerateTempEmailsBatchInput,
+    ) -> AppResult<GenerateTempEmailsBatchResult> {
         if !input.provider.trim().eq_ignore_ascii_case("cloudflare") {
-            return Err(AppError::InvalidInput("batch generation currently supports Cloudflare only".to_string()));
+            return Err(AppError::InvalidInput(
+                "batch generation currently supports Cloudflare only".to_string(),
+            ));
         }
         if !(1..=50).contains(&input.count) {
-            return Err(AppError::InvalidInput("count must be between 1 and 50".to_string()));
+            return Err(AppError::InvalidInput(
+                "count must be between 1 and 50".to_string(),
+            ));
         }
-        let channel_id = input.cloudflare_channel_id.ok_or_else(|| AppError::InvalidInput("Cloudflare channel is required".to_string()))?;
+        let channel_id = input
+            .cloudflare_channel_id
+            .ok_or_else(|| AppError::InvalidInput("Cloudflare channel is required".to_string()))?;
         let channel = self.cloudflare_channel_credentials(channel_id)?;
-        let domain = input.domain.unwrap_or_else(|| channel.domains.first().cloned().unwrap_or_default()).trim().trim_start_matches('@').to_lowercase();
-        if !channel.domains.iter().any(|item| item.eq_ignore_ascii_case(&domain)) {
-            return Err(AppError::InvalidInput("selected domain does not belong to this Cloudflare channel".to_string()));
+        let domain = input
+            .domain
+            .unwrap_or_else(|| channel.domains.first().cloned().unwrap_or_default())
+            .trim()
+            .trim_start_matches('@')
+            .to_lowercase();
+        if !channel
+            .domains
+            .iter()
+            .any(|item| item.eq_ignore_ascii_case(&domain))
+        {
+            return Err(AppError::InvalidInput(
+                "selected domain does not belong to this Cloudflare channel".to_string(),
+            ));
         }
 
         let usernames = normalize_batch_usernames(input.usernames, input.count)?;
@@ -2390,16 +2743,30 @@ impl Database {
         let mut failures = Vec::new();
         for (index, username) in usernames.into_iter().enumerate() {
             let create_input = GenerateTempEmailInput {
-                provider: "cloudflare".to_string(), base_url: None, api_key: None, prefix: None,
-                domain: Some(domain.clone()), username: Some(username.clone()), password: None,
+                provider: "cloudflare".to_string(),
+                base_url: None,
+                api_key: None,
+                prefix: None,
+                domain: Some(domain.clone()),
+                username: Some(username.clone()),
+                password: None,
                 cloudflare_channel_id: Some(channel_id),
             };
             match self.generate_temp_email(create_input) {
                 Ok(email) => emails.push(email),
-                Err(err) => failures.push(TempEmailBatchFailure { index: index + 1, username, error: err.to_string() }),
+                Err(err) => failures.push(TempEmailBatchFailure {
+                    index: index + 1,
+                    username,
+                    error: err.to_string(),
+                }),
             }
         }
-        Ok(GenerateTempEmailsBatchResult { created_count: emails.len(), failed_count: failures.len(), emails, failures })
+        Ok(GenerateTempEmailsBatchResult {
+            created_count: emails.len(),
+            failed_count: failures.len(),
+            emails,
+            failures,
+        })
     }
 
     pub fn list_temp_email_messages(&self, temp_email_id: i64) -> AppResult<Vec<TempEmailMessage>> {
@@ -2408,21 +2775,31 @@ impl Database {
         self.cached_temp_email_messages(temp_email_id)
     }
 
-    pub fn refresh_temp_email_messages(&self, temp_email_id: i64) -> AppResult<Vec<TempEmailMessage>> {
+    pub fn refresh_temp_email_messages(
+        &self,
+        temp_email_id: i64,
+    ) -> AppResult<Vec<TempEmailMessage>> {
         let mailbox = self.temp_mailbox_credentials(temp_email_id)?;
         let messages = temp_mail::list_messages(&mailbox)?;
         self.cache_temp_email_messages(temp_email_id, &messages)?;
         self.cached_temp_email_messages(temp_email_id)
     }
 
-    pub fn get_temp_email_message(&self, temp_email_id: i64, message_id: &str) -> AppResult<TempEmailMessage> {
-        if message_id.trim().is_empty() { return Err(AppError::InvalidInput("message id is required".to_string())); }
+    pub fn get_temp_email_message(
+        &self,
+        temp_email_id: i64,
+        message_id: &str,
+    ) -> AppResult<TempEmailMessage> {
+        if message_id.trim().is_empty() {
+            return Err(AppError::InvalidInput("message id is required".to_string()));
+        }
         if let Some(message) = self.cached_temp_email_message(temp_email_id, message_id)? {
             if message.body.as_deref().is_some_and(|body| !body.is_empty()) {
                 return Ok(message);
             }
         }
-        let message = temp_mail::get_message(&self.temp_mailbox_credentials(temp_email_id)?, message_id)?;
+        let message =
+            temp_mail::get_message(&self.temp_mailbox_credentials(temp_email_id)?, message_id)?;
         self.cache_temp_email_messages(temp_email_id, std::slice::from_ref(&message))?;
         Ok(message)
     }
@@ -2430,8 +2807,14 @@ impl Database {
     pub fn delete_temp_email(&self, temp_email_id: i64) -> AppResult<()> {
         let mailbox = self.temp_mailbox_credentials(temp_email_id)?;
         temp_mail::delete_remote(&mailbox)?;
-        let changed = self.conn.execute("DELETE FROM temp_emails WHERE id = ?", [temp_email_id])?;
-        if changed == 0 { return Err(AppError::InvalidInput("temporary email not found".to_string())); }
+        let changed = self
+            .conn
+            .execute("DELETE FROM temp_emails WHERE id = ?", [temp_email_id])?;
+        if changed == 0 {
+            return Err(AppError::InvalidInput(
+                "temporary email not found".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -2451,11 +2834,27 @@ impl Database {
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?, row.get::<_, Option<i64>>(7)?)),
         ).optional()?.ok_or_else(|| AppError::InvalidInput("temporary email not found".to_string()))?;
         let password = crypto::decrypt_text(&row.4, key)?;
-        let cloudflare_channel = row.7.map(|channel_id| self.cloudflare_channel_credentials(channel_id)).transpose()?;
-        Ok(TempMailboxCredentials { email: row.0, provider: row.1, base_url: row.2, api_key: crypto::decrypt_text(&row.3, key)?, password, token: crypto::decrypt_text(&row.5, key)?, account_id: row.6, cloudflare_channel })
+        let cloudflare_channel = row
+            .7
+            .map(|channel_id| self.cloudflare_channel_credentials(channel_id))
+            .transpose()?;
+        Ok(TempMailboxCredentials {
+            email: row.0,
+            provider: row.1,
+            base_url: row.2,
+            api_key: crypto::decrypt_text(&row.3, key)?,
+            password,
+            token: crypto::decrypt_text(&row.5, key)?,
+            account_id: row.6,
+            cloudflare_channel,
+        })
     }
 
-    fn cache_temp_email_messages(&self, temp_email_id: i64, messages: &[TempEmailMessage]) -> AppResult<()> {
+    fn cache_temp_email_messages(
+        &self,
+        temp_email_id: i64,
+        messages: &[TempEmailMessage],
+    ) -> AppResult<()> {
         self.get_temp_email(temp_email_id)?;
         for message in messages {
             self.conn.execute(
@@ -2517,68 +2916,172 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
     }
 
-    fn cached_temp_email_message(&self, temp_email_id: i64, message_id: &str) -> AppResult<Option<TempEmailMessage>> {
-        self.conn.query_row(
-            "
+    fn cached_temp_email_message(
+        &self,
+        temp_email_id: i64,
+        message_id: &str,
+    ) -> AppResult<Option<TempEmailMessage>> {
+        self.conn
+            .query_row(
+                "
             SELECT provider_message_id, sender, recipients, subject, body_preview,
                    body, body_type, received_at
             FROM temp_email_messages
             WHERE temp_email_id = ? AND provider_message_id = ?
             ",
-            params![temp_email_id, message_id],
-            temp_email_message_from_row,
-        ).optional().map_err(AppError::from)
+                params![temp_email_id, message_id],
+                temp_email_message_from_row,
+            )
+            .optional()
+            .map_err(AppError::from)
     }
 
-    pub fn list_temp_email_domains(&self, config: TempEmailProviderConfig) -> AppResult<Vec<String>> {
+    pub fn list_temp_email_domains(
+        &self,
+        config: TempEmailProviderConfig,
+    ) -> AppResult<Vec<String>> {
         self.require_unlocked()?;
-        let channel = config.cloudflare_channel_id.map(|id| self.cloudflare_channel_credentials(id)).transpose()?;
+        let channel = config
+            .cloudflare_channel_id
+            .map(|id| self.cloudflare_channel_credentials(id))
+            .transpose()?;
         temp_mail::list_domains(config, channel.as_ref())
     }
 
     pub fn list_cloudflare_channels(&self) -> AppResult<Vec<CloudflareChannel>> {
         self.require_unlocked()?;
         let mut statement = self.conn.prepare("SELECT id, name, worker_url, email_domains, enabled, admin_password_enc, created_at, updated_at FROM cloudflare_channels ORDER BY name COLLATE NOCASE")?;
-        let rows = statement.query_map([], |row| { let raw: String = row.get(3)?; let secret: String = row.get(5)?; Ok(CloudflareChannel { id: row.get(0)?, name: row.get(1)?, worker_url: row.get(2)?, email_domains: split_domains(&raw), enabled: row.get::<_, i64>(4)? != 0, has_admin_password: !secret.is_empty(), created_at: row.get(6)?, updated_at: row.get(7)? }) })?;
+        let rows = statement.query_map([], |row| {
+            let raw: String = row.get(3)?;
+            let secret: String = row.get(5)?;
+            Ok(CloudflareChannel {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                worker_url: row.get(2)?,
+                email_domains: split_domains(&raw),
+                enabled: row.get::<_, i64>(4)? != 0,
+                has_admin_password: !secret.is_empty(),
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
     }
 
-    pub fn save_cloudflare_channel(&self, input: SaveCloudflareChannelInput) -> AppResult<CloudflareChannel> {
+    pub fn save_cloudflare_channel(
+        &self,
+        input: SaveCloudflareChannelInput,
+    ) -> AppResult<CloudflareChannel> {
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
-        let name = input.name.trim(); let worker_url = normalize_worker_url(&input.worker_url)?;
-        if name.is_empty() { return Err(AppError::InvalidInput("channel name is required".to_string())); }
-        let domains = input.email_domains.iter().map(|item| item.trim().trim_start_matches('@').trim_end_matches('.').to_lowercase()).filter(|item| !item.is_empty()).collect::<HashSet<_>>().into_iter().collect::<Vec<_>>();
-        if domains.is_empty() { return Err(AppError::InvalidInput("at least one Cloudflare email domain is required".to_string())); }
+        let name = input.name.trim();
+        let worker_url = normalize_worker_url(&input.worker_url)?;
+        if name.is_empty() {
+            return Err(AppError::InvalidInput(
+                "channel name is required".to_string(),
+            ));
+        }
+        let domains = input
+            .email_domains
+            .iter()
+            .map(|item| {
+                item.trim()
+                    .trim_start_matches('@')
+                    .trim_end_matches('.')
+                    .to_lowercase()
+            })
+            .filter(|item| !item.is_empty())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if domains.is_empty() {
+            return Err(AppError::InvalidInput(
+                "at least one Cloudflare email domain is required".to_string(),
+            ));
+        }
         let enabled = input.enabled.unwrap_or(true);
         let id = if let Some(id) = input.id {
-            let existing_secret: String = self.conn.query_row("SELECT admin_password_enc FROM cloudflare_channels WHERE id = ?", [id], |row| row.get(0)).optional()?.ok_or_else(|| AppError::InvalidInput("Cloudflare channel not found".to_string()))?;
-            let secret = match input.admin_password.filter(|value| !value.is_empty()) { Some(value) => crypto::encrypt_text(&value, key)?, None => existing_secret };
-            self.conn.execute("UPDATE cloudflare_channels SET name = ?, worker_url = ?, admin_password_enc = ?, email_domains = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params![name, worker_url, secret, domains.join(","), enabled, id])?; id
+            let existing_secret: String = self
+                .conn
+                .query_row(
+                    "SELECT admin_password_enc FROM cloudflare_channels WHERE id = ?",
+                    [id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .ok_or_else(|| {
+                    AppError::InvalidInput("Cloudflare channel not found".to_string())
+                })?;
+            let secret = match input.admin_password.filter(|value| !value.is_empty()) {
+                Some(value) => crypto::encrypt_text(&value, key)?,
+                None => existing_secret,
+            };
+            self.conn.execute("UPDATE cloudflare_channels SET name = ?, worker_url = ?, admin_password_enc = ?, email_domains = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params![name, worker_url, secret, domains.join(","), enabled, id])?;
+            id
         } else {
-            let password = input.admin_password.filter(|value| !value.is_empty()).ok_or_else(|| AppError::InvalidInput("admin password is required".to_string()))?;
-            self.conn.execute("INSERT INTO cloudflare_channels (name, worker_url, admin_password_enc, email_domains, enabled) VALUES (?, ?, ?, ?, ?)", params![name, worker_url, crypto::encrypt_text(&password, key)?, domains.join(","), enabled])?; self.conn.last_insert_rowid()
+            let password = input
+                .admin_password
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| AppError::InvalidInput("admin password is required".to_string()))?;
+            self.conn.execute("INSERT INTO cloudflare_channels (name, worker_url, admin_password_enc, email_domains, enabled) VALUES (?, ?, ?, ?, ?)", params![name, worker_url, crypto::encrypt_text(&password, key)?, domains.join(","), enabled])?;
+            self.conn.last_insert_rowid()
         };
-        self.list_cloudflare_channels()?.into_iter().find(|item| item.id == id).ok_or_else(|| AppError::Internal("saved Cloudflare channel not found".to_string()))
+        self.list_cloudflare_channels()?
+            .into_iter()
+            .find(|item| item.id == id)
+            .ok_or_else(|| AppError::Internal("saved Cloudflare channel not found".to_string()))
     }
 
     pub fn delete_cloudflare_channel(&self, id: i64) -> AppResult<()> {
         self.require_unlocked()?;
-        let references: i64 = self.conn.query_row("SELECT COUNT(*) FROM temp_emails WHERE cloudflare_channel_id = ?", [id], |row| row.get(0))?;
-        if references > 0 { return Err(AppError::InvalidInput("Cloudflare channel is still used by temporary emails".to_string())); }
-        if self.conn.execute("DELETE FROM cloudflare_channels WHERE id = ?", [id])? == 0 { return Err(AppError::InvalidInput("Cloudflare channel not found".to_string())); }
+        let references: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM temp_emails WHERE cloudflare_channel_id = ?",
+            [id],
+            |row| row.get(0),
+        )?;
+        if references > 0 {
+            return Err(AppError::InvalidInput(
+                "Cloudflare channel is still used by temporary emails".to_string(),
+            ));
+        }
+        if self
+            .conn
+            .execute("DELETE FROM cloudflare_channels WHERE id = ?", [id])?
+            == 0
+        {
+            return Err(AppError::InvalidInput(
+                "Cloudflare channel not found".to_string(),
+            ));
+        }
         Ok(())
     }
 
     fn cloudflare_channel_credentials(&self, id: i64) -> AppResult<CloudflareChannelCredentials> {
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
         let row = self.conn.query_row("SELECT worker_url, admin_password_enc, email_domains, enabled FROM cloudflare_channels WHERE id = ?", [id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?))).optional()?.ok_or_else(|| AppError::InvalidInput("Cloudflare channel not found".to_string()))?;
-        if row.3 == 0 { return Err(AppError::InvalidInput("Cloudflare channel is disabled".to_string())); }
-        Ok(CloudflareChannelCredentials { worker_url: row.0, admin_password: crypto::decrypt_text(&row.1, key)?, domains: split_domains(&row.2) })
+        if row.3 == 0 {
+            return Err(AppError::InvalidInput(
+                "Cloudflare channel is disabled".to_string(),
+            ));
+        }
+        Ok(CloudflareChannelCredentials {
+            worker_url: row.0,
+            admin_password: crypto::decrypt_text(&row.1, key)?,
+            domains: split_domains(&row.2),
+        })
     }
 
     fn cloudflare_channel_id_by_name(&self, name: &str) -> AppResult<i64> {
-        let id = self.conn.query_row("SELECT id FROM cloudflare_channels WHERE name = ? COLLATE NOCASE AND enabled = 1", [name.trim()], |row| row.get(0)).optional()?;
-        id.ok_or_else(|| AppError::InvalidInput(format!("Cloudflare channel not found or disabled: {name}")))
+        let id = self
+            .conn
+            .query_row(
+                "SELECT id FROM cloudflare_channels WHERE name = ? COLLATE NOCASE AND enabled = 1",
+                [name.trim()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        id.ok_or_else(|| {
+            AppError::InvalidInput(format!("Cloudflare channel not found or disabled: {name}"))
+        })
     }
 
     fn initialize_schema(&mut self) -> AppResult<()> {
@@ -2703,6 +3206,27 @@ impl Database {
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS markdown_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                parent_id INTEGER,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(parent_id) REFERENCES markdown_categories(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS markdown_documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL DEFAULT '',
+                category_id INTEGER,
+                source_path TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(category_id) REFERENCES markdown_categories(id) ON DELETE SET NULL
+            );
+
             CREATE TABLE IF NOT EXISTS temp_emails (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -2751,6 +3275,10 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_messages_received ON retained_mail_messages(received_at_sort DESC);
             CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_workspace_key_records_created ON workspace_key_records(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_markdown_documents_category_updated
+                ON markdown_documents(category_id, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_markdown_documents_updated
+                ON markdown_documents(updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_temp_email_messages_mailbox_received
                 ON temp_email_messages(temp_email_id, received_at DESC);
             ",
@@ -2760,6 +3288,7 @@ impl Database {
         self.ensure_message_columns()?;
         self.ensure_share_columns()?;
         self.ensure_temp_mail_columns()?;
+        self.ensure_markdown_columns()?;
         self.prune_legacy_schema()?;
         Ok(())
     }
@@ -2790,8 +3319,12 @@ impl Database {
             "refresh_logs",
         ];
         const LEGACY_ACCOUNT_COLUMNS: &[&str] = &["forward_enabled", "forward_last_checked_at"];
-        const LEGACY_GROUP_COLUMNS: &[&str] =
-            &["color", "proxy_url", "fallback_proxy_url_1", "fallback_proxy_url_2"];
+        const LEGACY_GROUP_COLUMNS: &[&str] = &[
+            "color",
+            "proxy_url",
+            "fallback_proxy_url_1",
+            "fallback_proxy_url_2",
+        ];
         const LEGACY_CONFIG_KEYS: &[&str] = &[
             "webdav_url",
             "webdav_username",
@@ -2921,9 +3454,33 @@ impl Database {
 
     fn ensure_temp_mail_columns(&self) -> AppResult<()> {
         let columns = table_columns(&self.conn, "temp_emails")?;
-        if !columns.iter().any(|column| column == "cloudflare_channel_id") {
-            self.conn.execute("ALTER TABLE temp_emails ADD COLUMN cloudflare_channel_id INTEGER", [])?;
+        if !columns
+            .iter()
+            .any(|column| column == "cloudflare_channel_id")
+        {
+            self.conn.execute(
+                "ALTER TABLE temp_emails ADD COLUMN cloudflare_channel_id INTEGER",
+                [],
+            )?;
         }
+        Ok(())
+    }
+
+    fn ensure_markdown_columns(&self) -> AppResult<()> {
+        let columns = table_columns(&self.conn, "markdown_categories")?;
+        if !columns.iter().any(|column| column == "parent_id") {
+            self.conn.execute(
+                "ALTER TABLE markdown_categories ADD COLUMN parent_id INTEGER",
+                [],
+            )?;
+        }
+        self.conn.execute(
+            "
+            CREATE INDEX IF NOT EXISTS idx_markdown_categories_parent
+                ON markdown_categories(parent_id, sort_order)
+            ",
+            [],
+        )?;
         Ok(())
     }
 
@@ -3407,17 +3964,6 @@ impl Database {
         Ok(())
     }
 
-
-
-
-
-
-
-
-
-
-
-
     fn account_credentials(&self, account_id: Option<i64>) -> AppResult<Vec<AccountCredentials>> {
         let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
         let mut stmt = self.conn.prepare(
@@ -3678,26 +4224,6 @@ impl Database {
         )?;
         Ok(())
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     fn scheduler_due(
         &self,
@@ -4547,14 +5073,28 @@ fn account_provider_supports_capability(account: &AccountCredentials, capability
 }
 
 fn split_domains(value: &str) -> Vec<String> {
-    value.split(',').map(str::trim).filter(|item| !item.is_empty()).map(str::to_string).collect()
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn normalize_worker_url(value: &str) -> AppResult<String> {
     let raw = value.trim();
-    let candidate = if raw.starts_with("http://") || raw.starts_with("https://") { raw.to_string() } else { format!("https://{raw}") };
-    let url = reqwest::Url::parse(&candidate).map_err(|_| AppError::InvalidInput("Cloudflare Worker URL is invalid".to_string()))?;
-    if url.scheme() != "https" && url.scheme() != "http" { return Err(AppError::InvalidInput("Cloudflare Worker URL must use HTTP or HTTPS".to_string())); }
+    let candidate = if raw.starts_with("http://") || raw.starts_with("https://") {
+        raw.to_string()
+    } else {
+        format!("https://{raw}")
+    };
+    let url = reqwest::Url::parse(&candidate)
+        .map_err(|_| AppError::InvalidInput("Cloudflare Worker URL is invalid".to_string()))?;
+    if url.scheme() != "https" && url.scheme() != "http" {
+        return Err(AppError::InvalidInput(
+            "Cloudflare Worker URL must use HTTP or HTTPS".to_string(),
+        ));
+    }
     Ok(candidate.trim_end_matches('/').to_string())
 }
 
@@ -4566,33 +5106,66 @@ fn is_valid_email_address(value: &str) -> bool {
 
 fn cloudflare_import_header(value: &str) -> Option<Option<String>> {
     let trimmed = value.trim();
-    if !trimmed.starts_with('[') || !trimmed.ends_with(']') { return None; }
+    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+        return None;
+    }
     let inner = &trimmed[1..trimmed.len() - 1];
-    if inner.eq_ignore_ascii_case("cloudflare") { return Some(None); }
+    if inner.eq_ignore_ascii_case("cloudflare") {
+        return Some(None);
+    }
     let (prefix, name) = inner.split_once(':')?;
-    if !prefix.eq_ignore_ascii_case("cloudflare") { return None; }
+    if !prefix.eq_ignore_ascii_case("cloudflare") {
+        return None;
+    }
     Some(Some(name.trim().to_string()))
 }
 
 fn normalize_batch_usernames(values: Option<Vec<String>>, count: usize) -> AppResult<Vec<String>> {
     let Some(values) = values.filter(|items| !items.is_empty()) else {
-        return Ok((0..count).map(|_| format!("mail{}", Uuid::new_v4().simple().to_string().chars().take(10).collect::<String>())).collect());
+        return Ok((0..count)
+            .map(|_| {
+                format!(
+                    "mail{}",
+                    Uuid::new_v4()
+                        .simple()
+                        .to_string()
+                        .chars()
+                        .take(10)
+                        .collect::<String>()
+                )
+            })
+            .collect());
     };
     let mut usernames = Vec::new();
     let mut seen = HashSet::new();
     for value in values {
-        let local = value.trim().split('@').next().unwrap_or_default().to_lowercase();
-        let username = local.chars().filter(|ch| ch.is_ascii_alphanumeric()).take(32).collect::<String>();
+        let local = value
+            .trim()
+            .split('@')
+            .next()
+            .unwrap_or_default()
+            .to_lowercase();
+        let username = local
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .take(32)
+            .collect::<String>();
         if username.len() < 3 {
-            return Err(AppError::InvalidInput(format!("invalid batch username: {value}")));
+            return Err(AppError::InvalidInput(format!(
+                "invalid batch username: {value}"
+            )));
         }
         if !seen.insert(username.clone()) {
-            return Err(AppError::InvalidInput(format!("duplicate batch username: {username}")));
+            return Err(AppError::InvalidInput(format!(
+                "duplicate batch username: {username}"
+            )));
         }
         usernames.push(username);
     }
     if usernames.len() != count {
-        return Err(AppError::InvalidInput(format!("username count must equal requested count ({count})")));
+        return Err(AppError::InvalidInput(format!(
+            "username count must equal requested count ({count})"
+        )));
     }
     Ok(usernames)
 }
@@ -4896,13 +5469,6 @@ fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
-
-
-
-
-
-
-
 fn temp_email_message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TempEmailMessage> {
     Ok(TempEmailMessage {
         id: row.get(0)?,
@@ -4938,6 +5504,136 @@ fn mail_share_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MailS
     })
 }
 
+fn map_markdown_document_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MarkdownDocument> {
+    Ok(MarkdownDocument {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        content: row.get(2)?,
+        category_id: row.get(3)?,
+        category_name: row.get(4)?,
+        source_path: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
+}
+
+fn validate_markdown_category_name(value: &str) -> AppResult<&str> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(AppError::InvalidInput(
+            "markdown category name is required".to_string(),
+        ));
+    }
+    if value.chars().count() > 80 {
+        return Err(AppError::InvalidInput(
+            "markdown category name is too long".to_string(),
+        ));
+    }
+    Ok(value)
+}
+
+fn validate_markdown_parent(
+    conn: &Connection,
+    current_id: Option<i64>,
+    parent_id: Option<i64>,
+) -> AppResult<()> {
+    let Some(mut parent_id) = parent_id else {
+        return Ok(());
+    };
+    if current_id == Some(parent_id) {
+        return Err(AppError::InvalidInput(
+            "markdown folder cannot contain itself".to_string(),
+        ));
+    }
+    let mut depth = 1;
+    loop {
+        let next_parent = conn
+            .query_row(
+                "SELECT parent_id FROM markdown_categories WHERE id = ?",
+                [parent_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .optional()?
+            .ok_or_else(|| {
+                AppError::InvalidInput("markdown parent folder not found".to_string())
+            })?;
+        if current_id == Some(parent_id) {
+            return Err(AppError::InvalidInput(
+                "markdown folder cannot move under its descendant".to_string(),
+            ));
+        }
+        let Some(next_parent) = next_parent else {
+            break;
+        };
+        parent_id = next_parent;
+        depth += 1;
+        if depth >= 5 {
+            return Err(AppError::InvalidInput(
+                "markdown folders support at most 5 levels".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_markdown_title(value: &str) -> AppResult<&str> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(AppError::InvalidInput(
+            "markdown document title is required".to_string(),
+        ));
+    }
+    if value.chars().count() > 200 {
+        return Err(AppError::InvalidInput(
+            "markdown document title is too long".to_string(),
+        ));
+    }
+    Ok(value)
+}
+
+fn validate_markdown_content(value: String) -> AppResult<String> {
+    const MAX_MARKDOWN_BYTES: usize = 25 * 1024 * 1024;
+    if value.len() > MAX_MARKDOWN_BYTES {
+        return Err(AppError::InvalidInput(
+            "markdown document exceeds the 25 MB limit".to_string(),
+        ));
+    }
+    Ok(value)
+}
+
+fn validate_markdown_category_reference(
+    conn: &Connection,
+    category_id: Option<i64>,
+) -> AppResult<()> {
+    let Some(category_id) = category_id else {
+        return Ok(());
+    };
+    let exists = conn
+        .query_row(
+            "SELECT 1 FROM markdown_categories WHERE id = ?",
+            [category_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some();
+    if !exists {
+        return Err(AppError::InvalidInput(
+            "markdown category not found".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_markdown_source_path(value: Option<String>) -> Option<String> {
+    value.and_then(|path| {
+        let path = path.trim();
+        if path.is_empty() {
+            None
+        } else {
+            Some(path.to_string())
+        }
+    })
+}
 
 #[cfg(test)]
 mod project_tests {
@@ -4949,18 +5645,17 @@ mod project_tests {
     use crate::error::AppError;
     use crate::import::ImportedAccount;
     use crate::models::{
-        AccountBatchInput, AttachmentInfo, ClearLocalDataInput, CreateGroupInput, CreateMailShareInput,
-        DeleteMailMessagesInput, DownloadAllAttachmentsInput,
-        DownloadAttachmentInput, ExportAccountSecretsInput, ExportAccountsInput,
-        ExportMailMessagesInput, MailMessageQuery, MarkMailMessagesInput,
-        RefreshInput, RevealAccountSecretsInput, RevokeMailShareInput,
-        LoginInput, UpdateAccountInput, UpdateGroupInput,
-        GenerateWorkspaceKeyInput, UpdateWorkspaceKeyRecordInput,
-        ImportTempEmailsInput, SaveCloudflareChannelInput, TempEmailMessage,
+        AccountBatchInput, AttachmentInfo, ClearLocalDataInput, CreateGroupInput,
+        CreateMailShareInput, CreateMarkdownCategoryInput, CreateMarkdownDocumentInput,
+        DeleteMailMessagesInput, DownloadAllAttachmentsInput, DownloadAttachmentInput,
+        ExportAccountSecretsInput, ExportAccountsInput, ExportMailMessagesInput,
+        GenerateWorkspaceKeyInput, ImportTempEmailsInput, LoginInput, MailMessageQuery,
+        MarkMailMessagesInput, RefreshInput, RevealAccountSecretsInput, RevokeMailShareInput,
+        SaveCloudflareChannelInput, TempEmailMessage, UpdateAccountInput, UpdateGroupInput,
+        UpdateMarkdownCategoryInput, UpdateMarkdownDocumentInput, UpdateWorkspaceKeyRecordInput,
     };
     use rusqlite::{params, Connection};
     use std::path::PathBuf;
-
 
     #[test]
     fn local_desktop_workflow_covers_core_e2e_paths() {
@@ -5119,8 +5814,6 @@ mod project_tests {
         );
         assert!(normalize_oauth_provider(Some("qq")).is_err());
     }
-
-
 
     #[test]
     fn account_batch_updates_delete_and_selected_export() {
@@ -5282,8 +5975,10 @@ mod project_tests {
         let legacy_salt = crypto::random_salt();
         let legacy_hash = crypto::hash_password(legacy_password).expect("hash");
         let legacy_key = crypto::derive_key(legacy_password, &legacy_salt);
-        db.set_config("password_hash", &legacy_hash).expect("hash config");
-        db.set_config("crypto_salt", &legacy_salt).expect("salt config");
+        db.set_config("password_hash", &legacy_hash)
+            .expect("hash config");
+        db.set_config("crypto_salt", &legacy_salt)
+            .expect("salt config");
         db.crypto_key = Some(legacy_key);
         db.import_accounts(
             vec![ImportedAccount {
@@ -5304,10 +5999,15 @@ mod project_tests {
             password: legacy_password.to_string(),
         })
         .expect("legacy login migrates");
-        assert!(db.get_config("workspace_key_enc").expect("workspace key").is_some());
+        assert!(db
+            .get_config("workspace_key_enc")
+            .expect("workspace key")
+            .is_some());
         assert!(crypto::verify_password(
             "admin123",
-            &db.get_config("password_hash").expect("password hash").unwrap()
+            &db.get_config("password_hash")
+                .expect("password hash")
+                .unwrap()
         )
         .expect("verify default password"));
 
@@ -5357,7 +6057,9 @@ mod project_tests {
             crypto::workspace_key_fingerprint(&generated.workspace_key)
         );
 
-        let listed = db.list_workspace_key_records().expect("list workspace keys");
+        let listed = db
+            .list_workspace_key_records()
+            .expect("list workspace keys");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].purpose, "测试用途");
         assert_eq!(listed[0].key_fingerprint, generated.record.key_fingerprint);
@@ -5588,7 +6290,6 @@ mod project_tests {
         assert_eq!(promoted.parent_id, None);
         assert_eq!(promoted.level, 1);
     }
-
 
     #[test]
     fn mail_message_mark_and_delete_updates_local_cache() {
@@ -6182,10 +6883,14 @@ mod project_tests {
         assert!(!table_exists(&db.conn, "retry_queue").expect("retry table check"));
         assert!(!table_exists(&db.conn, "automation_runs").expect("automation table check"));
         assert!(table_exists(&db.conn, "temp_emails").expect("temp email table check"));
-        assert!(table_exists(&db.conn, "temp_email_messages").expect("temp message cache table check"));
+        assert!(
+            table_exists(&db.conn, "temp_email_messages").expect("temp message cache table check")
+        );
         let account_columns = table_columns(&db.conn, "accounts").expect("account columns");
         assert!(!account_columns.iter().any(|name| name == "forward_enabled"));
-        assert!(!account_columns.iter().any(|name| name == "forward_last_checked_at"));
+        assert!(!account_columns
+            .iter()
+            .any(|name| name == "forward_last_checked_at"));
         let legacy_config_count: i64 = db
             .conn
             .query_row(
@@ -6203,51 +6908,109 @@ mod project_tests {
     #[test]
     fn cloudflare_channels_encrypt_secrets_and_protect_references() {
         let conn = Connection::open_in_memory().expect("open memory db");
-        let mut db = Database { conn, db_path: PathBuf::from("memory.sqlite"), crypto_key: Some([7; 32]) };
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
         db.initialize_schema().expect("schema");
-        let channel = db.save_cloudflare_channel(SaveCloudflareChannelInput { id: None, name: "Primary".to_string(), worker_url: "worker.example.com".to_string(), admin_password: Some("secret-admin-password".to_string()), email_domains: vec!["mail.example.com".to_string()], enabled: Some(true) }).expect("save channel");
+        let channel = db
+            .save_cloudflare_channel(SaveCloudflareChannelInput {
+                id: None,
+                name: "Primary".to_string(),
+                worker_url: "worker.example.com".to_string(),
+                admin_password: Some("secret-admin-password".to_string()),
+                email_domains: vec!["mail.example.com".to_string()],
+                enabled: Some(true),
+            })
+            .expect("save channel");
         assert_eq!(channel.worker_url, "https://worker.example.com");
         assert!(channel.has_admin_password);
-        let encrypted: String = db.conn.query_row("SELECT admin_password_enc FROM cloudflare_channels WHERE id = ?", [channel.id], |row| row.get(0)).expect("encrypted password");
+        let encrypted: String = db
+            .conn
+            .query_row(
+                "SELECT admin_password_enc FROM cloudflare_channels WHERE id = ?",
+                [channel.id],
+                |row| row.get(0),
+            )
+            .expect("encrypted password");
         assert!(!encrypted.contains("secret-admin-password"));
         db.conn.execute("INSERT INTO temp_emails (email, provider, provider_base_url, cloudflare_channel_id) VALUES ('box@mail.example.com', 'cloudflare', 'https://worker.example.com', ?)", [channel.id]).expect("insert address");
-        assert!(matches!(db.delete_cloudflare_channel(channel.id), Err(AppError::InvalidInput(_))));
+        assert!(matches!(
+            db.delete_cloudflare_channel(channel.id),
+            Err(AppError::InvalidInput(_))
+        ));
     }
 
     #[test]
     fn imports_gptmail_addresses_and_updates_duplicates() {
         let conn = Connection::open_in_memory().expect("open memory db");
-        let mut db = Database { conn, db_path: PathBuf::from("memory.sqlite"), crypto_key: Some([7; 32]) };
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
         db.initialize_schema().expect("schema");
-        let first = db.import_temp_emails(ImportTempEmailsInput {
-            raw: "alpha@example.com\ninvalid\nbeta@example.com".to_string(), provider: "gptmail".to_string(),
-            base_url: Some("https://mail.example.test/".to_string()), api_key: Some("secret-key".to_string()), cloudflare_channel_id: None,
-        }).expect("first import");
+        let first = db
+            .import_temp_emails(ImportTempEmailsInput {
+                raw: "alpha@example.com\ninvalid\nbeta@example.com".to_string(),
+                provider: "gptmail".to_string(),
+                base_url: Some("https://mail.example.test/".to_string()),
+                api_key: Some("secret-key".to_string()),
+                cloudflare_channel_id: None,
+            })
+            .expect("first import");
         assert_eq!((first.imported, first.updated, first.skipped), (2, 0, 1));
-        let encrypted: String = db.conn.query_row("SELECT api_key_enc FROM temp_emails WHERE email = 'alpha@example.com'", [], |row| row.get(0)).expect("encrypted API key");
+        let encrypted: String = db
+            .conn
+            .query_row(
+                "SELECT api_key_enc FROM temp_emails WHERE email = 'alpha@example.com'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("encrypted API key");
         assert!(!encrypted.contains("secret-key"));
 
-        let second = db.import_temp_emails(ImportTempEmailsInput {
-            raw: "ALPHA@example.com".to_string(), provider: "gptmail".to_string(),
-            base_url: None, api_key: None, cloudflare_channel_id: None,
-        }).expect("duplicate import");
+        let second = db
+            .import_temp_emails(ImportTempEmailsInput {
+                raw: "ALPHA@example.com".to_string(),
+                provider: "gptmail".to_string(),
+                base_url: None,
+                api_key: None,
+                cloudflare_channel_id: None,
+            })
+            .expect("duplicate import");
         assert_eq!((second.imported, second.updated), (0, 1));
         assert_eq!(db.list_temp_emails().expect("list").len(), 2);
     }
 
     #[test]
     fn validates_cloudflare_batch_usernames_and_import_headers() {
-        let usernames = normalize_batch_usernames(Some(vec!["Alpha".to_string(), "sales.ops@example.com".to_string()]), 2).expect("usernames");
+        let usernames = normalize_batch_usernames(
+            Some(vec![
+                "Alpha".to_string(),
+                "sales.ops@example.com".to_string(),
+            ]),
+            2,
+        )
+        .expect("usernames");
         assert_eq!(usernames, vec!["alpha", "salesops"]);
         assert!(normalize_batch_usernames(Some(vec!["only-one".to_string()]), 2).is_err());
-        assert_eq!(cloudflare_import_header("[cloudflare:Primary]"), Some(Some("Primary".to_string())));
+        assert_eq!(
+            cloudflare_import_header("[cloudflare:Primary]"),
+            Some(Some("Primary".to_string()))
+        );
         assert_eq!(cloudflare_import_header("box@example.com"), None);
     }
 
     #[test]
     fn caches_temporary_messages_in_sqlite() {
         let conn = Connection::open_in_memory().expect("open memory db");
-        let mut db = Database { conn, db_path: PathBuf::from("memory.sqlite"), crypto_key: Some([7; 32]) };
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
         db.initialize_schema().expect("schema");
         db.conn.execute(
             "INSERT INTO temp_emails (email, provider, provider_base_url) VALUES ('cache@example.com', 'gptmail', 'https://mail.example.test')",
@@ -6267,19 +7030,151 @@ mod project_tests {
 
         db.cache_temp_email_messages(temp_email_id, std::slice::from_ref(&message))
             .expect("cache message");
-        let cached = db.list_temp_email_messages(temp_email_id).expect("list cached messages");
+        let cached = db
+            .list_temp_email_messages(temp_email_id)
+            .expect("list cached messages");
         assert_eq!(cached.len(), 1);
         assert_eq!(cached[0].body.as_deref(), Some("Full cached body"));
         let mailbox = db.get_temp_email(temp_email_id).expect("mailbox");
         assert_eq!(mailbox.message_count, 1);
         assert!(mailbox.last_checked_at.is_some());
 
-        db.conn.execute("DELETE FROM temp_emails WHERE id = ?", [temp_email_id]).expect("delete mailbox");
-        let remaining: i64 = db.conn.query_row(
-            "SELECT COUNT(*) FROM temp_email_messages WHERE temp_email_id = ?",
-            [temp_email_id],
-            |row| row.get(0),
-        ).expect("cached message count");
+        db.conn
+            .execute("DELETE FROM temp_emails WHERE id = ?", [temp_email_id])
+            .expect("delete mailbox");
+        let remaining: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM temp_email_messages WHERE temp_email_id = ?",
+                [temp_email_id],
+                |row| row.get(0),
+            )
+            .expect("cached message count");
         assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn migrates_existing_markdown_category_schema_before_creating_parent_index() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        conn.execute_batch(
+            "
+            CREATE TABLE markdown_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO markdown_categories (name, sort_order) VALUES ('旧笔记', 0);
+            ",
+        )
+        .expect("legacy markdown schema");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+
+        db.initialize_schema().expect("migrate schema");
+
+        let columns = table_columns(&db.conn, "markdown_categories").expect("category columns");
+        assert!(columns.iter().any(|column| column == "parent_id"));
+        let index_count: i64 = db
+            .conn
+            .query_row(
+                "
+                SELECT COUNT(*)
+                FROM sqlite_master
+                WHERE type = 'index' AND name = 'idx_markdown_categories_parent'
+                ",
+                [],
+                |row| row.get(0),
+            )
+            .expect("parent index");
+        assert_eq!(index_count, 1);
+        let category = db
+            .list_markdown_categories()
+            .expect("legacy category retained");
+        assert_eq!(category.len(), 1);
+        assert_eq!(category[0].name, "旧笔记");
+        assert!(category[0].parent_id.is_none());
+    }
+
+    #[test]
+    fn manages_markdown_library_categories_documents_and_search() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+
+        let category = db
+            .create_markdown_category(CreateMarkdownCategoryInput {
+                name: "工作笔记".to_string(),
+                parent_id: None,
+            })
+            .expect("create category");
+        let child_category = db
+            .create_markdown_category(CreateMarkdownCategoryInput {
+                name: "发布资料".to_string(),
+                parent_id: Some(category.id),
+            })
+            .expect("create nested category");
+        assert_eq!(child_category.parent_id, Some(category.id));
+        let document = db
+            .create_markdown_document(CreateMarkdownDocumentInput {
+                title: Some("发布清单".to_string()),
+                content: Some("# 发布\n\n- [ ] 构建安装包".to_string()),
+                category_id: Some(child_category.id),
+                source_path: Some("C:\\notes\\release.md".to_string()),
+            })
+            .expect("create document");
+        assert_eq!(document.category_name.as_deref(), Some("发布资料"));
+        assert_eq!(
+            document.source_path.as_deref(),
+            Some("C:\\notes\\release.md")
+        );
+
+        let search_results = db
+            .list_markdown_documents(None, Some("安装包".to_string()))
+            .expect("search documents");
+        assert_eq!(search_results.len(), 1);
+        assert_eq!(search_results[0].id, document.id);
+
+        let updated = db
+            .update_markdown_document(UpdateMarkdownDocumentInput {
+                id: document.id,
+                title: "发布清单 v2".to_string(),
+                content: "# 发布\n\n- [x] 构建安装包".to_string(),
+                category_id: Some(child_category.id),
+                source_path: None,
+            })
+            .expect("update document");
+        assert!(updated.content.contains("[x]"));
+        assert!(updated.source_path.is_none());
+
+        let renamed = db
+            .update_markdown_category(UpdateMarkdownCategoryInput {
+                id: category.id,
+                name: "项目文档".to_string(),
+                parent_id: None,
+                sort_order: Some(2),
+            })
+            .expect("rename category");
+        assert_eq!(renamed.name, "项目文档");
+        assert_eq!(renamed.document_count, 0);
+
+        db.delete_markdown_category(category.id)
+            .expect("delete category");
+        let uncategorized = db
+            .get_markdown_document(document.id)
+            .expect("document retained");
+        assert!(uncategorized.category_id.is_none());
+
+        db.delete_markdown_document(document.id)
+            .expect("delete document");
+        assert!(db.get_markdown_document(document.id).is_err());
     }
 }

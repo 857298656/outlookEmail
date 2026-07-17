@@ -10,7 +10,7 @@ The application is a single-user local desktop app. It does not expose a public 
 
 - React/Vite renders the desktop UI.
 - Tauri commands are the boundary between UI and native services.
-- SQLite stores configuration, accounts, temporary mailbox metadata, cached mail metadata/body content, share exports, workspace keys, and audit logs.
+- SQLite stores configuration, accounts, temporary mailbox metadata, cached mail metadata/body content, Markdown documents/categories, share exports, workspace keys, and audit logs.
 - Secrets are encrypted with AES-GCM using a key derived from the local app password.
 
 ## Implemented modules
@@ -32,6 +32,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Background scheduler inside the desktop process (mail refresh only)
 - Provider registry, readiness checks, failure hints, and credential error classification
 - Workspace key records for local operational secrets
+- Markdown workspace with SQLite-backed documents/nested folders, title/body filtering, revision-safe debounced autosave, a Milkdown Crepe WYSIWYG editor, embedded pasted/dropped images, and native `.md` / `.markdown` open/import/save/folder-export flows; the workspace shell and Crepe runtime are loaded as separate lazy frontend chunks
 - GPTMail, DuckMail, and Cloudflare Temp Email management through native Tauri commands, including chunked provider-aware batch import with visible progress, Cloudflare batch generation (1–50 addresses with partial-failure results), and SQLite message caching; provider credentials remain encrypted locally and received HTML uses the existing sandbox renderer
 - Windows executable and NSIS bundle generation
 
@@ -66,7 +67,7 @@ The application is a single-user local desktop app. It does not expose a public 
 
 ## Schema maintenance
 
-- On startup, `Database::initialize_schema()` creates the current tables and then runs `prune_legacy_schema()`.
+- On startup, `Database::initialize_schema()` creates the current tables, including nested `markdown_categories` and `markdown_documents`, applies additive Markdown column migration, and then runs `prune_legacy_schema()`.
 - That migration preserves the current `temp_emails` and `temp_email_messages` tables while dropping obsolete forwarding/backup logs, automation history, retry queue, and project-pool tables. It also deletes obsolete `app_config` keys and unused `accounts` columns such as `forward_enabled`.
 - The prune step is idempotent and safe to rerun on every launch.
 

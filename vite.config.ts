@@ -12,7 +12,8 @@ export default defineConfig({
   build: {
     target: "es2022",
     minify: !process.env.TAURI_DEBUG,
-    sourcemap: Boolean(process.env.TAURI_DEBUG)
+    sourcemap: Boolean(process.env.TAURI_DEBUG),
+    chunkSizeWarningLimit: 700
   },
   test: {
     environment: "jsdom",

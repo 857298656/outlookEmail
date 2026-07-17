@@ -162,6 +162,40 @@ export type JobResult = {
   failed: number;
 };
 
+export type MarkdownCategory = {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  sort_order: number;
+  document_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MarkdownDocument = {
+  id: number;
+  title: string;
+  content: string;
+  category_id: number | null;
+  category_name: string | null;
+  source_path: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MarkdownFileContent = {
+  path: string;
+  file_name: string;
+  content: string;
+  size: number;
+};
+
+export type MarkdownFileWriteResult = {
+  path: string;
+  file_name: string;
+  size: number;
+};
+
 export type LocalRetentionSummary = {
   database_path: string;
   database_size: number;

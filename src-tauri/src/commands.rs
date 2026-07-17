@@ -168,6 +168,12 @@ pub fn list_temp_email_messages(state: State<'_, AppState>, temp_email_id: i64) 
 }
 
 #[tauri::command]
+pub fn refresh_temp_email_messages(state: State<'_, AppState>, temp_email_id: i64) -> AppResult<Vec<TempEmailMessage>> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.refresh_temp_email_messages(temp_email_id)
+}
+
+#[tauri::command]
 pub fn get_temp_email_message(state: State<'_, AppState>, temp_email_id: i64, message_id: String) -> AppResult<TempEmailMessage> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.get_temp_email_message(temp_email_id, &message_id)

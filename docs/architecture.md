@@ -32,8 +32,8 @@ The application is a single-user local desktop app. It does not expose a public 
 - Background scheduler inside the desktop process (mail refresh only)
 - Provider registry, readiness checks, failure hints, and credential error classification
 - Workspace key records for local operational secrets
-- GPTMail, DuckMail, and Cloudflare Temp Email management through native Tauri commands, including provider-aware batch import and Cloudflare batch generation (1–50 addresses with partial-failure results); provider credentials remain encrypted locally and received HTML uses the existing sandbox renderer
-- Windows executable, MSI, and NSIS bundle generation
+- GPTMail, DuckMail, and Cloudflare Temp Email management through native Tauri commands, including chunked provider-aware batch import with visible progress, Cloudflare batch generation (1–50 addresses with partial-failure results), and SQLite message caching; provider credentials remain encrypted locally and received HTML uses the existing sandbox renderer
+- Windows executable and NSIS bundle generation
 
 ## Provider behavior
 
@@ -49,7 +49,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - IMAP sync stores the raw RFC822 MIME for cached messages so attachment downloads can be resolved locally from SQLite-backed cache data without another network fetch.
 - IMAP message read/unread and delete actions use UID flag updates; delete applies `\Deleted` and expunges the selected mailbox. Failed IMAP flag/delete operations are reported in job results.
 - HTML message bodies are sanitized for active content and rendered in a no-script sandboxed iframe with a restrictive content security policy instead of being inserted into the main React DOM.
-- Temporary mail is provider-backed rather than a local SMTP receiver. GPTMail uses its API key endpoints; DuckMail creates or imports an account, stores its password/token encrypted, discovers verified domains, and reads messages through its bearer-token API. Cloudflare channels store a Worker URL, encrypted administrator password, enabled state, and allowed domains; address creation, batch generation, import, and deletion use the Worker administrator endpoints, while received raw MIME from `/admin/mails` is parsed locally before rendering. Batch import accepts one GPTMail address per line, `address----password` for DuckMail, and Cloudflare channel sections such as `[cloudflare:channel name]`; existing addresses are updated in place.
+- Temporary mail is provider-backed rather than a local SMTP receiver. GPTMail uses its API key endpoints; DuckMail creates or imports an account, stores its password/token encrypted, discovers verified domains, and reads messages through its bearer-token API. Cloudflare channels store a Worker URL, encrypted administrator password, enabled state, and allowed domains; address creation, batch generation, import, and deletion use the Worker administrator endpoints, while received raw MIME from `/admin/mails` is parsed locally before rendering. Batch import accepts one GPTMail address per line, `address----password` for DuckMail, and Cloudflare channel sections such as `[cloudflare:channel name]`; the UI submits fixed-size chunks and displays chunk progress. Message lists and fetched bodies are upserted into SQLite before being shown; cached messages remain readable when a later provider refresh fails.
 - Mail list rows and preview headers use `formatMailPreview` / `formatMessageListPreview` to strip tags, inline CSS blocks, and HTML entities from snippet text before display.
 - The mailbox detail experience is a modal preview dialog with read/unread actions, raw MIME view, share/export shortcuts, and active share records.
 - Mailbox search runs against the local SQLite cache and supports free text plus field tokens for sender, recipients, subject, body, folder, read state, attachments, and provider message id. Sorting is validated server-side before being applied to SQL.
@@ -67,7 +67,7 @@ The application is a single-user local desktop app. It does not expose a public 
 ## Schema maintenance
 
 - On startup, `Database::initialize_schema()` creates the current tables and then runs `prune_legacy_schema()`.
-- That migration preserves the current `temp_emails` table while dropping obsolete temporary-message cache, forwarding/backup logs, automation history, retry queue, and project-pool tables. It also deletes obsolete `app_config` keys and unused `accounts` columns such as `forward_enabled`.
+- That migration preserves the current `temp_emails` and `temp_email_messages` tables while dropping obsolete forwarding/backup logs, automation history, retry queue, and project-pool tables. It also deletes obsolete `app_config` keys and unused `accounts` columns such as `forward_enabled`.
 - The prune step is idempotent and safe to rerun on every launch.
 
 ## Build dependencies

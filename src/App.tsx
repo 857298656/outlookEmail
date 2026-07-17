@@ -50,6 +50,7 @@ import { buildSandboxedEmailHtml } from "./lib/emailHtml";
 import { formatMessageListPreview } from "./lib/mailPreview";
 import { extractVerificationCode } from "./lib/verificationCode";
 import { parseAccountRows, rawWithDefaultProvider } from "./lib/importParser";
+import { buildTempEmailImportChunks } from "./lib/tempEmailImport";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import {
   accountProviderDefinition,
@@ -1066,17 +1067,46 @@ function App() {
             tempEmails={tempEmails}
             cloudflareChannels={cloudflareChannels}
             busy={busy}
+            onMailboxRefreshed={(tempEmailId, messageCount) =>
+              setTempEmails((current) =>
+                current.map((item) =>
+                  item.id === tempEmailId
+                    ? { ...item, message_count: messageCount, last_checked_at: new Date().toISOString() }
+                    : item
+                )
+              )
+            }
             onGenerate={(input) => runAction(async () => {
               const created = await api.generateTempEmail(input);
               setTempEmails(await api.listTempEmails());
               setNotice(`临时邮箱已创建：${created.email}`);
             }, undefined, "正在创建临时邮箱...")}
             onImport={(input) => runAction(async () => {
-              const result = await api.importTempEmails(input);
+              const chunks = buildTempEmailImportChunks(input.raw, input.provider);
+              if (chunks.length === 0) throw new Error("没有找到可导入的临时邮箱");
+              const summary = {
+                imported: 0,
+                updated: 0,
+                skipped: 0,
+                tokenFailures: 0,
+                errors: 0
+              };
+              for (const [index, raw] of chunks.entries()) {
+                setBusyMessage(`正在分块导入临时邮箱：${index + 1}/${chunks.length}`);
+                const result = await api.importTempEmails({ ...input, raw });
+                summary.imported += result.imported;
+                summary.updated += result.updated;
+                summary.skipped += result.skipped;
+                summary.tokenFailures += result.token_failures.length;
+                summary.errors += result.errors.length;
+              }
               setTempEmails(await api.listTempEmails());
-              const details = [result.token_failures.length ? `${result.token_failures.length} 个 Token 获取失败` : "", result.errors.length ? `${result.errors.length} 个格式/渠道错误` : ""].filter(Boolean).join("，");
-              setNotice(`批量导入完成：新增 ${result.imported}，更新 ${result.updated}，跳过 ${result.skipped}${details ? `；${details}` : ""}`);
-            }, undefined, "正在批量导入临时邮箱...")}
+              const details = [
+                summary.tokenFailures ? `${summary.tokenFailures} 个 Token 获取失败` : "",
+                summary.errors ? `${summary.errors} 个格式/渠道错误` : ""
+              ].filter(Boolean).join("，");
+              setNotice(`分块导入完成：${chunks.length} 块，新增 ${summary.imported}，更新 ${summary.updated}，跳过 ${summary.skipped}${details ? `；${details}` : ""}`);
+            }, undefined, "正在准备分块导入...")}
             onGenerateBatch={(input) => runAction(async () => {
               const result = await api.generateTempEmailsBatch(input);
               setTempEmails(await api.listTempEmails());
@@ -2120,10 +2150,11 @@ function groupSubtreeDepth(groups: Group[], groupId: number): number {
   return 1 + Math.max(...children.map((group) => groupSubtreeDepth(groups, group.id)));
 }
 
-function TempEmailView({ tempEmails, cloudflareChannels, busy, onGenerate, onImport, onGenerateBatch, onDelete, onSaveCloudflareChannel, onDeleteCloudflareChannel }: {
+function TempEmailView({ tempEmails, cloudflareChannels, busy, onMailboxRefreshed, onGenerate, onImport, onGenerateBatch, onDelete, onSaveCloudflareChannel, onDeleteCloudflareChannel }: {
   tempEmails: TempEmail[];
   cloudflareChannels: CloudflareChannel[];
   busy: boolean;
+  onMailboxRefreshed: (tempEmailId: number, messageCount: number) => void;
   onGenerate: (input: GenerateTempEmailInput) => void;
   onImport: (input: ImportTempEmailsInput) => void;
   onGenerateBatch: (input: GenerateTempEmailsBatchInput) => void;
@@ -2151,8 +2182,21 @@ function TempEmailView({ tempEmails, cloudflareChannels, busy, onGenerate, onImp
     setMessage(undefined);
     setLoadingMessages(true);
     setLocalError("");
-    try { setMessages(await api.listTempEmailMessages(item.id)); }
-    catch (err) { setLocalError(readError(err)); setMessages([]); }
+    let cachedMessages: TempEmailMessage[] = [];
+    try {
+      cachedMessages = await api.listTempEmailMessages(item.id);
+      setMessages(cachedMessages);
+      const refreshedMessages = await api.refreshTempEmailMessages(item.id);
+      setMessages(refreshedMessages);
+      onMailboxRefreshed(item.id, refreshedMessages.length);
+    } catch (err) {
+      setLocalError(
+        cachedMessages.length > 0
+          ? `刷新失败，当前显示 SQLite 本地缓存：${readError(err)}`
+          : readError(err)
+      );
+      if (cachedMessages.length === 0) setMessages([]);
+    }
     finally { setLoadingMessages(false); }
   }
 

@@ -573,6 +573,7 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       return { created_count: emails.length, failed_count: 0, emails, failures: [] } as T;
     }
     case "list_temp_email_messages":
+    case "refresh_temp_email_messages":
       return [] as T;
     case "list_temp_email_domains":
       return ((args?.input as { provider?: string; cloudflare_channel_id?: number })?.provider === "cloudflare" ? mockCloudflareChannels.find((item) => item.id === (args?.input as { cloudflare_channel_id?: number }).cloudflare_channel_id)?.email_domains ?? [] : ["duckmail.sbs", "example.duckmail.sbs"]) as T;
@@ -933,6 +934,8 @@ export const api = {
   deleteCloudflareChannel: (channelId: number) => call<void>("delete_cloudflare_channel", { channelId }),
   listTempEmailMessages: (tempEmailId: number) =>
     call<import("./types").TempEmailMessage[]>("list_temp_email_messages", { tempEmailId }),
+  refreshTempEmailMessages: (tempEmailId: number) =>
+    call<import("./types").TempEmailMessage[]>("refresh_temp_email_messages", { tempEmailId }),
   getTempEmailMessage: (tempEmailId: number, messageId: string) =>
     call<import("./types").TempEmailMessage>("get_temp_email_message", { tempEmailId, messageId }),
   deleteTempEmail: (tempEmailId: number) => call<void>("delete_temp_email", { tempEmailId })

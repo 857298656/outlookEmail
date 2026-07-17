@@ -2139,9 +2139,15 @@ impl Database {
         let mut freed_bytes = 0_i64;
 
         if clear_mail_cache {
-            deleted_messages = self.scalar_count("SELECT COUNT(*) FROM retained_mail_messages")?;
+            deleted_messages = self.scalar_count("SELECT COUNT(*) FROM retained_mail_messages")?
+                + self.scalar_count("SELECT COUNT(*) FROM temp_email_messages")?;
             self.conn
                 .execute("DELETE FROM retained_mail_messages", [])?;
+            self.conn.execute("DELETE FROM temp_email_messages", [])?;
+            self.conn.execute(
+                "UPDATE temp_emails SET message_count = 0, last_checked_at = NULL, updated_at = CURRENT_TIMESTAMP",
+                [],
+            )?;
         }
         if clear_attachments {
             let (files, bytes) = remove_dir_contents(&attachment_dir(&self.db_path)?)?;
@@ -2397,15 +2403,28 @@ impl Database {
     }
 
     pub fn list_temp_email_messages(&self, temp_email_id: i64) -> AppResult<Vec<TempEmailMessage>> {
+        self.require_unlocked()?;
+        self.get_temp_email(temp_email_id)?;
+        self.cached_temp_email_messages(temp_email_id)
+    }
+
+    pub fn refresh_temp_email_messages(&self, temp_email_id: i64) -> AppResult<Vec<TempEmailMessage>> {
         let mailbox = self.temp_mailbox_credentials(temp_email_id)?;
         let messages = temp_mail::list_messages(&mailbox)?;
-        self.conn.execute("UPDATE temp_emails SET message_count = ?, last_checked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params![messages.len() as i64, temp_email_id])?;
-        Ok(messages)
+        self.cache_temp_email_messages(temp_email_id, &messages)?;
+        self.cached_temp_email_messages(temp_email_id)
     }
 
     pub fn get_temp_email_message(&self, temp_email_id: i64, message_id: &str) -> AppResult<TempEmailMessage> {
         if message_id.trim().is_empty() { return Err(AppError::InvalidInput("message id is required".to_string())); }
-        temp_mail::get_message(&self.temp_mailbox_credentials(temp_email_id)?, message_id)
+        if let Some(message) = self.cached_temp_email_message(temp_email_id, message_id)? {
+            if message.body.as_deref().is_some_and(|body| !body.is_empty()) {
+                return Ok(message);
+            }
+        }
+        let message = temp_mail::get_message(&self.temp_mailbox_credentials(temp_email_id)?, message_id)?;
+        self.cache_temp_email_messages(temp_email_id, std::slice::from_ref(&message))?;
+        Ok(message)
     }
 
     pub fn delete_temp_email(&self, temp_email_id: i64) -> AppResult<()> {
@@ -2434,6 +2453,81 @@ impl Database {
         let password = crypto::decrypt_text(&row.4, key)?;
         let cloudflare_channel = row.7.map(|channel_id| self.cloudflare_channel_credentials(channel_id)).transpose()?;
         Ok(TempMailboxCredentials { email: row.0, provider: row.1, base_url: row.2, api_key: crypto::decrypt_text(&row.3, key)?, password, token: crypto::decrypt_text(&row.5, key)?, account_id: row.6, cloudflare_channel })
+    }
+
+    fn cache_temp_email_messages(&self, temp_email_id: i64, messages: &[TempEmailMessage]) -> AppResult<()> {
+        self.get_temp_email(temp_email_id)?;
+        for message in messages {
+            self.conn.execute(
+                "
+                INSERT INTO temp_email_messages (
+                    temp_email_id, provider_message_id, sender, recipients, subject,
+                    body_preview, body, body_type, received_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(temp_email_id, provider_message_id) DO UPDATE SET
+                    sender = excluded.sender,
+                    recipients = excluded.recipients,
+                    subject = excluded.subject,
+                    body_preview = excluded.body_preview,
+                    body = CASE
+                        WHEN excluded.body IS NOT NULL AND excluded.body != '' THEN excluded.body
+                        ELSE temp_email_messages.body
+                    END,
+                    body_type = excluded.body_type,
+                    received_at = excluded.received_at,
+                    updated_at = CURRENT_TIMESTAMP
+                ",
+                params![
+                    temp_email_id,
+                    message.id,
+                    message.sender,
+                    message.recipients,
+                    message.subject,
+                    message.body_preview,
+                    message.body,
+                    message.body_type,
+                    message.received_at,
+                ],
+            )?;
+        }
+        let cached_count = self.conn.query_row(
+            "SELECT COUNT(*) FROM temp_email_messages WHERE temp_email_id = ?",
+            [temp_email_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        self.conn.execute(
+            "UPDATE temp_emails SET message_count = ?, last_checked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            params![cached_count, temp_email_id],
+        )?;
+        Ok(())
+    }
+
+    fn cached_temp_email_messages(&self, temp_email_id: i64) -> AppResult<Vec<TempEmailMessage>> {
+        let mut statement = self.conn.prepare(
+            "
+            SELECT provider_message_id, sender, recipients, subject, body_preview,
+                   body, body_type, received_at
+            FROM temp_email_messages
+            WHERE temp_email_id = ?
+            ORDER BY received_at DESC, id DESC
+            ",
+        )?;
+        let rows = statement.query_map([temp_email_id], temp_email_message_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+    }
+
+    fn cached_temp_email_message(&self, temp_email_id: i64, message_id: &str) -> AppResult<Option<TempEmailMessage>> {
+        self.conn.query_row(
+            "
+            SELECT provider_message_id, sender, recipients, subject, body_preview,
+                   body, body_type, received_at
+            FROM temp_email_messages
+            WHERE temp_email_id = ? AND provider_message_id = ?
+            ",
+            params![temp_email_id, message_id],
+            temp_email_message_from_row,
+        ).optional().map_err(AppError::from)
     }
 
     pub fn list_temp_email_domains(&self, config: TempEmailProviderConfig) -> AppResult<Vec<String>> {
@@ -2624,6 +2718,23 @@ impl Database {
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS temp_email_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                temp_email_id INTEGER NOT NULL,
+                provider_message_id TEXT NOT NULL,
+                sender TEXT NOT NULL DEFAULT '',
+                recipients TEXT NOT NULL DEFAULT '',
+                subject TEXT NOT NULL DEFAULT '',
+                body_preview TEXT NOT NULL DEFAULT '',
+                body TEXT,
+                body_type TEXT NOT NULL DEFAULT 'text',
+                received_at TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(temp_email_id, provider_message_id),
+                FOREIGN KEY(temp_email_id) REFERENCES temp_emails(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS cloudflare_channels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -2640,6 +2751,8 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_messages_received ON retained_mail_messages(received_at_sort DESC);
             CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_workspace_key_records_created ON workspace_key_records(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_temp_email_messages_mailbox_received
+                ON temp_email_messages(temp_email_id, received_at DESC);
             ",
         )?;
         self.ensure_default_data()?;
@@ -2675,7 +2788,6 @@ impl Database {
             "forwarding_logs",
             "backup_logs",
             "refresh_logs",
-            "temp_email_messages",
         ];
         const LEGACY_ACCOUNT_COLUMNS: &[&str] = &["forward_enabled", "forward_last_checked_at"];
         const LEGACY_GROUP_COLUMNS: &[&str] =
@@ -4791,6 +4903,19 @@ fn crc32(bytes: &[u8]) -> u32 {
 
 
 
+fn temp_email_message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TempEmailMessage> {
+    Ok(TempEmailMessage {
+        id: row.get(0)?,
+        sender: row.get(1)?,
+        recipients: row.get(2)?,
+        subject: row.get(3)?,
+        body_preview: row.get(4)?,
+        body: row.get(5)?,
+        body_type: row.get(6)?,
+        received_at: row.get(7)?,
+    })
+}
+
 fn mail_share_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MailShareRecord> {
     let token_hash = row.get::<_, String>(4)?;
     let expires_at = row.get::<_, Option<String>>(9)?;
@@ -4831,7 +4956,7 @@ mod project_tests {
         RefreshInput, RevealAccountSecretsInput, RevokeMailShareInput,
         LoginInput, UpdateAccountInput, UpdateGroupInput,
         GenerateWorkspaceKeyInput, UpdateWorkspaceKeyRecordInput,
-        ImportTempEmailsInput, SaveCloudflareChannelInput,
+        ImportTempEmailsInput, SaveCloudflareChannelInput, TempEmailMessage,
     };
     use rusqlite::{params, Connection};
     use std::path::PathBuf;
@@ -6057,6 +6182,7 @@ mod project_tests {
         assert!(!table_exists(&db.conn, "retry_queue").expect("retry table check"));
         assert!(!table_exists(&db.conn, "automation_runs").expect("automation table check"));
         assert!(table_exists(&db.conn, "temp_emails").expect("temp email table check"));
+        assert!(table_exists(&db.conn, "temp_email_messages").expect("temp message cache table check"));
         let account_columns = table_columns(&db.conn, "accounts").expect("account columns");
         assert!(!account_columns.iter().any(|name| name == "forward_enabled"));
         assert!(!account_columns.iter().any(|name| name == "forward_last_checked_at"));
@@ -6116,5 +6242,44 @@ mod project_tests {
         assert!(normalize_batch_usernames(Some(vec!["only-one".to_string()]), 2).is_err());
         assert_eq!(cloudflare_import_header("[cloudflare:Primary]"), Some(Some("Primary".to_string())));
         assert_eq!(cloudflare_import_header("box@example.com"), None);
+    }
+
+    #[test]
+    fn caches_temporary_messages_in_sqlite() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database { conn, db_path: PathBuf::from("memory.sqlite"), crypto_key: Some([7; 32]) };
+        db.initialize_schema().expect("schema");
+        db.conn.execute(
+            "INSERT INTO temp_emails (email, provider, provider_base_url) VALUES ('cache@example.com', 'gptmail', 'https://mail.example.test')",
+            [],
+        ).expect("insert temporary mailbox");
+        let temp_email_id = db.conn.last_insert_rowid();
+        let message = TempEmailMessage {
+            id: "provider-message-1".to_string(),
+            sender: "sender@example.com".to_string(),
+            recipients: "cache@example.com".to_string(),
+            subject: "Cached message".to_string(),
+            body_preview: "Preview".to_string(),
+            body: Some("Full cached body".to_string()),
+            body_type: "text".to_string(),
+            received_at: "2026-07-17T10:00:00Z".to_string(),
+        };
+
+        db.cache_temp_email_messages(temp_email_id, std::slice::from_ref(&message))
+            .expect("cache message");
+        let cached = db.list_temp_email_messages(temp_email_id).expect("list cached messages");
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].body.as_deref(), Some("Full cached body"));
+        let mailbox = db.get_temp_email(temp_email_id).expect("mailbox");
+        assert_eq!(mailbox.message_count, 1);
+        assert!(mailbox.last_checked_at.is_some());
+
+        db.conn.execute("DELETE FROM temp_emails WHERE id = ?", [temp_email_id]).expect("delete mailbox");
+        let remaining: i64 = db.conn.query_row(
+            "SELECT COUNT(*) FROM temp_email_messages WHERE temp_email_id = ?",
+            [temp_email_id],
+            |row| row.get(0),
+        ).expect("cached message count");
+        assert_eq!(remaining, 0);
     }
 }

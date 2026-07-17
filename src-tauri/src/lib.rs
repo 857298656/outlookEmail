@@ -84,6 +84,7 @@ pub fn run() {
             save_cloudflare_channel,
             delete_cloudflare_channel,
             list_temp_email_messages,
+            refresh_temp_email_messages,
             get_temp_email_message,
             delete_temp_email,
             run_refresh_job

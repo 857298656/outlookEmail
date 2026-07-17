@@ -13,6 +13,28 @@ Never commit the private key or its password. The matching public key is stored 
 
 The local public key file `%USERPROFILE%\.tauri\outlookemail.key.pub` must match `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`. If the signing key is replaced, update the configured public key at the same time; otherwise installed clients will reject new updates.
 
+## Local signed build
+
+GitHub repository secrets are available only inside GitHub Actions. Do not copy the private key or its password into source files, `.env` files, or `tauri.conf.json`.
+
+For a signed local updater build, set both values only in the current PowerShell process:
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -LiteralPath "$env:USERPROFILE\.tauri\outlookemail.key" -Raw
+$securePassword = Read-Host "Updater signing password" -AsSecureString
+$passwordPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
+try {
+  $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer)
+  pnpm tauri:build
+} finally {
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPointer)
+  Remove-Item Env:\TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+  Remove-Item Env:\TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
+}
+```
+
+The variables exist only for that PowerShell session and are removed after the build.
+
 ## Publishing
 
 1. Run `pnpm build`, `pnpm test`, and `pnpm cargo:test`.

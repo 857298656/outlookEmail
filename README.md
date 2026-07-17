@@ -18,12 +18,12 @@
 ### 账号与邮箱
 
 - 支持原项目账号导入格式，按域名或显式 `provider=` 自动识别服务商
-- 账号、分组（三级树）、标签、别名管理；分组支持跨层级移动与批量操作
-- 账号库存多选：批量删除、移动分组、开关转发、添加/移除标签、导出
-- 刷新管理：统计、失败汇总、单账号/批量刷新、重试队列、刷新历史
+- 账号、分组（三级树）与别名管理；分组支持跨层级移动与批量操作
+- 账号库存多选：批量删除、移动分组和导出
+- 刷新管理：单账号或全部账号刷新、状态与失败结果展示
 - 账号敏感信息查看需本地密码二次验证；支持确认后导出账号凭据
 - Provider 接入就绪检查（OAuth Client ID/refresh token 或 IMAP host/port/密钥完整性）
-- HTTP 代理链配置，Graph/IMAP/SMTP 按主代理、备用代理顺序故障切换
+- HTTP 代理链配置，Graph/IMAP 按主代理、备用代理顺序故障切换
 
 ### 邮件收发与操作
 
@@ -32,33 +32,26 @@
 - 邮件搜索与高级语法：`from:`、`to:`、`subject:`、`body:`、`folder:`、`is:`、`has:`、`id:`
 - 按文件夹、已读/未读、附件筛选；多字段排序；分页浏览
 - 邮件正文 HTML 沙箱 iframe 安全渲染；列表摘要自动剥离 HTML/CSS 噪声
-- 全屏预览弹窗：Raw 查看、分享、导出、远端失败面板
-- 单封/批量标记已读未读、删除；Graph/IMAP 远端同步，失败进入重试队列并在 UI 可见
+- 全屏预览弹窗：Raw 查看、分享和导出
+- 单封/批量标记已读未读、删除；Graph/IMAP 远端同步失败会在任务结果中显示
 
-### 项目账号池
+### 调度
 
-- 从全部账号、指定分组或标签同步项目池
-- 账号状态流转：领取、释放、成功、失败、移除、恢复
-- 项目统计与事件日志；项目池 CSV 导出
-
-### 转发、备份与调度
-
-- 账号级转发开关：SMTP、Telegram Bot、企业微信 Webhook
-- WebDAV 备份与从备份快照恢复（含完整性校验与安全快照）
-- 应用内定时刷新、转发、备份；任务历史与失败重试队列
-- 设置页：手动运行、配置保存、运行状态与日志查看
+- 桌面进程内定时刷新邮箱
+- 设置页可配置刷新间隔和每次拉取数量
 
 ### 临时邮箱
 
 - GPTMail、DuckMail 临时邮箱生成、导入、刷新、删除
 - Cloudflare Worker 邮箱通道管理、批量生成与分块导入
-- 批量导入兼容 GPTMail 每行邮箱、DuckMail `邮箱----密码`、Cloudflare `[cloudflare:渠道名]` 分段；Cloudflare 单次可批量生成 1–50 个地址并显示失败明细
-- 临时邮箱标签、筛选、关键字搜索；消息缓存与刷新
+- 批量导入兼容 GPTMail 每行邮箱、DuckMail `邮箱----密码`、Cloudflare `[cloudflare:渠道名]` 分段，并按块显示导入进度
+- Cloudflare 单次可批量生成 1–50 个地址并显示失败明细
+- 临时邮箱服务商筛选、关键字搜索；消息刷新后缓存到本地 SQLite
 
 ### 本地导出与分享
 
 - 选中缓存邮件导出为本地只读 HTML
-- 账号库存、项目账号池导出为 CSV
+- 账号库存导出为 CSV
 - 本地邮件分享记录
 - 导出文件写入应用数据目录下的 `exports` 目录
 
@@ -67,7 +60,7 @@
 - 本地初始化、解锁、锁定流程
 - 本地保留统计与清理（邮件、临时消息、附件、导出）
 - 内置外观主题
-- Windows 可执行文件、MSI、NSIS 安装包打包
+- Windows 可执行文件和 NSIS 安装包打包
 
 ## 支持的邮箱服务商
 
@@ -119,11 +112,10 @@ $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 pnpm tauri:build
 ```
 
-Windows 构建产物：
+Windows 构建产物位于项目配置的 Rust target 目录：
 
-- `src-tauri/target/release/outlook-email-desktop.exe`
-- `src-tauri/target/release/bundle/msi/OutlookEmail Desktop_0.1.0_x64_en-US.msi`
-- `src-tauri/target/release/bundle/nsis/OutlookEmail Desktop_0.1.0_x64-setup.exe`
+- `release/outlook-email-desktop.exe`
+- `release/bundle/nsis/OutlookEmail Desktop_*_x64-setup.exe`
 
 ## 数据存储
 
@@ -137,7 +129,7 @@ SQLite 数据库默认创建在平台应用数据目录；开发环境回退为�
 
 **IMAP 账号**：填写 host、port 与密码（或授权码）。同步后在 SQLite 中缓存原始 RFC822 MIME，附件从本地缓存 MIME 解析下载。
 
-**邮箱视图**：支持缓存邮件搜索、筛选、排序、分页；单封与批量操作会立即更新本地缓存并尝试远端同步，远端失败会在任务结果与邮件详情中显示，可手动重试或忽略。
+**邮箱视图**：支持缓存邮件搜索、筛选、排序、分页；单封与批量操作会立即更新本地缓存并尝试远端同步，远端失败会在任务结果中显示。
 
 **定时刷新**：工作区解锁后，调度器在桌面进程内运行；可在设置页配置刷新间隔与拉取数量，也可在邮箱页和账号页手动刷新。
 
@@ -152,4 +144,4 @@ SQLite 数据库默认创建在平台应用数据目录；开发环境回退为�
 
 ## 当前状态
 
-M0–M9 代码已完成。Gmail/QQ/163 IMAP 预设、Provider 注册表、接入就绪检查与失败提示均已落地，**待真实账号手工验收**（见 `docs/provider-operations.md`）。
+M0–M9 代码已完成。Gmail/QQ/163 IMAP 预设、Provider 注册表、接入就绪检查与失败提示均已落地；临时邮箱分块导入和 SQLite 消息缓存已完成代码实现，**待真实账号与真实临时邮箱服务手工验收**。

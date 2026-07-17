@@ -2278,6 +2278,124 @@ impl Database {
         self.get_temp_email(id)
     }
 
+    pub fn import_temp_emails(&self, input: ImportTempEmailsInput) -> AppResult<ImportTempEmailsResult> {
+        let key = self.crypto_key.as_ref().ok_or(AppError::Unauthorized)?;
+        let provider = input.provider.trim().to_lowercase();
+        let (base_url, api_key) = temp_mail::imported_provider_config(&provider, input.base_url, input.api_key)?;
+        if input.raw.trim().is_empty() {
+            return Err(AppError::InvalidInput("temporary email import text is required".to_string()));
+        }
+
+        let mut imported = 0;
+        let mut updated = 0;
+        let mut skipped = 0;
+        let mut token_failures = Vec::new();
+        let mut errors = Vec::new();
+        let mut imported_ids = Vec::new();
+        let mut current_channel_id = input.cloudflare_channel_id;
+
+        for (line_index, raw_line) in input.raw.lines().enumerate() {
+            let line = raw_line.trim();
+            if line.is_empty() { continue; }
+
+            if provider == "cloudflare" {
+                if let Some(channel_name) = cloudflare_import_header(line) {
+                    match channel_name {
+                        Some(name) => match self.cloudflare_channel_id_by_name(&name) {
+                            Ok(id) => current_channel_id = Some(id),
+                            Err(err) => { current_channel_id = None; errors.push(format!("line {}: {}", line_index + 1, err)); }
+                        },
+                        None => current_channel_id = input.cloudflare_channel_id,
+                    }
+                    continue;
+                }
+            }
+
+            let parsed = match provider.as_str() {
+                "gptmail" => Some((line.to_string(), String::new(), String::new(), String::new(), None, base_url.clone(), api_key.clone())),
+                "duckmail" => {
+                    let mut parts = line.splitn(3, "----");
+                    let email = parts.next().unwrap_or_default().trim().to_string();
+                    let password = parts.next().unwrap_or_default().trim().to_string();
+                    if password.is_empty() { None } else {
+                        let token = match temp_mail::authenticate_duckmail(&base_url, &email, &password) {
+                            Ok(token) => token,
+                            Err(_) => { token_failures.push(email.clone()); String::new() }
+                        };
+                        Some((email, password, token, String::new(), None, base_url.clone(), api_key.clone()))
+                    }
+                }
+                "cloudflare" => {
+                    let email = line.split("----").next().unwrap_or_default().trim().to_string();
+                    match current_channel_id {
+                        Some(channel_id) => match self.cloudflare_channel_credentials(channel_id) {
+                            Ok(channel) => Some((email, String::new(), String::new(), String::new(), Some(channel_id), channel.worker_url, String::new())),
+                            Err(err) => { errors.push(format!("line {}: {}", line_index + 1, err)); None }
+                        },
+                        None => { errors.push(format!("line {}: Cloudflare channel is required", line_index + 1)); None }
+                    }
+                }
+                _ => unreachable!(),
+            };
+
+            let Some((email, password, token, account_id, channel_id, item_base_url, item_api_key)) = parsed else {
+                skipped += 1;
+                continue;
+            };
+            if !is_valid_email_address(&email) {
+                skipped += 1;
+                errors.push(format!("line {}: invalid email address", line_index + 1));
+                continue;
+            }
+
+            let existing_id = self.conn.query_row("SELECT id FROM temp_emails WHERE email = ? COLLATE NOCASE", [&email], |row| row.get::<_, i64>(0)).optional()?;
+            self.conn.execute(
+                "INSERT INTO temp_emails (email, provider, provider_base_url, api_key_enc, password_enc, token_enc, provider_account_id, cloudflare_channel_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(email) DO UPDATE SET provider = excluded.provider, provider_base_url = excluded.provider_base_url, api_key_enc = excluded.api_key_enc, password_enc = excluded.password_enc, token_enc = excluded.token_enc, provider_account_id = excluded.provider_account_id, cloudflare_channel_id = excluded.cloudflare_channel_id, updated_at = CURRENT_TIMESTAMP",
+                params![email, provider, item_base_url, crypto::encrypt_text(&item_api_key, key)?, crypto::encrypt_text(&password, key)?, crypto::encrypt_text(&token, key)?, account_id, channel_id],
+            )?;
+            let id = existing_id.unwrap_or_else(|| self.conn.last_insert_rowid());
+            if existing_id.is_some() { updated += 1; } else { imported += 1; }
+            imported_ids.push(id);
+        }
+
+        if imported + updated == 0 {
+            return Err(AppError::InvalidInput(errors.first().cloned().unwrap_or_else(|| "no valid temporary emails were found".to_string())));
+        }
+        let emails = imported_ids.into_iter().filter_map(|id| self.get_temp_email(id).ok()).collect();
+        Ok(ImportTempEmailsResult { imported, updated, skipped, token_failures, errors, emails })
+    }
+
+    pub fn generate_temp_emails_batch(&self, input: GenerateTempEmailsBatchInput) -> AppResult<GenerateTempEmailsBatchResult> {
+        if !input.provider.trim().eq_ignore_ascii_case("cloudflare") {
+            return Err(AppError::InvalidInput("batch generation currently supports Cloudflare only".to_string()));
+        }
+        if !(1..=50).contains(&input.count) {
+            return Err(AppError::InvalidInput("count must be between 1 and 50".to_string()));
+        }
+        let channel_id = input.cloudflare_channel_id.ok_or_else(|| AppError::InvalidInput("Cloudflare channel is required".to_string()))?;
+        let channel = self.cloudflare_channel_credentials(channel_id)?;
+        let domain = input.domain.unwrap_or_else(|| channel.domains.first().cloned().unwrap_or_default()).trim().trim_start_matches('@').to_lowercase();
+        if !channel.domains.iter().any(|item| item.eq_ignore_ascii_case(&domain)) {
+            return Err(AppError::InvalidInput("selected domain does not belong to this Cloudflare channel".to_string()));
+        }
+
+        let usernames = normalize_batch_usernames(input.usernames, input.count)?;
+        let mut emails = Vec::new();
+        let mut failures = Vec::new();
+        for (index, username) in usernames.into_iter().enumerate() {
+            let create_input = GenerateTempEmailInput {
+                provider: "cloudflare".to_string(), base_url: None, api_key: None, prefix: None,
+                domain: Some(domain.clone()), username: Some(username.clone()), password: None,
+                cloudflare_channel_id: Some(channel_id),
+            };
+            match self.generate_temp_email(create_input) {
+                Ok(email) => emails.push(email),
+                Err(err) => failures.push(TempEmailBatchFailure { index: index + 1, username, error: err.to_string() }),
+            }
+        }
+        Ok(GenerateTempEmailsBatchResult { created_count: emails.len(), failed_count: failures.len(), emails, failures })
+    }
+
     pub fn list_temp_email_messages(&self, temp_email_id: i64) -> AppResult<Vec<TempEmailMessage>> {
         let mailbox = self.temp_mailbox_credentials(temp_email_id)?;
         let messages = temp_mail::list_messages(&mailbox)?;
@@ -2313,9 +2431,9 @@ impl Database {
             [id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?, row.get::<_, Option<i64>>(7)?)),
         ).optional()?.ok_or_else(|| AppError::InvalidInput("temporary email not found".to_string()))?;
-        let _password = crypto::decrypt_text(&row.4, key)?;
+        let password = crypto::decrypt_text(&row.4, key)?;
         let cloudflare_channel = row.7.map(|channel_id| self.cloudflare_channel_credentials(channel_id)).transpose()?;
-        Ok(TempMailboxCredentials { email: row.0, provider: row.1, base_url: row.2, api_key: crypto::decrypt_text(&row.3, key)?, token: crypto::decrypt_text(&row.5, key)?, account_id: row.6, cloudflare_channel })
+        Ok(TempMailboxCredentials { email: row.0, provider: row.1, base_url: row.2, api_key: crypto::decrypt_text(&row.3, key)?, password, token: crypto::decrypt_text(&row.5, key)?, account_id: row.6, cloudflare_channel })
     }
 
     pub fn list_temp_email_domains(&self, config: TempEmailProviderConfig) -> AppResult<Vec<String>> {
@@ -2362,6 +2480,11 @@ impl Database {
         let row = self.conn.query_row("SELECT worker_url, admin_password_enc, email_domains, enabled FROM cloudflare_channels WHERE id = ?", [id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?))).optional()?.ok_or_else(|| AppError::InvalidInput("Cloudflare channel not found".to_string()))?;
         if row.3 == 0 { return Err(AppError::InvalidInput("Cloudflare channel is disabled".to_string())); }
         Ok(CloudflareChannelCredentials { worker_url: row.0, admin_password: crypto::decrypt_text(&row.1, key)?, domains: split_domains(&row.2) })
+    }
+
+    fn cloudflare_channel_id_by_name(&self, name: &str) -> AppResult<i64> {
+        let id = self.conn.query_row("SELECT id FROM cloudflare_channels WHERE name = ? COLLATE NOCASE AND enabled = 1", [name.trim()], |row| row.get(0)).optional()?;
+        id.ok_or_else(|| AppError::InvalidInput(format!("Cloudflare channel not found or disabled: {name}")))
     }
 
     fn initialize_schema(&mut self) -> AppResult<()> {
@@ -4323,6 +4446,45 @@ fn normalize_worker_url(value: &str) -> AppResult<String> {
     Ok(candidate.trim_end_matches('/').to_string())
 }
 
+fn is_valid_email_address(value: &str) -> bool {
+    let value = value.trim();
+    let mut parts = value.split('@');
+    matches!((parts.next(), parts.next(), parts.next()), (Some(local), Some(domain), None) if !local.is_empty() && domain.contains('.') && !value.chars().any(char::is_whitespace))
+}
+
+fn cloudflare_import_header(value: &str) -> Option<Option<String>> {
+    let trimmed = value.trim();
+    if !trimmed.starts_with('[') || !trimmed.ends_with(']') { return None; }
+    let inner = &trimmed[1..trimmed.len() - 1];
+    if inner.eq_ignore_ascii_case("cloudflare") { return Some(None); }
+    let (prefix, name) = inner.split_once(':')?;
+    if !prefix.eq_ignore_ascii_case("cloudflare") { return None; }
+    Some(Some(name.trim().to_string()))
+}
+
+fn normalize_batch_usernames(values: Option<Vec<String>>, count: usize) -> AppResult<Vec<String>> {
+    let Some(values) = values.filter(|items| !items.is_empty()) else {
+        return Ok((0..count).map(|_| format!("mail{}", Uuid::new_v4().simple().to_string().chars().take(10).collect::<String>())).collect());
+    };
+    let mut usernames = Vec::new();
+    let mut seen = HashSet::new();
+    for value in values {
+        let local = value.trim().split('@').next().unwrap_or_default().to_lowercase();
+        let username = local.chars().filter(|ch| ch.is_ascii_alphanumeric()).take(32).collect::<String>();
+        if username.len() < 3 {
+            return Err(AppError::InvalidInput(format!("invalid batch username: {value}")));
+        }
+        if !seen.insert(username.clone()) {
+            return Err(AppError::InvalidInput(format!("duplicate batch username: {username}")));
+        }
+        usernames.push(username);
+    }
+    if usernames.len() != count {
+        return Err(AppError::InvalidInput(format!("username count must equal requested count ({count})")));
+    }
+    Ok(usernames)
+}
+
 fn table_columns(conn: &Connection, table: &str) -> AppResult<Vec<String>> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -4655,8 +4817,8 @@ fn mail_share_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MailS
 #[cfg(test)]
 mod project_tests {
     use super::{
-        attachment_dir, classify_error_category, exports_dir, normalize_oauth_provider,
-        table_columns, table_exists, Database,
+        attachment_dir, classify_error_category, cloudflare_import_header, exports_dir,
+        normalize_batch_usernames, normalize_oauth_provider, table_columns, table_exists, Database,
     };
     use crate::crypto;
     use crate::error::AppError;
@@ -4669,7 +4831,7 @@ mod project_tests {
         RefreshInput, RevealAccountSecretsInput, RevokeMailShareInput,
         LoginInput, UpdateAccountInput, UpdateGroupInput,
         GenerateWorkspaceKeyInput, UpdateWorkspaceKeyRecordInput,
-        SaveCloudflareChannelInput,
+        ImportTempEmailsInput, SaveCloudflareChannelInput,
     };
     use rusqlite::{params, Connection};
     use std::path::PathBuf;
@@ -5924,5 +6086,35 @@ mod project_tests {
         assert!(!encrypted.contains("secret-admin-password"));
         db.conn.execute("INSERT INTO temp_emails (email, provider, provider_base_url, cloudflare_channel_id) VALUES ('box@mail.example.com', 'cloudflare', 'https://worker.example.com', ?)", [channel.id]).expect("insert address");
         assert!(matches!(db.delete_cloudflare_channel(channel.id), Err(AppError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn imports_gptmail_addresses_and_updates_duplicates() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database { conn, db_path: PathBuf::from("memory.sqlite"), crypto_key: Some([7; 32]) };
+        db.initialize_schema().expect("schema");
+        let first = db.import_temp_emails(ImportTempEmailsInput {
+            raw: "alpha@example.com\ninvalid\nbeta@example.com".to_string(), provider: "gptmail".to_string(),
+            base_url: Some("https://mail.example.test/".to_string()), api_key: Some("secret-key".to_string()), cloudflare_channel_id: None,
+        }).expect("first import");
+        assert_eq!((first.imported, first.updated, first.skipped), (2, 0, 1));
+        let encrypted: String = db.conn.query_row("SELECT api_key_enc FROM temp_emails WHERE email = 'alpha@example.com'", [], |row| row.get(0)).expect("encrypted API key");
+        assert!(!encrypted.contains("secret-key"));
+
+        let second = db.import_temp_emails(ImportTempEmailsInput {
+            raw: "ALPHA@example.com".to_string(), provider: "gptmail".to_string(),
+            base_url: None, api_key: None, cloudflare_channel_id: None,
+        }).expect("duplicate import");
+        assert_eq!((second.imported, second.updated), (0, 1));
+        assert_eq!(db.list_temp_emails().expect("list").len(), 2);
+    }
+
+    #[test]
+    fn validates_cloudflare_batch_usernames_and_import_headers() {
+        let usernames = normalize_batch_usernames(Some(vec!["Alpha".to_string(), "sales.ops@example.com".to_string()]), 2).expect("usernames");
+        assert_eq!(usernames, vec!["alpha", "salesops"]);
+        assert!(normalize_batch_usernames(Some(vec!["only-one".to_string()]), 2).is_err());
+        assert_eq!(cloudflare_import_header("[cloudflare:Primary]"), Some(Some("Primary".to_string())));
+        assert_eq!(cloudflare_import_header("box@example.com"), None);
     }
 }

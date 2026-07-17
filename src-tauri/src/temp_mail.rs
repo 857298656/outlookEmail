@@ -6,8 +6,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
-const DEFAULT_GPTMAIL_URL: &str = "https://mail.chatgpt.org.uk";
-const DEFAULT_DUCKMAIL_URL: &str = "https://api.duckmail.sbs";
+pub const DEFAULT_GPTMAIL_URL: &str = "https://mail.chatgpt.org.uk";
+pub const DEFAULT_DUCKMAIL_URL: &str = "https://api.duckmail.sbs";
 
 #[derive(Debug, Clone)]
 pub struct CloudflareChannelCredentials {
@@ -22,6 +22,7 @@ pub struct TempMailboxCredentials {
     pub provider: String,
     pub base_url: String,
     pub api_key: String,
+    pub password: String,
     pub token: String,
     pub account_id: String,
     pub cloudflare_channel: Option<CloudflareChannelCredentials>,
@@ -44,6 +45,20 @@ fn client() -> AppResult<Client> {
 
 fn normalized_url(value: Option<String>, fallback: &str) -> String {
     value.unwrap_or_else(|| fallback.to_string()).trim().trim_end_matches('/').to_string()
+}
+
+pub fn imported_provider_config(provider: &str, base_url: Option<String>, api_key: Option<String>) -> AppResult<(String, String)> {
+    match provider.trim().to_lowercase().as_str() {
+        "gptmail" => Ok((normalized_url(base_url, DEFAULT_GPTMAIL_URL), api_key.unwrap_or_else(|| "gpt-test".to_string()).trim().to_string())),
+        "duckmail" => Ok((normalized_url(base_url, DEFAULT_DUCKMAIL_URL), api_key.unwrap_or_default().trim().to_string())),
+        "cloudflare" => Ok((String::new(), String::new())),
+        _ => Err(AppError::InvalidInput("provider must be gptmail, duckmail, or cloudflare".to_string())),
+    }
+}
+
+pub fn authenticate_duckmail(base_url: &str, email: &str, password: &str) -> AppResult<String> {
+    let value = response_json(client()?.post(format!("{}/token", base_url.trim_end_matches('/'))).json(&json!({"address": email, "password": password})).send().map_err(network_error)?)?;
+    value.get("token").and_then(Value::as_str).map(str::to_string).ok_or_else(|| AppError::Internal("DuckMail did not return an access token".to_string()))
 }
 
 fn response_json(response: Response) -> AppResult<Value> {
@@ -137,9 +152,13 @@ fn cloudflare_request(channel: &CloudflareChannelCredentials, method: reqwest::M
 }
 
 pub fn list_messages(mailbox: &TempMailboxCredentials) -> AppResult<Vec<TempEmailMessage>> {
+    let duckmail_token = if mailbox.provider == "duckmail" && mailbox.token.is_empty() {
+        Some(authenticate_duckmail(&mailbox.base_url, &mailbox.email, &mailbox.password)?)
+    } else { None };
+    let token = duckmail_token.as_deref().unwrap_or(&mailbox.token);
     let value = match mailbox.provider.as_str() {
         "gptmail" => response_json(client()?.get(format!("{}/api/emails", mailbox.base_url)).header("X-API-Key", &mailbox.api_key).query(&[("email", &mailbox.email)]).send().map_err(network_error)?)?,
-        "duckmail" => response_json(client()?.get(format!("{}/messages", mailbox.base_url)).bearer_auth(&mailbox.token).send().map_err(network_error)?)?,
+        "duckmail" => response_json(client()?.get(format!("{}/messages", mailbox.base_url)).bearer_auth(token).send().map_err(network_error)?)?,
         "cloudflare" => {
             let channel = mailbox.cloudflare_channel.as_ref().ok_or_else(|| AppError::InvalidInput("Cloudflare channel is missing".to_string()))?;
             cloudflare_request(channel, reqwest::Method::GET, "/admin/mails", Some(&[("limit", "50".to_string()), ("offset", "0".to_string()), ("address", mailbox.email.clone())]), None)?
@@ -160,7 +179,8 @@ pub fn get_message(mailbox: &TempMailboxCredentials, message_id: &str) -> AppRes
         let result = response_json(client()?.get(format!("{}/api/email/{}", mailbox.base_url, urlencoding::encode(message_id))).header("X-API-Key", &mailbox.api_key).send().map_err(network_error)?)?;
         result.get("data").cloned().unwrap_or(result)
     } else {
-        response_json(client()?.get(format!("{}/messages/{}", mailbox.base_url, urlencoding::encode(message_id))).bearer_auth(&mailbox.token).send().map_err(network_error)?)?
+        let token = if mailbox.token.is_empty() { authenticate_duckmail(&mailbox.base_url, &mailbox.email, &mailbox.password)? } else { mailbox.token.clone() };
+        response_json(client()?.get(format!("{}/messages/{}", mailbox.base_url, urlencoding::encode(message_id))).bearer_auth(token).send().map_err(network_error)?)?
     };
     Ok(normalize_message(&value, &mailbox.email, true))
 }
@@ -213,10 +233,20 @@ pub fn delete_remote(mailbox: &TempMailboxCredentials) -> AppResult<()> {
     }
     if mailbox.provider == "cloudflare" {
         let channel = mailbox.cloudflare_channel.as_ref().ok_or_else(|| AppError::InvalidInput("Cloudflare channel is missing".to_string()))?;
-        if mailbox.account_id.is_empty() { return Err(AppError::InvalidInput("Cloudflare address id is missing".to_string())); }
-        let _ = cloudflare_request(channel, reqwest::Method::DELETE, &format!("/admin/delete_address/{}", urlencoding::encode(&mailbox.account_id)), None, None)?;
+        let address_id = if mailbox.account_id.is_empty() { find_cloudflare_address_id(channel, &mailbox.email)? } else { mailbox.account_id.clone() };
+        let _ = cloudflare_request(channel, reqwest::Method::DELETE, &format!("/admin/delete_address/{}", urlencoding::encode(&address_id)), None, None)?;
     }
     Ok(())
+}
+
+fn find_cloudflare_address_id(channel: &CloudflareChannelCredentials, email: &str) -> AppResult<String> {
+    let value = cloudflare_request(channel, reqwest::Method::GET, "/admin/addresses", Some(&[("limit", "50".to_string()), ("offset", "0".to_string()), ("query", email.to_string())]), None)?;
+    let items = value.as_array().or_else(|| value.get("results").and_then(Value::as_array)).or_else(|| value.get("addresses").and_then(Value::as_array)).or_else(|| value.pointer("/data/results").and_then(Value::as_array)).or_else(|| value.get("data").and_then(Value::as_array)).cloned().unwrap_or_default();
+    items.iter().find_map(|item| {
+        let address = item.get("address").or_else(|| item.get("email")).and_then(Value::as_str)?;
+        if !address.eq_ignore_ascii_case(email) { return None; }
+        item.get("id").or_else(|| item.get("address_id")).map(value_id).filter(|id| !id.is_empty())
+    }).ok_or_else(|| AppError::InvalidInput("Cloudflare address was not found on the configured channel".to_string()))
 }
 
 #[cfg(test)]

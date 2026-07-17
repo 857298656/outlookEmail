@@ -77,6 +77,8 @@ pub fn run() {
             delete_workspace_key_record,
             list_temp_emails,
             generate_temp_email,
+            import_temp_emails,
+            generate_temp_emails_batch,
             list_temp_email_domains,
             list_cloudflare_channels,
             save_cloudflare_channel,

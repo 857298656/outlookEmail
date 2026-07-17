@@ -34,7 +34,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFGODhFODBDOTFGOTA2NTAKUldSUUJ2bVJET2lJcjdwdis5SVZub2E1UEhmU2phRWVJTktBUGtkTXlDRjNEOXhHSHdTSjRwWTcK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERCNzczQ0YzQkU4RTk2QTUKUldTbGxvNis4engzMjF1Yk8vMUhBT3Y4dUJ5ay9UcitDU2tXYVQzd1l4cDMxYlJqYXBLTFQyWEMK",
       "endpoints": [
         "https://github.com/857298656/outlookEmail/releases/latest/download/latest.json"
       ],

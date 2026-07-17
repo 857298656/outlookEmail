@@ -25,7 +25,7 @@ import type {
   UpdateLoginPasswordInput,
   WorkspaceKeyRecord,
   GenerateWorkspaceKeyResult
-  , TempEmail, TempEmailMessage, GenerateTempEmailInput, CloudflareChannel, SaveCloudflareChannelInput
+  , TempEmail, TempEmailMessage, GenerateTempEmailInput, CloudflareChannel, SaveCloudflareChannelInput, ImportTempEmailsInput, ImportTempEmailsResult, GenerateTempEmailsBatchInput, GenerateTempEmailsBatchResult
 } from "./types";
 
 const defaultGraphClientId = "6daa9f56-5e67-4cb6-ae52-ef89ef912d36";
@@ -546,6 +546,32 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       mockTempEmails = [item, ...mockTempEmails];
       return item as T;
     }
+    case "import_temp_emails": {
+      const input = args?.input as ImportTempEmailsInput;
+      const channel = mockCloudflareChannels.find((entry) => entry.id === input.cloudflare_channel_id);
+      let imported = 0; let updated = 0; let skipped = 0; const emails: TempEmail[] = [];
+      input.raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).forEach((line, index) => {
+        if (line.startsWith("[")) return;
+        const email = line.split("----")[0].trim();
+        if (!email.includes("@")) { skipped += 1; return; }
+        const existing = mockTempEmails.find((item) => item.email.toLowerCase() === email.toLowerCase());
+        const item: TempEmail = { id: existing?.id ?? Date.now() + index, email, provider: input.provider, provider_base_url: channel?.worker_url || input.base_url || "browser-preview", cloudflare_channel_id: channel?.id ?? null, cloudflare_channel_name: channel?.name ?? null, message_count: existing?.message_count ?? 0, last_checked_at: existing?.last_checked_at ?? null, created_at: existing?.created_at ?? new Date().toISOString() };
+        mockTempEmails = [item, ...mockTempEmails.filter((entry) => entry.id !== item.id)]; emails.push(item);
+        if (existing) updated += 1; else imported += 1;
+      });
+      return { imported, updated, skipped, token_failures: [], errors: [], emails } as T;
+    }
+    case "generate_temp_emails_batch": {
+      const input = args?.input as GenerateTempEmailsBatchInput;
+      const channel = mockCloudflareChannels.find((entry) => entry.id === input.cloudflare_channel_id);
+      const domain = input.domain || channel?.email_domains[0] || "example.test";
+      const emails = Array.from({ length: input.count }, (_, index) => {
+        const username = input.usernames?.[index] || `mail${Date.now()}${index}`;
+        return { id: Date.now() + index, email: `${username}@${domain}`, provider: "cloudflare", provider_base_url: channel?.worker_url || "browser-preview", cloudflare_channel_id: channel?.id ?? null, cloudflare_channel_name: channel?.name ?? null, message_count: 0, last_checked_at: null, created_at: new Date().toISOString() } as TempEmail;
+      });
+      mockTempEmails = [...emails, ...mockTempEmails];
+      return { created_count: emails.length, failed_count: 0, emails, failures: [] } as T;
+    }
     case "list_temp_email_messages":
       return [] as T;
     case "list_temp_email_domains":
@@ -878,10 +904,15 @@ export const api = {
       accountId
     }),
   /** Uses scheduler_refresh_top from settings (default 25). Syncs inbox + junk only. */
-  refreshAccountFromSettings: (accountId?: number, folder = "inbox_junk") =>
+  refreshAccountFromSettings: (accountId: number, folder = "inbox_junk") =>
     call<JobResult>("run_refresh_job", {
       input: { account_id: accountId, folder },
       accountId
+    }),
+  /** Refreshes every account using scheduler_refresh_top from settings. */
+  refreshAllAccountsFromSettings: (folder = "inbox_junk") =>
+    call<JobResult>("run_refresh_job", {
+      input: { folder }
     }),
   runRefreshJob: (accountId?: number, folder = "inbox_junk", top?: number) => {
     const input: { account_id?: number; folder: string; top?: number } = { account_id: accountId, folder };
@@ -891,6 +922,10 @@ export const api = {
   listTempEmails: () => call<import("./types").TempEmail[]>("list_temp_emails"),
   generateTempEmail: (input: import("./types").GenerateTempEmailInput) =>
     call<import("./types").TempEmail>("generate_temp_email", { input }),
+  importTempEmails: (input: import("./types").ImportTempEmailsInput) =>
+    call<import("./types").ImportTempEmailsResult>("import_temp_emails", { input }),
+  generateTempEmailsBatch: (input: import("./types").GenerateTempEmailsBatchInput) =>
+    call<import("./types").GenerateTempEmailsBatchResult>("generate_temp_emails_batch", { input }),
   listTempEmailDomains: (input: { provider: "duckmail" | "cloudflare"; base_url?: string; api_key?: string; cloudflare_channel_id?: number }) =>
     call<string[]>("list_temp_email_domains", { input }),
   listCloudflareChannels: () => call<import("./types").CloudflareChannel[]>("list_cloudflare_channels"),

@@ -176,6 +176,49 @@ pub struct GenerateTempEmailInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct ImportTempEmailsInput {
+    pub raw: String,
+    pub provider: String,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub cloudflare_channel_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportTempEmailsResult {
+    pub imported: usize,
+    pub updated: usize,
+    pub skipped: usize,
+    pub token_failures: Vec<String>,
+    pub errors: Vec<String>,
+    pub emails: Vec<TempEmail>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GenerateTempEmailsBatchInput {
+    pub provider: String,
+    pub count: usize,
+    pub domain: Option<String>,
+    pub usernames: Option<Vec<String>>,
+    pub cloudflare_channel_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TempEmailBatchFailure {
+    pub index: usize,
+    pub username: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GenerateTempEmailsBatchResult {
+    pub created_count: usize,
+    pub failed_count: usize,
+    pub emails: Vec<TempEmail>,
+    pub failures: Vec<TempEmailBatchFailure>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct TempEmailProviderConfig {
     pub provider: String,
     pub base_url: Option<String>,

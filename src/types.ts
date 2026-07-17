@@ -255,6 +255,44 @@ export type GenerateTempEmailInput = {
   cloudflare_channel_id?: number;
 };
 
+export type ImportTempEmailsInput = {
+  raw: string;
+  provider: "gptmail" | "duckmail" | "cloudflare";
+  base_url?: string;
+  api_key?: string;
+  cloudflare_channel_id?: number;
+};
+
+export type ImportTempEmailsResult = {
+  imported: number;
+  updated: number;
+  skipped: number;
+  token_failures: string[];
+  errors: string[];
+  emails: TempEmail[];
+};
+
+export type GenerateTempEmailsBatchInput = {
+  provider: "cloudflare";
+  count: number;
+  domain?: string;
+  usernames?: string[];
+  cloudflare_channel_id?: number;
+};
+
+export type TempEmailBatchFailure = {
+  index: number;
+  username: string;
+  error: string;
+};
+
+export type GenerateTempEmailsBatchResult = {
+  created_count: number;
+  failed_count: number;
+  emails: TempEmail[];
+  failures: TempEmailBatchFailure[];
+};
+
 export type CloudflareChannel = {
   id: number;
   name: string;

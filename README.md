@@ -52,6 +52,7 @@
 
 - GPTMail、DuckMail 临时邮箱生成、导入、刷新、删除
 - Cloudflare Worker 邮箱通道管理、批量生成与分块导入
+- 批量导入兼容 GPTMail 每行邮箱、DuckMail `邮箱----密码`、Cloudflare `[cloudflare:渠道名]` 分段；Cloudflare 单次可批量生成 1–50 个地址并显示失败明细
 - 临时邮箱标签、筛选、关键字搜索；消息缓存与刷新
 
 ### 本地导出与分享

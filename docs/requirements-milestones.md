@@ -27,6 +27,7 @@
 - 邮件协议：Microsoft Graph OAuth + Graph API；通用 TLS IMAP（含 Gmail/QQ/163 preset、Outlook IMAP OAuth XOAUTH2）；Gmail **不使用** Google OAuth/Gmail API
 - 依赖：`imap-proto` 通过 `vendor/imap-proto-0.10.2` 本地 patch 构建
 - 临时邮箱：GPTMail、DuckMail、Cloudflare Worker 通道
+- 临时邮箱批量操作：GPTMail/DuckMail/Cloudflare 格式化导入；Cloudflare 1–50 个地址批量生成、显式用户名及部分失败明细
 - 自动化：桌面进程内 scheduler
 - 打包：Windows exe、MSI、NSIS installer
 

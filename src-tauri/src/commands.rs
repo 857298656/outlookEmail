@@ -126,6 +126,18 @@ pub fn generate_temp_email(state: State<'_, AppState>, input: GenerateTempEmailI
 }
 
 #[tauri::command]
+pub fn import_temp_emails(state: State<'_, AppState>, input: ImportTempEmailsInput) -> AppResult<ImportTempEmailsResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.import_temp_emails(input)
+}
+
+#[tauri::command]
+pub fn generate_temp_emails_batch(state: State<'_, AppState>, input: GenerateTempEmailsBatchInput) -> AppResult<GenerateTempEmailsBatchResult> {
+    let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
+    db.generate_temp_emails_batch(input)
+}
+
+#[tauri::command]
 pub fn list_temp_email_domains(state: State<'_, AppState>, input: TempEmailProviderConfig) -> AppResult<Vec<String>> {
     let db = state.db.lock().map_err(|err| AppError::Internal(err.to_string()))?;
     db.list_temp_email_domains(input)

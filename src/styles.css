@@ -1431,6 +1431,10 @@ button:disabled {
   font-size: 12px;
 }
 
+.tempProviderItem .button {
+  margin-top: 9px;
+}
+
 .tempEmailTable .tableHeader,
 .tempEmailTable .tableRow {
   grid-template-columns: minmax(240px, 1.2fr) 110px 70px minmax(130px, .7fr) 76px;
@@ -1485,6 +1489,69 @@ button:disabled {
 .tempMessageDetail iframe { width: 100%; min-height: 320px; border: 0; background: #fff; }
 .tempMessageDetail pre { min-height: 180px; margin: 0; padding: 16px; overflow: auto; color: #273444; font: 13px/1.65 "Segoe UI", sans-serif; white-space: pre-wrap; }
 .tempEmailCreateDialog { width: min(620px, calc(100vw - 32px)); }
+.tempEmailBatchDialog { width: min(680px, calc(100vw - 32px)); }
+.tempEmailCreateDialog .segmentedControl,
+.tempEmailBatchDialog .segmentedControl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: min(100%, 430px);
+  padding: 4px;
+  border: 1px solid #e2e6eb;
+  border-radius: 11px;
+  background: #f3f5f7;
+}
+
+.tempEmailCreateDialog .segmentedControl button,
+.tempEmailBatchDialog .segmentedControl button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #667085;
+  padding: 8px 18px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+
+.tempEmailCreateDialog .segmentedControl button:hover:not(.active),
+.tempEmailBatchDialog .segmentedControl button:hover:not(.active) {
+  background: rgba(255, 255, 255, .68);
+  color: #344054;
+}
+
+.tempEmailCreateDialog .segmentedControl button.active,
+.tempEmailBatchDialog .segmentedControl button.active {
+  background: var(--skin-surface);
+  color: var(--skin-accent);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .12), 0 0 0 1px rgba(15, 23, 42, .04);
+}
+
+.tempEmailCreateDialog .segmentedControl button:active,
+.tempEmailBatchDialog .segmentedControl button:active {
+  transform: translateY(1px);
+}
+
+.tempEmailCreateDialog .segmentedControl button:focus-visible,
+.tempEmailBatchDialog .segmentedControl button:focus-visible {
+  outline: 2px solid var(--skin-accent);
+  outline-offset: 1px;
+}
+
+.tempEmailCreateDialog .select,
+.tempEmailBatchDialog .select {
+  appearance: none;
+  padding-right: 48px;
+  background-color: #fff;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 18px center;
+  background-size: 16px 16px;
+}
+.tempEmailHeaderActions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.tempEmailBulkInput { min-height: 180px; resize: vertical; font-family: Consolas, "SFMono-Regular", monospace; }
 .tempCreateGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .domainDiscovery { display: flex; align-items: center; gap: 10px; margin-top: -4px; }
 .cloudflareChannelDialog { width: min(820px, calc(100vw - 32px)); }
@@ -2520,6 +2587,39 @@ button:disabled {
 
 .updateDialogVersionRowNext strong {
   color: var(--skin-accent, #b5725f);
+}
+
+.updateCheckState {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-height: 76px;
+  padding: 15px 16px;
+  border: 1px solid var(--skin-border);
+  border-radius: 12px;
+  background: var(--skin-subtle);
+  color: var(--skin-accent);
+}
+
+.updateCheckState.success {
+  border-color: #bbdfc8;
+  background: #f2fbf5;
+  color: #24834b;
+}
+
+.updateCheckState > div {
+  display: grid;
+  gap: 4px;
+}
+
+.updateCheckState strong {
+  color: var(--skin-ink);
+  font-size: 14px;
+}
+
+.updateCheckState span {
+  color: var(--skin-muted);
+  font-size: 13px;
 }
 
 .updateDialogSection {

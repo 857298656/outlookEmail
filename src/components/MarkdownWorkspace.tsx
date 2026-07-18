@@ -61,6 +61,7 @@ import {
   addRowBeforeCommand,
   createTable,
   strikethroughSchema,
+  tableSchema,
   toggleStrikethroughCommand
 } from "@milkdown/kit/preset/gfm";
 import { lift, toggleMark } from "@milkdown/kit/prose/commands";
@@ -92,6 +93,7 @@ import {
   deleteMarkdownTableColumn,
   deleteMarkdownTableRow,
   getMarkdownTableToolbarState,
+  insertMarkdownTableHeaderRowBefore,
   setMarkdownTableColumnAlignment
 } from "../lib/markdownTable";
 import type { MarkdownCategory, MarkdownDocument } from "../types";
@@ -218,6 +220,13 @@ const highlightSchema = $markSchema("markdownHighlight", () => ({
       state.withMark(mark, "markdownHighlight");
     }
   }
+}));
+
+const markdownTableSchema = tableSchema.extendSchema((previous) => (ctx) => ({
+  ...previous(ctx),
+  // A valid GFM table can contain only its header row. Supporting that shape
+  // lets the row toolbar delete the final body row without faking a blank row.
+  content: "table_header_row table_row*"
 }));
 
 function transformHtmlMarks(node: MarkdownAstNode) {
@@ -575,11 +584,14 @@ const markdownTableToolbar = $prose((ctx) =>
             addButton(
               "在上方插入行",
               tableRowBeforeIcon,
-              () => callCommand(ctx, addRowBeforeCommand),
-              {
-                disabled: !toolbarState.canInsertRowBefore,
-                disabledTitle: "表头上方不能插入普通行"
-              }
+              (editorView) =>
+                toolbarState.rowFrom === 0
+                  ? insertMarkdownTableHeaderRowBefore(
+                      editorView.state,
+                      editorView.dispatch,
+                      editorView
+                    )
+                  : callCommand(ctx, addRowBeforeCommand)
             );
             addButton("在下方插入行", tableRowAfterIcon, () => callCommand(ctx, addRowAfterCommand));
             addButton(
@@ -589,10 +601,7 @@ const markdownTableToolbar = $prose((ctx) =>
                 deleteMarkdownTableRow(editorView.state, editorView.dispatch, editorView),
               {
                 disabled: !toolbarState.canDeleteRow,
-                disabledTitle:
-                  toolbarState.rowFrom === 0
-                    ? "表头行不能删除"
-                    : "表格至少需要保留一行正文"
+                disabledTitle: "当前选区不能作为一行删除"
               }
             );
             addDivider();
@@ -1213,6 +1222,7 @@ function CrepeEditor({
       .use(markdownCustomMarksRemark)
       .use(underlineSchema)
       .use(highlightSchema)
+      .use(markdownTableSchema)
       .use(markdownInlineLinkEditor)
       .use(markdownTableToolbar)
       .use(markdownToolbarShortcuts);

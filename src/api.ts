@@ -222,23 +222,16 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
     }
     case "delete_markdown_category": {
       const categoryId = args?.categoryId as number;
-      const removedIds = new Set<number>([categoryId]);
-      let changed = true;
-      while (changed) {
-        changed = false;
-        mockMarkdownCategories.forEach((category) => {
-          if (category.parent_id !== null && removedIds.has(category.parent_id) && !removedIds.has(category.id)) {
-            removedIds.add(category.id);
-            changed = true;
-          }
-        });
+      if (!mockMarkdownCategories.some((category) => category.id === categoryId)) {
+        throw new Error("markdown category not found");
       }
-      mockMarkdownCategories = mockMarkdownCategories.filter((category) => !removedIds.has(category.id));
-      mockMarkdownDocuments = mockMarkdownDocuments.map((document) =>
-        document.category_id !== null && removedIds.has(document.category_id)
-          ? { ...document, category_id: null, category_name: null }
-          : document
-      );
+      const hasChildren =
+        mockMarkdownCategories.some((category) => category.parent_id === categoryId) ||
+        mockMarkdownDocuments.some((document) => document.category_id === categoryId);
+      if (hasChildren) {
+        throw new Error("文件夹中有子文件或子文件夹，请先删除子文件和子文件夹后再删除父文件夹");
+      }
+      mockMarkdownCategories = mockMarkdownCategories.filter((category) => category.id !== categoryId);
       return undefined as T;
     }
     case "list_markdown_documents": {

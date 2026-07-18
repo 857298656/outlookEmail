@@ -10,6 +10,8 @@ describe("Markdown export cleanup", () => {
     rendered.innerHTML = `
       <h1 contenteditable="true" data-editor-node="heading">发布说明</h1>
       <div class="markdownTableToolbar"><button>新增一行</button></div>
+      <div class="markdownImageSourceEditor"><input value="![image.png](attachment:test)"></div>
+      <p class="crepe-placeholder" data-placeholder="Start writing..."><br></p>
       <div class="milkdown-code-block">
         <div class="tools"><button>复制</button></div>
         <div class="cm-content">
@@ -31,6 +33,10 @@ describe("Markdown export cleanup", () => {
     expect(html).toContain('src="data:image/png;base64,AA=="');
     expect(html).not.toContain("markdownTableToolbar");
     expect(html).not.toContain("milkdown-code-block");
+    expect(html).not.toContain("markdownImageSourceEditor");
+    expect(html).not.toContain("attachment:test");
+    expect(html).not.toContain("crepe-placeholder");
+    expect(html).not.toContain("data-placeholder");
     expect(html).not.toContain("javascript:");
     expect(html).not.toContain("onclick");
     expect(html).not.toContain("<script");

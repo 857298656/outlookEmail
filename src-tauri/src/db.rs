@@ -664,30 +664,22 @@ impl Database {
                 "markdown category not found".to_string(),
             ));
         }
-        self.conn.execute(
+        let has_children = self.conn.query_row(
             "
-            WITH RECURSIVE descendants(id) AS (
-                SELECT id FROM markdown_categories WHERE id = ?
-                UNION ALL
-                SELECT c.id FROM markdown_categories c
-                JOIN descendants d ON c.parent_id = d.id
-            )
-            UPDATE markdown_documents
-            SET category_id = NULL, updated_at = CURRENT_TIMESTAMP
-            WHERE category_id IN (SELECT id FROM descendants)
+            SELECT
+                EXISTS(SELECT 1 FROM markdown_categories WHERE parent_id = ?1)
+                OR EXISTS(SELECT 1 FROM markdown_documents WHERE category_id = ?1)
             ",
             [category_id],
+            |row| Ok(row.get::<_, i64>(0)? != 0),
         )?;
+        if has_children {
+            return Err(AppError::InvalidInput(
+                "文件夹中有子文件或子文件夹，请先删除子文件和子文件夹后再删除父文件夹".to_string(),
+            ));
+        }
         self.conn.execute(
-            "
-            WITH RECURSIVE descendants(id) AS (
-                SELECT id FROM markdown_categories WHERE id = ?
-                UNION ALL
-                SELECT c.id FROM markdown_categories c
-                JOIN descendants d ON c.parent_id = d.id
-            )
-            DELETE FROM markdown_categories WHERE id IN (SELECT id FROM descendants)
-            ",
+            "DELETE FROM markdown_categories WHERE id = ?",
             [category_id],
         )?;
         self.audit(
@@ -7166,15 +7158,23 @@ mod project_tests {
         assert_eq!(renamed.name, "项目文档");
         assert_eq!(renamed.document_count, 0);
 
-        db.delete_markdown_category(category.id)
-            .expect("delete category");
-        let uncategorized = db
+        let delete_parent_error = db
+            .delete_markdown_category(category.id)
+            .expect_err("reject non-empty category deletion");
+        assert!(delete_parent_error
+            .to_string()
+            .contains("文件夹中有子文件或子文件夹"));
+        let retained = db
             .get_markdown_document(document.id)
             .expect("document retained");
-        assert!(uncategorized.category_id.is_none());
+        assert_eq!(retained.category_id, Some(child_category.id));
 
         db.delete_markdown_document(document.id)
             .expect("delete document");
         assert!(db.get_markdown_document(document.id).is_err());
+        db.delete_markdown_category(child_category.id)
+            .expect("delete empty child category");
+        db.delete_markdown_category(category.id)
+            .expect("delete empty parent category");
     }
 }

@@ -2,6 +2,7 @@ const EDITOR_ONLY_SELECTOR = [
   ".markdownTableToolbar",
   ".markdownInlineLinkSyntax",
   ".markdownInlineLinkEditor",
+  ".markdownImageSourceEditor",
   ".milkdown-block-handle",
   ".milkdown-toolbar",
   ".milkdown-top-bar",
@@ -60,6 +61,9 @@ function replaceCodeEditor(block: Element) {
 
 export function cleanMarkdownEditorHtml(rendered: HTMLElement) {
   const clone = rendered.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll(".crepe-placeholder").forEach((element) => {
+    element.classList.remove("crepe-placeholder");
+  });
   clone.querySelectorAll(".milkdown-code-block").forEach(replaceCodeEditor);
   clone.querySelectorAll(UNSAFE_ELEMENT_SELECTOR).forEach((element) => element.remove());
   clone.querySelectorAll(EDITOR_ONLY_SELECTOR).forEach((element) => element.remove());

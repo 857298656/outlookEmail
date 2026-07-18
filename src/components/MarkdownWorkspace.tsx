@@ -75,6 +75,7 @@ import "@milkdown/crepe/theme/common/style.css";
 import "@milkdown/crepe/theme/classic.css";
 import {
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
   useCallback,
   useEffect,
@@ -87,7 +88,13 @@ import {
   cleanMarkdownEditorHtml,
   standaloneMarkdownHtml
 } from "../lib/markdownExport";
+import {
+  formatMarkdownImageRequest,
+  parseMarkdownImageRequest
+} from "../lib/markdownImage";
+import { calculateMarkdownPdfLayout } from "../lib/markdownPdf";
 import { MarkdownSaveTracker } from "../lib/markdownSaveTracker";
+import { MarkdownWriteQueue } from "../lib/markdownWriteQueue";
 import {
   deleteMarkdownTable,
   deleteMarkdownTableColumn,
@@ -102,6 +109,7 @@ type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 type FolderMenu = { category: MarkdownCategory; x: number; y: number };
 type DocumentMenu = { document: MarkdownDocument; x: number; y: number };
 type FolderDraft = { parentId: number | null; name: string };
+type FolderRenameDraft = { categoryId: number; name: string };
 type ActiveMarkdownDocument = {
   id: number | undefined;
   title: string;
@@ -523,6 +531,90 @@ const markdownInlineLinkEditor = $prose((ctx) => {
   });
 });
 
+const markdownImageSourceEditor = $prose((ctx) => {
+  const imageType = imageBlockSchema.type(ctx);
+
+  return new Plugin({
+    props: {
+      decorations: (state) => {
+        const { selection } = state;
+        if (!(selection instanceof NodeSelection) || selection.node.type !== imageType) {
+          return DecorationSet.empty;
+        }
+
+        const imagePosition = selection.from;
+        const editor = Decoration.widget(
+          imagePosition,
+          (view, getPosition) => {
+            const wrapper = document.createElement("div");
+            wrapper.className = "markdownImageSourceEditor";
+            wrapper.contentEditable = "false";
+
+            const input = document.createElement("input");
+            input.type = "text";
+            input.className = "markdownImageSourceInput";
+            input.value = formatMarkdownImageRequest(
+              String(selection.node.attrs.caption ?? ""),
+              String(selection.node.attrs.src ?? "")
+            );
+            input.setAttribute("aria-label", "图片请求路径");
+            input.setAttribute("autocomplete", "off");
+            input.spellcheck = false;
+
+            const stopPointerEvent = (event: Event) => event.stopPropagation();
+            input.addEventListener("pointerdown", stopPointerEvent);
+            input.addEventListener("mousedown", stopPointerEvent);
+            input.addEventListener("click", stopPointerEvent);
+            input.addEventListener("input", () => {
+              const position = getPosition();
+              if (position === undefined) return;
+              const node = view.state.doc.nodeAt(position);
+              if (!node || node.type !== imageType) return;
+              const request = parseMarkdownImageRequest(
+                input.value,
+                String(node.attrs.caption ?? "")
+              );
+              view.dispatch(
+                view.state.tr.setNodeMarkup(position, undefined, {
+                  ...node.attrs,
+                  caption: request.caption,
+                  src: request.src
+                })
+              );
+            });
+            input.addEventListener("keydown", (event) => {
+              event.stopPropagation();
+              if (event.key === "Enter") {
+                event.preventDefault();
+                input.blur();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                const position = getPosition();
+                const node = position === undefined ? null : view.state.doc.nodeAt(position);
+                if (node?.type === imageType) {
+                  input.value = formatMarkdownImageRequest(
+                    String(node.attrs.caption ?? ""),
+                    String(node.attrs.src ?? "")
+                  );
+                }
+                input.blur();
+              }
+            });
+
+            wrapper.append(input);
+            return wrapper;
+          },
+          {
+            key: `markdown-image-source-${imagePosition}`,
+            side: -1
+          }
+        );
+        return DecorationSet.create(state.doc, [editor]);
+      }
+    }
+  });
+});
+
 const markdownTableToolbar = $prose((ctx) =>
   new Plugin({
     props: {
@@ -811,8 +903,94 @@ function insertTable(ctx: Ctx) {
   return callCommand(ctx, selectTextNearPosCommand, { pos: from });
 }
 
-function insertImage(ctx: Ctx) {
-  return callCommand(ctx, addBlockTypeCommand, { nodeType: imageBlockSchema.type(ctx) });
+function chooseImageFile(
+  onSelect: (file: File) => void,
+  onCancel: () => void
+) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/*";
+  input.hidden = true;
+  document.body.append(input);
+
+  let settled = false;
+  const dispose = () => input.remove();
+  const settle = (callback: () => void) => {
+    if (settled) return;
+    settled = true;
+    dispose();
+    callback();
+  };
+  input.addEventListener(
+    "change",
+    () => {
+      const file = input.files?.[0];
+      settle(() => {
+        if (file) onSelect(file);
+        else onCancel();
+      });
+    },
+    { once: true }
+  );
+  input.addEventListener(
+    "cancel",
+    () => settle(onCancel),
+    { once: true }
+  );
+  input.click();
+}
+
+function chooseAndInsertImage(ctx: Ctx, onError: (message: string) => void) {
+  const view = ctx.get(editorViewCtx);
+  const bookmark = view.state.selection.getBookmark();
+
+  chooseImageFile(
+    (file) => {
+      void fileToDataUrl(file)
+        .then((src) => {
+          const imageType = imageBlockSchema.type(ctx);
+          let transaction = view.state.tr;
+          try {
+            transaction = transaction.setSelection(bookmark.resolve(transaction.doc));
+          } catch {
+            // If the document changed while the native picker was open, use its current selection.
+          }
+
+          const insertionFrom = transaction.selection.from;
+          transaction = transaction.replaceSelectionWith(
+            imageType.create({
+              src,
+              caption: file.name,
+              ratio: 1
+            })
+          );
+
+          let imagePosition: number | undefined;
+          let nearestDistance = Number.POSITIVE_INFINITY;
+          transaction.doc.descendants((node, position) => {
+            if (node.type !== imageType || node.attrs.src !== src) return;
+            const distance = Math.abs(position - insertionFrom);
+            if (distance < nearestDistance) {
+              imagePosition = position;
+              nearestDistance = distance;
+            }
+          });
+          if (imagePosition !== undefined) {
+            transaction = transaction.setSelection(
+              NodeSelection.create(transaction.doc, imagePosition)
+            );
+          }
+
+          view.dispatch(transaction.scrollIntoView());
+          view.focus();
+        })
+        .catch((error) => {
+          onError(readError(error));
+          view.focus();
+        });
+    },
+    () => view.focus()
+  );
 }
 
 function wrapList(ctx: Ctx, ordered: boolean) {
@@ -1009,6 +1187,18 @@ function CrepeEditor({
 
   useEffect(() => {
     if (!rootRef.current) return;
+    const editorRoot = rootRef.current;
+    const setImageLoadFailed = (event: Event, failed: boolean) => {
+      const target = event.target;
+      if (!(target instanceof HTMLImageElement)) return;
+      const imageBlock = target.closest(".milkdown-image-block");
+      imageBlock?.classList.toggle("markdownImageLoadFailed", failed);
+    };
+    const handleImageLoad = (event: Event) => setImageLoadFailed(event, false);
+    const handleImageError = (event: Event) => setImageLoadFailed(event, true);
+    editorRoot.addEventListener("load", handleImageLoad, true);
+    editorRoot.addEventListener("error", handleImageError, true);
+
     let disposed = false;
     let ready = false;
     let toolbarObserver: MutationObserver | undefined;
@@ -1090,7 +1280,16 @@ function CrepeEditor({
                 }
               }
             );
-            addExisting(insertGroup, "image");
+            const imageItem = existingItems.get("image");
+            if (imageItem) {
+              insertGroup.addItem("image", {
+                ...imageItem,
+                active: () => false,
+                onRun: (ctx: Ctx) => {
+                  chooseAndInsertImage(ctx, (message) => onErrorRef.current(message));
+                }
+              });
+            }
 
             const listGroup = builder.addGroup("document-list", "列表");
             addToggleExisting(
@@ -1224,6 +1423,7 @@ function CrepeEditor({
       .use(highlightSchema)
       .use(markdownTableSchema)
       .use(markdownInlineLinkEditor)
+      .use(markdownImageSourceEditor)
       .use(markdownTableToolbar)
       .use(markdownToolbarShortcuts);
     crepe.on((listener) => {
@@ -1245,6 +1445,8 @@ function CrepeEditor({
       .catch((error) => onErrorRef.current(`编辑器加载失败：${readError(error)}`));
     return () => {
       disposed = true;
+      editorRoot.removeEventListener("load", handleImageLoad, true);
+      editorRoot.removeEventListener("error", handleImageError, true);
       toolbarObserver?.disconnect();
       void creation.then(() => crepeInstance?.destroy()).catch(() => undefined);
     };
@@ -1275,11 +1477,19 @@ export function MarkdownWorkspace({
   const [folderMenu, setFolderMenu] = useState<FolderMenu | null>(null);
   const [documentMenu, setDocumentMenu] = useState<DocumentMenu | null>(null);
   const [folderDraft, setFolderDraft] = useState<FolderDraft | null>(null);
+  const [folderRenameDraft, setFolderRenameDraft] = useState<FolderRenameDraft | null>(null);
+  const [draggedDocumentId, setDraggedDocumentId] = useState<number | null>(null);
+  const [dropTargetCategoryId, setDropTargetCategoryId] = useState<number | null>(null);
+  const [movingDocumentId, setMovingDocumentId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const toastMessage = error ?? notice;
+  const toastKind = error ? "error" : notice ? "notice" : null;
   const titleRef = useRef<HTMLInputElement>(null);
   const folderDraftRef = useRef<HTMLInputElement>(null);
+  const folderRenameRef = useRef<HTMLInputElement>(null);
   const editorCanvasRef = useRef<HTMLDivElement>(null);
+  const draggedDocumentIdRef = useRef<number | null>(null);
   const activeDocumentRef = useRef<ActiveMarkdownDocument>({
     id: undefined as number | undefined,
     title: "",
@@ -1289,6 +1499,7 @@ export function MarkdownWorkspace({
     dirty: false
   });
   const saveTrackerRef = useRef(new MarkdownSaveTracker());
+  const writeQueueRef = useRef(new MarkdownWriteQueue());
 
   const selectedDocument = documents.find((document) => document.id === selectedId);
   const normalizedSearch = search.trim().toLocaleLowerCase();
@@ -1386,9 +1597,10 @@ export function MarkdownWorkspace({
 
   const persistCurrentDocument = useCallback(async () => {
     const snapshot = { ...activeDocumentRef.current };
-    if (!snapshot.id) return true;
+    const documentId = snapshot.id;
+    if (!documentId) return true;
     const token = saveTrackerRef.current.capture();
-    if (!token || token.documentId !== snapshot.id) return false;
+    if (!token || token.documentId !== documentId) return false;
     const nextTitle = snapshot.title.trim();
     if (!nextTitle) {
       if (saveTrackerRef.current.isCurrent(token)) {
@@ -1399,13 +1611,15 @@ export function MarkdownWorkspace({
     }
     if (saveTrackerRef.current.isCurrent(token)) setSaveState("saving");
     try {
-      const updated = await api.updateMarkdownDocument({
-        id: snapshot.id,
-        title: nextTitle,
-        content: snapshot.content,
-        category_id: snapshot.categoryId,
-        source_path: snapshot.sourcePath
-      });
+      const updated = await writeQueueRef.current.enqueue(() =>
+        api.updateMarkdownDocument({
+          id: documentId,
+          title: nextTitle,
+          content: snapshot.content,
+          category_id: snapshot.categoryId,
+          source_path: snapshot.sourcePath
+        })
+      );
       setDocuments((current) => current.map((document) => (document.id === updated.id ? updated : document)));
       if (saveTrackerRef.current.isCurrent(token)) {
         activeDocumentRef.current = {
@@ -1458,6 +1672,18 @@ export function MarkdownWorkspace({
   }, [onDirtyChange, saveState]);
 
   useEffect(() => {
+    if (!toastKind || !toastMessage) return;
+    const timer = window.setTimeout(() => {
+      if (toastKind === "error") {
+        setError((current) => (current === toastMessage ? null : current));
+      } else {
+        setNotice((current) => (current === toastMessage ? null : current));
+      }
+    }, 4500);
+    return () => window.clearTimeout(timer);
+  }, [toastKind, toastMessage]);
+
+  useEffect(() => {
     onRegisterLeaveHandlers?.({
       save: saveBeforeDocumentChange,
       discard: () => onDirtyChange?.(false)
@@ -1496,6 +1722,14 @@ export function MarkdownWorkspace({
     window.setTimeout(() => folderDraftRef.current?.focus(), 0);
   }, [folderDraft?.parentId]);
 
+  useEffect(() => {
+    if (!folderRenameDraft) return;
+    window.setTimeout(() => {
+      folderRenameRef.current?.focus();
+      folderRenameRef.current?.select();
+    }, 0);
+  }, [folderRenameDraft?.categoryId]);
+
   const createDocument = useCallback(
     async (targetCategoryId: number | null = selectedFolderId) => {
       if (!(await saveBeforeDocumentChange())) return;
@@ -1524,6 +1758,7 @@ export function MarkdownWorkspace({
 
   function beginCreateFolder(parentId: number | null = null) {
     setFolderMenu(null);
+    setFolderRenameDraft(null);
     setSelectedFolderId(parentId);
     setFolderDraft({ parentId, name: "" });
     if (parentId !== null) {
@@ -1554,30 +1789,51 @@ export function MarkdownWorkspace({
     }
   }
 
-  async function renameFolder(category: MarkdownCategory) {
-    const name = window.prompt("重命名文件夹", category.name);
-    if (!name?.trim() || name.trim() === category.name) return;
+  function beginRenameFolder(category: MarkdownCategory) {
+    setFolderMenu(null);
+    setFolderDraft(null);
+    setSelectedFolderId(category.id);
+    setFolderRenameDraft({
+      categoryId: category.id,
+      name: category.name
+    });
+  }
+
+  async function commitFolderRename(category: MarkdownCategory) {
+    const draft = folderRenameDraft;
+    if (!draft || draft.categoryId !== category.id) return;
+    const name = draft.name.trim();
+    setFolderRenameDraft(null);
+    if (!name || name === category.name) return;
     try {
       const updated = await api.updateMarkdownCategory({
         id: category.id,
-        name: name.trim(),
+        name,
         parent_id: category.parent_id,
         sort_order: category.sort_order
       });
       setCategories((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setNotice("文件夹已重命名");
     } catch (err) {
       setError(readError(err));
     }
   }
 
   async function deleteFolder(category: MarkdownCategory) {
-    if (!window.confirm(`确定删除文件夹“${category.name}”及其子文件夹吗？其中的笔记会移到未分类。`)) return;
+    const hasChildren =
+      categories.some((item) => item.parent_id === category.id) ||
+      documents.some((document) => document.category_id === category.id);
+    if (hasChildren) {
+      setError("文件夹中有子文件或子文件夹，请先删除子文件和子文件夹后再删除父文件夹");
+      return;
+    }
+    if (!window.confirm(`确定删除空文件夹“${category.name}”吗？`)) return;
     if (!(await saveBeforeDocumentChange())) return;
     try {
       await api.deleteMarkdownCategory(category.id);
       await loadLibrary(selectedId);
       setSelectedFolderId(null);
-      setNotice("文件夹已删除，笔记已移到未分类");
+      setNotice("文件夹已删除");
     } catch (err) {
       setError(readError(err));
     }
@@ -1808,12 +2064,44 @@ export function MarkdownWorkspace({
       if (!path) return;
       const { jsPDF } = await import("jspdf");
       const pdf = new jsPDF({
-        orientation: canvas.width > canvas.height ? "landscape" : "portrait",
-        unit: "px",
-        format: [canvas.width, canvas.height],
-        hotfixes: ["px_scaling"]
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+        compress: true
       });
-      pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, 0, canvas.width, canvas.height);
+      const layout = calculateMarkdownPdfLayout(canvas.width, canvas.height);
+      layout.slices.forEach((slice, index) => {
+        if (index > 0) pdf.addPage();
+
+        const pageCanvas = window.document.createElement("canvas");
+        pageCanvas.width = canvas.width;
+        pageCanvas.height = slice.sourceHeight;
+        const pageContext = pageCanvas.getContext("2d");
+        if (!pageContext) throw new Error("无法创建 PDF 页面画布");
+        pageContext.fillStyle = "#ffffff";
+        pageContext.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+        pageContext.drawImage(
+          canvas,
+          0,
+          slice.sourceY,
+          canvas.width,
+          slice.sourceHeight,
+          0,
+          0,
+          pageCanvas.width,
+          pageCanvas.height
+        );
+        pdf.addImage(
+          pageCanvas.toDataURL("image/png"),
+          "PNG",
+          layout.marginMm,
+          layout.marginMm,
+          layout.imageWidthMm,
+          slice.imageHeightMm,
+          undefined,
+          "FAST"
+        );
+      });
       await api.writeMarkdownExportFile(path, Array.from(new Uint8Array(pdf.output("arraybuffer"))));
       setNotice(`已导出 PDF：${path}`);
     } catch (err) {
@@ -1877,13 +2165,130 @@ export function MarkdownWorkspace({
     })();
   }
 
+  async function moveDocumentToFolder(documentId: number, targetCategoryId: number) {
+    const document = documents.find((item) => item.id === documentId);
+    if (!document || document.category_id === targetCategoryId || movingDocumentId !== null) return;
+
+    setMovingDocumentId(documentId);
+    setError(null);
+    try {
+      if (
+        activeDocumentRef.current.id === documentId &&
+        activeDocumentRef.current.dirty &&
+        !(await saveBeforeDocumentChange())
+      ) {
+        return;
+      }
+
+      const active = activeDocumentRef.current;
+      const source =
+        active.id === documentId
+          ? {
+              title: active.title,
+              content: active.content,
+              source_path: active.sourcePath
+            }
+          : {
+              title: document.title,
+              content: document.content,
+              source_path: document.source_path
+            };
+      if (active.id === documentId) {
+        activeDocumentRef.current = {
+          ...active,
+          categoryId: targetCategoryId
+        };
+      }
+      const updated = await writeQueueRef.current.enqueue(() =>
+        api.updateMarkdownDocument({
+          id: documentId,
+          title: source.title,
+          content: source.content,
+          category_id: targetCategoryId,
+          source_path: source.source_path
+        })
+      );
+
+      setDocuments((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      if (activeDocumentRef.current.id === updated.id) {
+        activeDocumentRef.current = {
+          ...activeDocumentRef.current,
+          categoryId: updated.category_id
+        };
+        setCategoryId(updated.category_id);
+      }
+      setSelectedFolderId(updated.category_id);
+      setExpandedFolderIds((current) => new Set(current).add(targetCategoryId));
+    } catch (err) {
+      if (
+        activeDocumentRef.current.id === documentId &&
+        activeDocumentRef.current.categoryId === targetCategoryId
+      ) {
+        activeDocumentRef.current = {
+          ...activeDocumentRef.current,
+          categoryId: document.category_id
+        };
+        setCategoryId(document.category_id);
+      }
+      setError(`移动笔记失败：${readError(err)}`);
+    } finally {
+      setMovingDocumentId(null);
+    }
+  }
+
+  function handleFolderDragOver(event: ReactDragEvent<HTMLButtonElement>, categoryIdToDrop: number) {
+    const documentId = draggedDocumentIdRef.current;
+    if (documentId === null) return;
+    const document = documents.find((item) => item.id === documentId);
+    if (!document || document.category_id === categoryIdToDrop) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDropTargetCategoryId(categoryIdToDrop);
+  }
+
+  function handleFolderDrop(event: ReactDragEvent<HTMLButtonElement>, categoryIdToDrop: number) {
+    event.preventDefault();
+    event.stopPropagation();
+    const documentId = draggedDocumentIdRef.current;
+    draggedDocumentIdRef.current = null;
+    setDropTargetCategoryId(null);
+    setDraggedDocumentId(null);
+    if (documentId !== null) void moveDocumentToFolder(documentId, categoryIdToDrop);
+  }
+
   function renderDocument(document: MarkdownDocument, depth: number) {
+    const className = [
+      "markdownTreeNote",
+      selectedId === document.id ? "active" : "",
+      draggedDocumentId === document.id ? "dragging" : "",
+      movingDocumentId === document.id ? "moving" : ""
+    ]
+      .filter(Boolean)
+      .join(" ");
     return (
       <button
         type="button"
-        className={selectedId === document.id ? "markdownTreeNote active" : "markdownTreeNote"}
+        className={className}
         style={{ "--tree-depth": depth } as CSSProperties}
-        title={document.title}
+        title={`${document.title}（可拖动到文件夹）`}
+        draggable={movingDocumentId === null}
+        aria-grabbed={draggedDocumentId === document.id}
+        onDragStart={(event) => {
+          draggedDocumentIdRef.current = document.id;
+          setDraggedDocumentId(document.id);
+          setDropTargetCategoryId(null);
+          event.dataTransfer.effectAllowed = "move";
+          try {
+            event.dataTransfer.setData("text/plain", String(document.id));
+          } catch {
+            // WebView drag state is held by draggedDocumentIdRef; payload support is optional.
+          }
+        }}
+        onDragEnd={() => {
+          draggedDocumentIdRef.current = null;
+          setDraggedDocumentId(null);
+          setDropTargetCategoryId(null);
+        }}
         onClick={() => void selectDocument(document)}
         onContextMenu={(event) => showDocumentMenu(event, document)}
         key={document.id}
@@ -1931,23 +2336,71 @@ export function MarkdownWorkspace({
     const children = categoriesByParent.get(category.id) ?? [];
     const folderDocuments = documentsByCategory.get(category.id) ?? [];
     const expanded = expandedFolderIds.has(category.id);
+    const renaming = folderRenameDraft?.categoryId === category.id;
+    const folderClassName = [
+      "markdownTreeFolder",
+      selectedFolderId === category.id ? "active" : "",
+      dropTargetCategoryId === category.id ? "dropTarget" : ""
+    ]
+      .filter(Boolean)
+      .join(" ");
     return (
       <div className="markdownTreeBranch" key={category.id}>
-        <button
-          type="button"
-          className={selectedFolderId === category.id ? "markdownTreeFolder active" : "markdownTreeFolder"}
-          style={{ "--tree-depth": depth } as CSSProperties}
-          onClick={() => {
-            setSelectedFolderId(category.id);
-            toggleFolder(category.id);
-          }}
-          onContextMenu={(event) => showFolderMenu(event, category)}
-          title={`${category.name}（右键查看更多操作）`}
-        >
-          {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-          {expanded ? <FolderOpen size={16} /> : <Folder size={16} />}
-          <span>{category.name}</span>
-        </button>
+        {renaming ? (
+          <div
+            className="markdownFolderDraft markdownFolderRename"
+            style={{ "--tree-depth": depth } as CSSProperties}
+          >
+            {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+            {expanded ? <FolderOpen size={16} /> : <Folder size={16} />}
+            <input
+              ref={folderRenameRef}
+              value={folderRenameDraft.name}
+              aria-label={`重命名文件夹 ${category.name}`}
+              onChange={(event) =>
+                setFolderRenameDraft((current) =>
+                  current?.categoryId === category.id
+                    ? { ...current, name: event.target.value }
+                    : current
+                )
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.currentTarget.blur();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setFolderRenameDraft(null);
+                }
+              }}
+              onBlur={() => void commitFolderRename(category)}
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            className={folderClassName}
+            style={{ "--tree-depth": depth } as CSSProperties}
+            onClick={() => {
+              setSelectedFolderId(category.id);
+              toggleFolder(category.id);
+            }}
+            onDragOver={(event) => handleFolderDragOver(event, category.id)}
+            onDragLeave={(event) => {
+              if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+              setDropTargetCategoryId((current) => (current === category.id ? null : current));
+            }}
+            onDrop={(event) => handleFolderDrop(event, category.id)}
+            onContextMenu={(event) => showFolderMenu(event, category)}
+            title={`${category.name}（右键查看更多操作）`}
+          >
+            {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+            {expanded ? <FolderOpen size={16} /> : <Folder size={16} />}
+            <span>{category.name}</span>
+          </button>
+        )}
         {expanded && (
           <div>
             {folderDraft?.parentId === category.id && renderFolderDraft(depth + 1)}
@@ -2158,9 +2611,14 @@ export function MarkdownWorkspace({
             </div>
           </div>
         )}
-        {(notice || error) && (
-          <div className={error ? "markdownToast error" : "markdownToast"} title={error ?? notice ?? ""}>
-            {error ?? notice}
+        {toastMessage && (
+          <div
+            className={toastKind === "error" ? "markdownToast error" : "markdownToast"}
+            title={toastMessage}
+            role={toastKind === "error" ? "alert" : "status"}
+            aria-live={toastKind === "error" ? "assertive" : "polite"}
+          >
+            {toastMessage}
             <button type="button" onClick={() => { setError(null); setNotice(null); }}><X size={14} /></button>
           </div>
         )}
@@ -2186,7 +2644,7 @@ export function MarkdownWorkspace({
             <FolderDown size={17} />导出文件夹
           </button>
           <div className="markdownMenuDivider" />
-          <button type="button" onClick={() => { setFolderMenu(null); void renameFolder(folderMenu.category); }}>
+          <button type="button" onClick={() => beginRenameFolder(folderMenu.category)}>
             <Pencil size={17} />重命名
           </button>
           <button type="button" className="danger" onClick={() => { setFolderMenu(null); void deleteFolder(folderMenu.category); }}>

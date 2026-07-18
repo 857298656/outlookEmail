@@ -27,11 +27,24 @@ describe("markdown library API", () => {
     expect(updated.content).toContain("[x]");
     expect(updated.source_path).toBe("C:\\notes\\release.md");
 
-    await api.deleteMarkdownCategory(category.id);
-    const retained = await api.getMarkdownDocument(document.id);
-    expect(retained.category_id).toBeNull();
+    const moved = await api.updateMarkdownDocument({
+      id: document.id,
+      title: updated.title,
+      content: updated.content,
+      category_id: category.id,
+      source_path: updated.source_path
+    });
+    expect(moved.category_id).toBe(category.id);
+    expect(moved.category_name).toBe(category.name);
 
+    await expect(api.deleteMarkdownCategory(category.id)).rejects.toThrow(
+      "文件夹中有子文件或子文件夹"
+    );
+    const retained = await api.getMarkdownDocument(document.id);
+    expect(retained.category_id).toBe(category.id);
     await api.deleteMarkdownDocument(document.id);
+    await api.deleteMarkdownCategory(childCategory.id);
+    await api.deleteMarkdownCategory(category.id);
     const documents = await api.listMarkdownDocuments();
     expect(documents.some((item) => item.id === document.id)).toBe(false);
   });

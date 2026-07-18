@@ -1106,6 +1106,10 @@ button:disabled {
   background: #e9e9e9;
 }
 
+.markdownFolderRename {
+  background: #ececec;
+}
+
 .markdownFolderDraft svg {
   flex: 0 0 auto;
   color: #666;
@@ -1128,12 +1132,33 @@ button:disabled {
 .markdownTreeNote {
   gap: 7px;
   padding-left: calc(29px + var(--tree-depth, 0) * 17px);
+  cursor: grab;
+}
+
+.markdownTreeNote.dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+.markdownTreeNote.moving {
+  opacity: 0.6;
+  cursor: progress;
 }
 
 .markdownTreeFolder:hover,
 .markdownTreeNote:hover,
 .markdownTreeFolder.active {
   background: #ececec;
+}
+
+.markdownTreeFolder.dropTarget {
+  background: #dce9fb;
+  box-shadow: inset 3px 0 #4b8df8;
+  color: #174ea6;
+}
+
+.markdownTreeFolder.dropTarget svg {
+  color: #2867bd;
 }
 
 .markdownTreeNote.active {
@@ -1322,6 +1347,52 @@ button:disabled {
 .markdownCrepeRoot .milkdown .ProseMirror .markdownInlineLinkInput::selection {
   background: #cfe3ff;
   color: #075dcc;
+}
+
+.markdownCrepeRoot .milkdown .ProseMirror .markdownImageSourceEditor {
+  display: block;
+  margin: 0 0 16px;
+}
+
+.markdownCrepeRoot .milkdown .ProseMirror .markdownImageSourceInput {
+  width: min(760px, 100%);
+  height: 32px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  background: transparent;
+  box-sizing: border-box;
+  color: #98a8bd;
+  caret-color: #075dcc;
+  font: inherit;
+  line-height: 24px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdownCrepeRoot .milkdown .ProseMirror .markdownImageSourceInput:focus {
+  border: 0;
+  box-shadow: none;
+  text-overflow: clip;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-image-block > .image-wrapper,
+.markdownCrepeRoot .milkdown .milkdown-image-block > .image-wrapper > img {
+  background: transparent;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-image-block.selected > .image-wrapper::before {
+  content: none;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-image-block > .caption-input {
+  display: none !important;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-image-block.markdownImageLoadFailed > .image-wrapper {
+  display: none;
 }
 
 .markdownCrepeRoot .milkdown .milkdown-code-block {
@@ -1824,33 +1895,59 @@ button:disabled {
 .markdownToast {
   position: absolute;
   z-index: 90;
+  top: 16px;
   left: 50%;
-  bottom: 16px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  max-width: min(620px, 75%);
-  padding: 10px 14px;
+  gap: 14px;
+  min-height: 54px;
+  max-width: min(760px, calc(100% - 32px));
+  padding: 13px 18px;
   transform: translateX(-50%);
-  border: 1px solid #d9d9d9;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.13);
-  color: #426543;
-  font-size: 12px;
+  box-sizing: border-box;
+  border: 1px solid #b42318;
+  border-radius: 9px;
+  background: #d92d20;
+  box-shadow: 0 10px 28px rgba(180, 35, 24, 0.28);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+  animation: markdownToastIn 180ms ease-out;
 }
 
 .markdownToast.error {
-  color: #b42318;
+  background: #d92d20;
+  color: #fff;
 }
 
 .markdownToast button {
   display: grid;
   place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 0;
+  border-radius: 50%;
   background: transparent;
   color: currentColor;
+  cursor: pointer;
+}
+
+.markdownToast button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+@keyframes markdownToastIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 .markdownWelcome {

@@ -1,6 +1,6 @@
 [package]
 name = "outlook-email-desktop"
-version = "0.2.5"
+version = "0.2.6"
 description = "A local-first OutlookEmail desktop application"
 authors = ["OutlookEmail Desktop"]
 edition = "2021"

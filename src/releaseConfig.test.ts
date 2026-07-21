@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import packageJson from "../package.json";
+import macContextIcon from "../src-tauri/icons/icon.png";
 import macConfig from "../src-tauri/tauri.macos.conf.json";
 import tauriConfig from "../src-tauri/tauri.conf.json";
 import windowsConfig from "../src-tauri/tauri.windows.conf.json";
@@ -10,6 +11,7 @@ describe("desktop release configuration", () => {
     expect(macConfig.bundle.targets).toEqual(["app", "dmg"]);
     expect(macConfig.bundle.macOS.signingIdentity).toBe("-");
     expect(tauriConfig.bundle.icon).toEqual([
+      "icons/icon.png",
       "icons/icon.ico",
       "icons/icon.icns"
     ]);
@@ -19,5 +21,9 @@ describe("desktop release configuration", () => {
     expect(packageJson.scripts["tauri:build:mac"]).toContain(
       "--bundles app,dmg"
     );
+  });
+
+  it("ships the PNG icon required by Tauri context generation on macOS", () => {
+    expect(macContextIcon).toContain("icon.png");
   });
 });

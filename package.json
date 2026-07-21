@@ -1,6 +1,6 @@
 {
   "name": "outlook-email-desktop",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "packageManager": "pnpm@9.15.9",
   "type": "module",
@@ -13,7 +13,7 @@
     "tauri:build:mac": "node scripts/tauri-with-rust-env.mjs build --target universal-apple-darwin --bundles app,dmg",
     "cargo:test": "node scripts/cargo-with-rust-env.mjs test --lib",
     "cargo:check": "node scripts/cargo-with-rust-env.mjs check",
-    "test": "vitest run"
+    "test": "node scripts/check-release-icons.mjs && vitest run"
   },
   "dependencies": {
     "@milkdown/crepe": "^7.21.3",

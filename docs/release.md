@@ -1,6 +1,6 @@
-# Windows Release
+# Windows and macOS Release
 
-The GitHub Actions release workflow builds the NSIS installer, signs its updater artifact, and uploads `latest.json`.
+The GitHub Actions release workflow builds the Windows NSIS installer first, then builds a universal macOS DMG for Intel and Apple Silicon. Both updater artifacts are signed with the Tauri updater key and merged into `latest.json`.
 
 ## Required repository secrets
 
@@ -35,11 +35,23 @@ try {
 
 The variables exist only for that PowerShell session and are removed after the build.
 
+## macOS build and signing
+
+The macOS package must be built on macOS. The local command and CI workflow both create a universal DMG:
+
+```bash
+pnpm tauri:build:mac
+```
+
+The generated installer is under `universal-apple-darwin/release/bundle/dmg/`. The platform configuration currently uses the ad-hoc signing identity `-`, so the DMG can be produced without an Apple Developer certificate. Users must approve the first launch in **System Settings > Privacy & Security**.
+
+For warning-free public distribution, replace ad-hoc signing in CI with a Developer ID Application certificate and Apple notarization credentials. Follow the official Tauri macOS signing guide and store every credential as a GitHub Actions secret; never commit certificates, app-specific passwords, API keys, or private keys.
+
 ## Publishing
 
 1. Run `pnpm build`, `pnpm test`, and `pnpm cargo:test`.
 2. Update the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
 3. Push a matching `v*` tag.
-4. Confirm that the release contains the NSIS installer, its `.sig` file, and `latest.json`.
+4. Confirm that the release contains the NSIS installer, universal DMG, both updater artifacts and `.sig` files, and a `latest.json` with Windows plus macOS platform entries.
 
-The workflow validates signing secrets before the expensive Windows bundle step so a missing secret fails with a direct diagnostic.
+The workflow validates updater signing secrets before each bundle step. The macOS job runs after Windows so `tauri-action` can merge the macOS updater entry into the existing cross-platform `latest.json` without a concurrent upload race.

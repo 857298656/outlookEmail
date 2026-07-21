@@ -32,9 +32,9 @@ The application is a single-user local desktop app. It does not expose a public 
 - Background scheduler inside the desktop process (mail refresh only)
 - Provider registry, readiness checks, failure hints, and credential error classification
 - Workspace key records for local operational secrets
-- Markdown workspace with SQLite-backed documents/nested folders, title/body filtering, revision-safe debounced autosave, a Milkdown Crepe WYSIWYG editor, embedded pasted/dropped images, and native `.md` / `.markdown` open/import/save/folder-export flows; the workspace shell and Crepe runtime are loaded as separate lazy frontend chunks
+- Markdown workspace with SQLite-backed documents/nested folders, title/body filtering, revision-safe debounced autosave, a Milkdown Crepe WYSIWYG editor, embedded pasted/dropped images, native `.md` / `.markdown` open/link/save flows, `.md` / `.markdown` / `.txt` / `.json` SQLite-copy imports, and Markdown folder exports; the workspace shell and Crepe runtime are loaded as separate lazy frontend chunks
 - GPTMail, DuckMail, and Cloudflare Temp Email management through native Tauri commands, including chunked provider-aware batch import with visible progress, Cloudflare batch generation (1–50 addresses with partial-failure results), and SQLite message caching; provider credentials remain encrypted locally and received HTML uses the existing sandbox renderer
-- Windows executable and NSIS bundle generation
+- Windows executable/NSIS bundle generation and universal macOS DMG generation for Intel and Apple Silicon
 
 ## Provider behavior
 

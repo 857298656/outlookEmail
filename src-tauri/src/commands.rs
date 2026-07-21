@@ -221,12 +221,12 @@ pub fn read_markdown_file(
             return Err(AppError::Unauthorized);
         }
     }
-    let path = validate_markdown_file_path(&path)?;
+    let path = validate_markdown_import_file_path(&path)?;
     let metadata = fs::metadata(path).map_err(|err| AppError::Internal(err.to_string()))?;
     const MAX_MARKDOWN_BYTES: u64 = 25 * 1024 * 1024;
     if metadata.len() > MAX_MARKDOWN_BYTES {
         return Err(AppError::InvalidInput(
-            "markdown file exceeds the 25 MB limit".to_string(),
+            "text file exceeds the 25 MB limit".to_string(),
         ));
     }
     let content = fs::read_to_string(path).map_err(|err| AppError::Internal(err.to_string()))?;
@@ -429,9 +429,29 @@ fn validate_markdown_file_path(value: &str) -> AppResult<&Path> {
         .and_then(|value| value.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if extension != "md" && extension != "markdown" {
+    if !matches!(extension.as_str(), "md" | "markdown") {
         return Err(AppError::InvalidInput(
-            "only .md and .markdown files are supported".to_string(),
+            "only .md and .markdown files can be linked or saved".to_string(),
+        ));
+    }
+    Ok(path)
+}
+
+fn validate_markdown_import_file_path(value: &str) -> AppResult<&Path> {
+    let path = Path::new(value);
+    if value.trim().is_empty() || path.file_name().is_none() {
+        return Err(AppError::InvalidInput(
+            "text file path is required".to_string(),
+        ));
+    }
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "md" | "markdown" | "txt" | "json") {
+        return Err(AppError::InvalidInput(
+            "only .md, .markdown, .txt, and .json files can be imported".to_string(),
         ));
     }
     Ok(path)
@@ -1051,4 +1071,42 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
         return message.clone();
     }
     "unknown panic".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_markdown_file_path, validate_markdown_import_file_path};
+
+    #[test]
+    fn markdown_workspace_file_path_accepts_supported_text_extensions() {
+        for path in [
+            "document.md",
+            "document.MARKDOWN",
+            "document.txt",
+            "document.JSON",
+        ] {
+            assert!(
+                validate_markdown_import_file_path(path).is_ok(),
+                "expected {path} to be supported"
+            );
+        }
+    }
+
+    #[test]
+    fn markdown_workspace_file_path_rejects_other_extensions() {
+        let error = validate_markdown_import_file_path("document.csv")
+            .expect_err("CSV should not be accepted by the Markdown workspace");
+        assert_eq!(
+            error.to_string(),
+            "invalid input: only .md, .markdown, .txt, and .json files can be imported"
+        );
+    }
+
+    #[test]
+    fn linked_files_remain_markdown_only() {
+        assert!(validate_markdown_file_path("document.md").is_ok());
+        assert!(validate_markdown_file_path("document.markdown").is_ok());
+        assert!(validate_markdown_file_path("document.txt").is_err());
+        assert!(validate_markdown_file_path("document.json").is_err());
+    }
 }

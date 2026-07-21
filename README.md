@@ -54,7 +54,7 @@
 - SQLite 本地笔记库：新建、700ms 自动保存、删除、全文搜索和多级文件夹管理
 - 支持 GFM 表格、任务列表、删除线、代码块、链接、LaTeX 和图片等常用内容
 - 图片可通过选择、粘贴或拖放插入，并以内嵌数据保存到笔记中
-- 原生打开并关联 `.md` / `.markdown` 文件，也可导入为独立 SQLite 副本
+- 原生打开并关联 `.md` / `.markdown` 文件；`.md` / `.markdown` / `.txt` / `.json` 均可导入为独立 SQLite 副本
 - 支持保存关联文件、另存为，以及按文件夹结构整目录导出 Markdown
 - 笔记右键支持复制、删除，并可导出为 Markdown、HTML、PDF 或 PNG 图片
 
@@ -70,7 +70,7 @@
 - 本地初始化、解锁、锁定流程
 - 本地保留统计与清理（邮件、临时消息、附件、导出）
 - 内置外观主题
-- Windows 可执行文件和 NSIS 安装包打包
+- Windows 可执行文件/NSIS 安装包，以及支持 Intel 与 Apple Silicon 的 macOS 通用 DMG 打包
 
 ## 支持的邮箱服务商
 
@@ -126,6 +126,17 @@ Windows 构建产物位于项目配置的 Rust target 目录：
 
 - `release/outlook-email-desktop.exe`
 - `release/bundle/nsis/OutlookEmail Desktop_*_x64-setup.exe`
+
+macOS 构建必须在 macOS 上执行：
+
+```bash
+pnpm tauri:build:mac
+```
+
+通用构建产物支持 Intel 与 Apple Silicon，位于：
+
+- `universal-apple-darwin/release/bundle/dmg/OutlookEmail Desktop_*.dmg`
+- `universal-apple-darwin/release/bundle/macos/OutlookEmail Desktop.app.tar.gz`（应用内更新包）
 
 ## 数据存储
 

@@ -29,7 +29,7 @@
 - 临时邮箱：GPTMail、DuckMail、Cloudflare Worker 通道
 - 临时邮箱批量操作：GPTMail/DuckMail/Cloudflare 格式化导入；Cloudflare 1–50 个地址批量生成、显式用户名及部分失败明细
 - 自动化：桌面进程内 scheduler
-- 打包：Windows exe、NSIS installer
+- 打包：Windows exe、NSIS installer；macOS universal app、DMG installer
 
 ## 历史需求记录（包含已移出范围的旧条目）
 
@@ -42,7 +42,7 @@
 - SQLite 本地数据库初始化和 WAL 模式。
 - 本地初始化、解锁、锁定流程。
 - 敏感字段加密保存。
-- Windows 可执行文件和安装包打包。
+- Windows 可执行文件/NSIS 安装包，以及支持 Intel 与 Apple Silicon 的 macOS 通用 DMG 打包。
 
 ### 账号与邮箱
 
@@ -139,7 +139,7 @@
 - SQLite 保存 Markdown 文档、多级文件夹、本地文件关联路径和更新时间。
 - 支持新建、所见即所得编辑、700ms 自动保存、删除、标题/正文搜索和文件夹增删改。
 - 支持 GFM 表格、任务列表、删除线、代码块、链接、LaTeX，以及选择、粘贴或拖放图片。
-- 支持打开并关联本地 `.md` / `.markdown` 文件、导入 SQLite 副本、保存关联文件、另存为和按目录结构导出文件夹。
+- 支持打开并关联本地 `.md` / `.markdown` 文件，将 `.md` / `.markdown` / `.txt` / `.json` 导入为 SQLite 副本，以及保存关联文件、另存为和按目录结构导出文件夹。
 - 笔记右键菜单支持复制、删除，以及导出 Markdown、HTML、PDF 和 PNG 图片。
 - Markdown 页面和编辑器按需加载；单张内嵌图片上限 8 MB，单篇笔记/本地文件上限 25 MB。
 - GPTMail 和 DuckMail API key 随邮箱配置加密保存。

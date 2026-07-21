@@ -66,14 +66,77 @@ jobs:
           tagName: v__VERSION__
           releaseName: OutlookEmail Desktop v__VERSION__
           releaseBody: |
-            Windows 安装包（NSIS）。
+            Windows 安装包（NSIS）与 macOS 通用安装包（DMG，支持 Intel 和 Apple Silicon）。
 
             下载 `OutlookEmail Desktop_*_x64-setup.exe` 后双击安装即可。
+            macOS 用户下载 `OutlookEmail Desktop_*_universal.dmg`，打开后将应用拖入 Applications。
             已安装旧版本的用户可在应用内检查更新，或重新下载安装包覆盖安装。
 
             首次运行若出现 Windows SmartScreen 提示，请选择「更多信息」→「仍要运行」。
+            当前 macOS 包使用 ad-hoc 签名；首次打开时请在「系统设置 → 隐私与安全性」中确认允许运行。
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
-          args: ""
+          args: "--bundles nsis"
+
+  release-macos:
+    needs: release-windows
+    permissions:
+      contents: write
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Rust stable with macOS targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate updater signing secrets
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [[ -z "$TAURI_SIGNING_PRIVATE_KEY" ]]; then
+            echo "Missing repository secret TAURI_SIGNING_PRIVATE_KEY. See docs/release.md." >&2
+            exit 1
+          fi
+          if [[ -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]]; then
+            echo "Missing repository secret TAURI_SIGNING_PRIVATE_KEY_PASSWORD. See docs/release.md." >&2
+            exit 1
+          fi
+
+      - name: Build and publish universal macOS installer
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: OutlookEmail Desktop v__VERSION__
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: "--target universal-apple-darwin --bundles app,dmg"

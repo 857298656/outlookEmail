@@ -19,6 +19,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
+  RefreshCw,
   Save,
   Search,
   Trash2,
@@ -92,6 +93,11 @@ import {
   formatMarkdownImageRequest,
   parseMarkdownImageRequest
 } from "../lib/markdownImage";
+import {
+  MARKDOWN_FILE_EXTENSIONS,
+  MARKDOWN_IMPORT_EXTENSIONS,
+  markdownImportTitle
+} from "../lib/markdownImport";
 import { calculateMarkdownPdfLayout } from "../lib/markdownPdf";
 import { MarkdownSaveTracker } from "../lib/markdownSaveTracker";
 import { MarkdownWriteQueue } from "../lib/markdownWriteQueue";
@@ -108,6 +114,7 @@ import type { MarkdownCategory, MarkdownDocument } from "../types";
 type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 type FolderMenu = { category: MarkdownCategory; x: number; y: number };
 type DocumentMenu = { document: MarkdownDocument; x: number; y: number };
+type RootMenu = { x: number; y: number };
 type FolderDraft = { parentId: number | null; name: string };
 type FolderRenameDraft = { categoryId: number; name: string };
 type ActiveMarkdownDocument = {
@@ -1096,7 +1103,7 @@ function defaultDocumentTitle() {
 }
 
 function fileTitle(fileName: string) {
-  return fileName.replace(/\.(md|markdown)$/i, "").trim() || defaultDocumentTitle();
+  return markdownImportTitle(fileName) || defaultDocumentTitle();
 }
 
 function safeFileName(value: string) {
@@ -1476,6 +1483,7 @@ export function MarkdownWorkspace({
   const [actionsOpen, setActionsOpen] = useState(false);
   const [folderMenu, setFolderMenu] = useState<FolderMenu | null>(null);
   const [documentMenu, setDocumentMenu] = useState<DocumentMenu | null>(null);
+  const [rootMenu, setRootMenu] = useState<RootMenu | null>(null);
   const [folderDraft, setFolderDraft] = useState<FolderDraft | null>(null);
   const [folderRenameDraft, setFolderRenameDraft] = useState<FolderRenameDraft | null>(null);
   const [draggedDocumentId, setDraggedDocumentId] = useState<number | null>(null);
@@ -1582,8 +1590,10 @@ export function MarkdownWorkspace({
         );
         const nextId = preferredId ?? selectedId ?? nextDocuments[0]?.id;
         hydrateDocument(nextDocuments.find((document) => document.id === nextId) ?? nextDocuments[0]);
+        return true;
       } catch (err) {
         setError(readError(err));
+        return false;
       } finally {
         setBusy(false);
       }
@@ -1704,6 +1714,7 @@ export function MarkdownWorkspace({
     const closeMenus = () => {
       setFolderMenu(null);
       setDocumentMenu(null);
+      setRootMenu(null);
       setActionsOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -1758,6 +1769,7 @@ export function MarkdownWorkspace({
 
   function beginCreateFolder(parentId: number | null = null) {
     setFolderMenu(null);
+    setRootMenu(null);
     setFolderRenameDraft(null);
     setSelectedFolderId(parentId);
     setFolderDraft({ parentId, name: "" });
@@ -1839,20 +1851,22 @@ export function MarkdownWorkspace({
     }
   }
 
-  async function chooseMarkdownPath() {
+  async function chooseImportFilePath(linkFile: boolean) {
     if (!isTauriRuntime()) throw new Error("本地文件操作仅在桌面应用中可用");
     const selected = await open({
       multiple: false,
       directory: false,
-      filters: [{ name: "Markdown", extensions: ["md", "markdown"] }]
+      filters: linkFile
+        ? [{ name: "Markdown", extensions: [...MARKDOWN_FILE_EXTENSIONS] }]
+        : [{ name: "Markdown / TXT / JSON", extensions: [...MARKDOWN_IMPORT_EXTENSIONS] }]
     });
     return typeof selected === "string" ? selected : null;
   }
 
-  async function importMarkdown(targetCategoryId: number | null, linkFile = false) {
+  async function importDocumentFile(targetCategoryId: number | null, linkFile = false) {
     if (!(await saveBeforeDocumentChange())) return;
     try {
-      const path = await chooseMarkdownPath();
+      const path = await chooseImportFilePath(linkFile);
       if (!path) return;
       setBusy(true);
       const file = await api.readMarkdownFile(path);
@@ -1864,7 +1878,7 @@ export function MarkdownWorkspace({
       });
       setDocuments((current) => [created, ...current]);
       hydrateDocument(created);
-      setNotice(linkFile ? "Markdown 文件已打开并关联" : "Markdown 文件已导入笔记库");
+      setNotice(linkFile ? "Markdown 文件已打开并关联" : "文件已导入笔记库");
     } catch (err) {
       setError(readError(err));
     } finally {
@@ -2135,6 +2149,8 @@ export function MarkdownWorkspace({
   function showFolderMenu(event: ReactMouseEvent, category: MarkdownCategory) {
     event.preventDefault();
     event.stopPropagation();
+    setDocumentMenu(null);
+    setRootMenu(null);
     setFolderMenu({
       category,
       x: Math.min(event.clientX, window.innerWidth - 240),
@@ -2146,6 +2162,7 @@ export function MarkdownWorkspace({
     event.preventDefault();
     event.stopPropagation();
     setFolderMenu(null);
+    setRootMenu(null);
     const x = Math.min(event.clientX, window.innerWidth - 310);
     const y = Math.min(event.clientY, window.innerHeight - 390);
     void (async () => {
@@ -2163,6 +2180,30 @@ export function MarkdownWorkspace({
           : document;
       setDocumentMenu({ document: snapshot, x, y });
     })();
+  }
+
+  function showRootMenu(event: ReactMouseEvent<HTMLDivElement>) {
+    if (
+      event.target instanceof Element &&
+      event.target.closest(".markdownTreeFolder, .markdownTreeNote, .markdownFolderDraft")
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setFolderMenu(null);
+    setDocumentMenu(null);
+    setActionsOpen(false);
+    setRootMenu({
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 240)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 210))
+    });
+  }
+
+  async function refreshLibrary() {
+    setRootMenu(null);
+    if (!(await saveBeforeDocumentChange())) return;
+    if (await loadLibrary(selectedId)) setNotice("笔记库已刷新");
   }
 
   async function moveDocumentToFolder(documentId: number, targetCategoryId: number) {
@@ -2435,7 +2476,7 @@ export function MarkdownWorkspace({
           >
             <ChevronsUpDown size={18} />
           </button>
-          <button type="button" title="导入 Markdown 文件" onClick={() => void importMarkdown(selectedFolderId, false)}>
+          <button type="button" title="导入 Markdown / TXT / JSON 文件" onClick={() => void importDocumentFile(selectedFolderId, false)}>
             <Upload size={18} />
           </button>
           <button type="button" title="新建文件夹" onClick={() => beginCreateFolder(null)}>
@@ -2454,7 +2495,7 @@ export function MarkdownWorkspace({
             </button>
           )}
         </label>
-        <div className="markdownTree">
+        <div className="markdownTree" onContextMenu={showRootMenu}>
           {folderDraft?.parentId === null && renderFolderDraft(0)}
           {(categoriesByParent.get(null) ?? []).map((category) => renderFolder(category, 0))}
           {(documentsByCategory.get(null) ?? []).map((document) => renderDocument(document, 0))}
@@ -2530,11 +2571,11 @@ export function MarkdownWorkspace({
                   </button>
                   {actionsOpen && (
                     <div className="markdownPopupMenu markdownDocumentMenu">
-                      <button type="button" onClick={() => { setActionsOpen(false); void importMarkdown(selectedFolderId, true); }}>
+                      <button type="button" onClick={() => { setActionsOpen(false); void importDocumentFile(selectedFolderId, true); }}>
                         <FolderOpen size={17} />打开并关联 Markdown
                       </button>
-                      <button type="button" onClick={() => { setActionsOpen(false); void importMarkdown(selectedFolderId, false); }}>
-                        <Upload size={17} />导入 Markdown 副本
+                      <button type="button" onClick={() => { setActionsOpen(false); void importDocumentFile(selectedFolderId, false); }}>
+                        <Upload size={17} />导入文件副本
                       </button>
                       <div className="markdownMenuDivider" />
                       <button type="button" onClick={() => { setActionsOpen(false); void saveLinkedFile(false); }}>
@@ -2605,7 +2646,7 @@ export function MarkdownWorkspace({
               <button type="button" className="button primary" onClick={() => void createDocument(null)}>
                 <FilePlus2 size={17} />新建笔记
               </button>
-              <button type="button" className="button" onClick={() => void importMarkdown(null, false)}>
+              <button type="button" className="button" onClick={() => void importDocumentFile(null, false)}>
                 <Upload size={17} />导入文件
               </button>
             </div>
@@ -2613,7 +2654,7 @@ export function MarkdownWorkspace({
         )}
         {toastMessage && (
           <div
-            className={toastKind === "error" ? "markdownToast error" : "markdownToast"}
+            className={`markdownToast ${toastKind === "error" ? "error" : "success"}`}
             title={toastMessage}
             role={toastKind === "error" ? "alert" : "status"}
             aria-live={toastKind === "error" ? "assertive" : "polite"}
@@ -2623,6 +2664,29 @@ export function MarkdownWorkspace({
           </div>
         )}
       </article>
+
+      {rootMenu && (
+        <div
+          className="markdownPopupMenu markdownRootMenu"
+          style={{ left: rootMenu.x, top: rootMenu.y }}
+          aria-label="根目录操作"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button type="button" onClick={() => { setRootMenu(null); void createDocument(null); }}>
+            <FilePlus2 size={17} />新建笔记
+          </button>
+          <button type="button" onClick={() => beginCreateFolder(null)}>
+            <FolderPlus size={17} />新建文件夹
+          </button>
+          <button type="button" onClick={() => { setRootMenu(null); void importDocumentFile(null, false); }}>
+            <Upload size={17} />导入 Markdown / TXT / JSON 文件
+          </button>
+          <div className="markdownMenuDivider" />
+          <button type="button" onClick={() => void refreshLibrary()}>
+            <RefreshCw size={17} />刷新
+          </button>
+        </div>
+      )}
 
       {folderMenu && (
         <div
@@ -2637,8 +2701,8 @@ export function MarkdownWorkspace({
             <FolderPlus size={17} />新建子文件夹
           </button>
           <div className="markdownMenuDivider" />
-          <button type="button" onClick={() => { setFolderMenu(null); void importMarkdown(folderMenu.category.id, false); }}>
-            <Upload size={17} />导入 Markdown 文件
+          <button type="button" onClick={() => { setFolderMenu(null); void importDocumentFile(folderMenu.category.id, false); }}>
+            <Upload size={17} />导入 Markdown / TXT / JSON 文件
           </button>
           <button type="button" onClick={() => { setFolderMenu(null); void exportFolder(folderMenu.category); }}>
             <FolderDown size={17} />导出文件夹

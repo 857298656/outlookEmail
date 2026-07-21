@@ -1772,6 +1772,7 @@ button:disabled {
 }
 
 .markdownFolderMenu,
+.markdownRootMenu,
 .markdownDocumentContextMenu {
   position: fixed;
 }
@@ -1905,10 +1906,10 @@ button:disabled {
   padding: 13px 18px;
   transform: translateX(-50%);
   box-sizing: border-box;
-  border: 1px solid #b42318;
+  border: 1px solid #067647;
   border-radius: 9px;
-  background: #d92d20;
-  box-shadow: 0 10px 28px rgba(180, 35, 24, 0.28);
+  background: #079455;
+  box-shadow: 0 10px 28px rgba(6, 118, 71, 0.28);
   color: #fff;
   font-size: 14px;
   font-weight: 600;
@@ -1916,8 +1917,16 @@ button:disabled {
   animation: markdownToastIn 180ms ease-out;
 }
 
+.markdownToast.success {
+  border-color: #067647;
+  background: #079455;
+  box-shadow: 0 10px 28px rgba(6, 118, 71, 0.28);
+}
+
 .markdownToast.error {
+  border-color: #b42318;
   background: #d92d20;
+  box-shadow: 0 10px 28px rgba(180, 35, 24, 0.28);
   color: #fff;
 }
 

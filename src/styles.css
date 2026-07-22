@@ -1491,6 +1491,16 @@ button:disabled {
   caret-color: #171717 !important;
 }
 
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-selectionBackground,
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-focused .cm-selectionBackground {
+  background: #bcd7ff !important;
+}
+
+.markdownCrepeRoot .milkdown .milkdown-code-block .cm-content ::selection {
+  background: #bcd7ff;
+  color: #171717;
+}
+
 .markdownCrepeRoot .milkdown .milkdown-code-block .cm-cursor,
 .markdownCrepeRoot .milkdown .milkdown-code-block .cm-dropCursor {
   visibility: visible !important;

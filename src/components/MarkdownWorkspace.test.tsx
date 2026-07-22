@@ -32,6 +32,41 @@ afterEach(() => {
   delete (window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
 
+describe("MarkdownWorkspace folder tree", () => {
+  it("keeps folders collapsed on the initial load", async () => {
+    const now = new Date().toISOString();
+    vi.spyOn(api, "listMarkdownCategories").mockResolvedValue([
+      {
+        id: -2001,
+        name: "父文件夹",
+        parent_id: null,
+        sort_order: 0,
+        document_count: 0,
+        created_at: now,
+        updated_at: now
+      },
+      {
+        id: -2002,
+        name: "子文件夹",
+        parent_id: -2001,
+        sort_order: 0,
+        document_count: 0,
+        created_at: now,
+        updated_at: now
+      }
+    ]);
+    vi.spyOn(api, "listMarkdownDocuments").mockResolvedValue([]);
+
+    render(<MarkdownWorkspace />);
+
+    const parentFolder = await screen.findByRole("button", { name: "父文件夹" });
+    expect(screen.queryByRole("button", { name: "子文件夹" })).toBeNull();
+
+    fireEvent.click(parentFolder);
+    expect(await screen.findByRole("button", { name: "子文件夹" })).toBeTruthy();
+  });
+});
+
 describe("MarkdownWorkspace root context menu", () => {
   it("shows root actions on blank space and creates notes and folders at the root", async () => {
     const now = new Date().toISOString();

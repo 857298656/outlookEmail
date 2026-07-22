@@ -1585,9 +1585,10 @@ export function MarkdownWorkspace({
         ]);
         setCategories(nextCategories);
         setDocuments(nextDocuments);
-        setExpandedFolderIds((current) =>
-          current.size > 0 ? current : new Set(nextCategories.map((category) => category.id))
-        );
+        setExpandedFolderIds((current) => {
+          const availableIds = new Set(nextCategories.map((category) => category.id));
+          return new Set([...current].filter((categoryId) => availableIds.has(categoryId)));
+        });
         const nextId = preferredId ?? selectedId ?? nextDocuments[0]?.id;
         hydrateDocument(nextDocuments.find((document) => document.id === nextId) ?? nextDocuments[0]);
         return true;

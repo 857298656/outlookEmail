@@ -58,6 +58,39 @@ export function sanitizeEmailHtml(html: string) {
   return document.body.innerHTML;
 }
 
+export function normalizeExternalEmailUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed.startsWith("//") ? `https:${trimmed}` : trimmed);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+export function bindExternalEmailLinks(
+  frame: HTMLIFrameElement,
+  onOpen: (url: string) => void
+) {
+  const frameDocument = frame.contentDocument;
+  if (!frameDocument) return () => undefined;
+
+  const handleClick = (event: MouseEvent) => {
+    if (event.defaultPrevented || event.button !== 0) return;
+    const eventTarget = event.target as (Element & { closest?: Element["closest"] }) | null;
+    const link = eventTarget?.closest?.("a[href], area[href]");
+    const url = normalizeExternalEmailUrl(link?.getAttribute("href") ?? "");
+    if (!url) return;
+
+    event.preventDefault();
+    onOpen(url);
+  };
+
+  frameDocument.addEventListener("click", handleClick);
+  return () => frameDocument.removeEventListener("click", handleClick);
+}
+
 function hasUnsafeUrl(value: string) {
   const normalized = value.replace(/[\u0000-\u001f\s]+/g, "").toLowerCase();
   return normalized.startsWith("javascript:") || normalized.startsWith("vbscript:") || normalized.startsWith("file:");

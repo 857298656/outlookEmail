@@ -25,7 +25,7 @@ The application is a single-user local desktop app. It does not expose a public 
 - Microsoft Graph OAuth and mailbox refresh (OAuth limited to `graph` and Outlook `imap` providers)
 - Generic TLS IMAP mailbox refresh for Gmail/QQ/163/Custom IMAP and Outlook IMAP OAuth (XOAUTH2)
 - Cached message field-token search, filters, multi-field sorting, pagination, batch read/unread/delete actions, and remote failure surfacing in job results
-- Sandboxed HTML body rendering for cached mailbox messages
+- Sandboxed HTML body rendering for cached mailbox messages, with sanitized HTTP(S) links delegated to the system default browser
 - Local HTML/CSV exports for cached mail and account inventory
 - Confirmed CSV export for selected account secrets after local password verification
 - Local mail share records with generated HTML files, expiration, and revocation

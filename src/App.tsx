@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Update } from "@tauri-apps/plugin-updater";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, ReactNode, SyntheticEvent } from "react";
 import { api } from "./api";
 import loginLogo from "./assets/login-logo.png";
 import { Toast } from "./components/Toast";
@@ -48,7 +48,7 @@ import {
   summarizeUpdate
 } from "./lib/appUpdater";
 import type { AppUpdateSummary } from "./lib/appUpdater";
-import { buildSandboxedEmailHtml } from "./lib/emailHtml";
+import { bindExternalEmailLinks, buildSandboxedEmailHtml } from "./lib/emailHtml";
 import { formatMessageListPreview } from "./lib/mailPreview";
 import { extractVerificationCode } from "./lib/verificationCode";
 import { parseAccountRows, rawWithDefaultProvider } from "./lib/importParser";
@@ -2503,7 +2503,7 @@ function TempEmailView({ tempEmails, cloudflareChannels, busy, onMailboxRefreshe
           <div className="tempInboxHeader"><div><strong>{selected.email}</strong><small>{messages.length} 封邮件</small></div>{loadingMessages && <Loader2 className="spin" size={17} />}</div>
           {localError && <div className="formError">{localError}</div>}
           <div className="tempMessageList">{messages.map((item) => <button key={item.id} className={message?.id === item.id ? "tempMessageRow active" : "tempMessageRow"} onClick={() => void openMessage(item)}><strong>{item.subject || "无主题"}</strong><span>{item.sender}</span><small>{item.body_preview}</small></button>)}{!loadingMessages && messages.length === 0 && <div className="tempInboxEmpty">收件箱暂无邮件</div>}</div>
-          {message && <article className="tempMessageDetail"><header><div><h3>{message.subject || "无主题"}</h3><small>{message.sender} · {message.received_at || "时间未知"}</small></div><button className="iconMini" title="关闭邮件" onClick={() => setMessage(undefined)}><X size={16} /></button></header>{message.body_type === "html" ? <iframe title={message.subject || "临时邮箱邮件"} sandbox="" srcDoc={buildSandboxedEmailHtml(message.body || "")} /> : <pre>{message.body}</pre>}</article>}
+          {message && <article className="tempMessageDetail"><header><div><h3>{message.subject || "无主题"}</h3><small>{message.sender} · {message.received_at || "时间未知"}</small></div><button className="iconMini" title="关闭邮件" onClick={() => setMessage(undefined)}><X size={16} /></button></header>{message.body_type === "html" ? <SandboxedEmailFrame title={message.subject || "临时邮箱邮件"} body={message.body || ""} /> : <pre>{message.body}</pre>}</article>}
         </div>}
       </section>
     </section>
@@ -4450,16 +4450,62 @@ function RunStatus({ label, value }: { label: string; value?: string | null }) {
 function MessageBody({ body, bodyType }: { body: string; bodyType?: string | null }) {
   if (bodyType?.toLowerCase() === "html" && body.trim()) {
     return (
-      <iframe
+      <SandboxedEmailFrame
         className="messageHtmlFrame"
         title="邮件正文"
-        sandbox=""
-        referrerPolicy="no-referrer"
-        srcDoc={buildSandboxedEmailHtml(body)}
+        body={body}
       />
     );
   }
   return <div className="messageBody">{body}</div>;
+}
+
+function SandboxedEmailFrame({
+  body,
+  title,
+  className
+}: {
+  body: string;
+  title: string;
+  className?: string;
+}) {
+  const detachLinkHandlerRef = useRef<(() => void) | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLinkError(null);
+  }, [body]);
+
+  useEffect(
+    () => () => {
+      detachLinkHandlerRef.current?.();
+    },
+    []
+  );
+
+  const handleLoad = useCallback((event: SyntheticEvent<HTMLIFrameElement>) => {
+    detachLinkHandlerRef.current?.();
+    detachLinkHandlerRef.current = bindExternalEmailLinks(event.currentTarget, (url) => {
+      setLinkError(null);
+      void api.openExternalUrl(url).catch((err) => {
+        setLinkError(`链接打开失败：${readError(err)}`);
+      });
+    });
+  }, []);
+
+  return (
+    <>
+      <iframe
+        className={className}
+        title={title}
+        sandbox="allow-same-origin"
+        referrerPolicy="no-referrer"
+        srcDoc={buildSandboxedEmailHtml(body)}
+        onLoad={handleLoad}
+      />
+      {linkError && <div className="inlineError emailLinkError" role="alert">{linkError}</div>}
+    </>
+  );
 }
 
 function MailSharePanel({

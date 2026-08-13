@@ -103,7 +103,7 @@ describe("MarkdownWorkspace root context menu", () => {
     const menu = await screen.findByLabelText("根目录操作");
     expect(within(menu).getByRole("button", { name: "新建笔记" })).toBeTruthy();
     expect(within(menu).getByRole("button", { name: "新建文件夹" })).toBeTruthy();
-    expect(within(menu).getByRole("button", { name: "导入 Markdown / TXT / JSON 文件" })).toBeTruthy();
+    expect(within(menu).getByRole("button", { name: "导入文件" })).toBeTruthy();
     expect(within(menu).getByRole("button", { name: "刷新" })).toBeTruthy();
 
     fireEvent.click(within(menu).getByRole("button", { name: "新建笔记" }));
@@ -168,7 +168,7 @@ describe("MarkdownWorkspace root context menu", () => {
     fireEvent.contextMenu(tree, { clientX: 120, clientY: 180 });
     fireEvent.click(
       within(await screen.findByLabelText("根目录操作")).getByRole("button", {
-        name: "导入 Markdown / TXT / JSON 文件"
+        name: "导入文件"
       })
     );
 

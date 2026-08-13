@@ -26,6 +26,7 @@ import {
   insertMarkdownTableHeaderRowBefore,
   setMarkdownTableColumnAlignment
 } from "./markdownTable";
+import { markdownTableRowShortcuts } from "./markdownTableShortcuts";
 
 const tableSpecs = tableNodes({
   tableGroup: "block",
@@ -126,6 +127,26 @@ function run(command: Command, state: EditorState) {
     nextState = state.apply(transaction);
   });
   return { handled, state: nextState };
+}
+
+function runShortcut(
+  view: import("@milkdown/kit/prose/view").EditorView,
+  key: string,
+  altKey = false
+) {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    altKey,
+    bubbles: true,
+    cancelable: true
+  });
+  let handled = false;
+  view.someProp("handleKeyDown", (handler) => {
+    if (!handler(view, event)) return false;
+    handled = true;
+    return true;
+  });
+  return handled;
 }
 
 describe("markdown table toolbar commands", () => {
@@ -307,6 +328,56 @@ describe("markdown table toolbar commands", () => {
       expect(doc.firstChild?.type.name).toBe("table");
       expect(doc.firstChild?.childCount).toBe(1);
       expect(editor.ctx.get(serializerCtx)(doc)).toContain("Header");
+    } finally {
+      await editor.destroy();
+    }
+  });
+
+  it("inserts and deletes the current table row with keyboard shortcuts", async () => {
+    const editor = Editor.make()
+      .config((ctx) => {
+        ctx.set(
+          defaultValueCtx,
+          "| Header 1 | Header 2 |\n| --- | --- |\n| A | B |\n"
+        );
+      })
+      .use(commonmark)
+      .use(gfm)
+      .use(headerOnlyTableSchema)
+      .use(markdownTableRowShortcuts);
+
+    await editor.create();
+    try {
+      const view = editor.ctx.get(editorViewCtx);
+      const selectTableCell = (row: number, column = 0) => {
+        const position = tableCellPosition(view.state.doc, row, column);
+        view.dispatch(
+          view.state.tr.setSelection(
+            TextSelection.create(view.state.doc, position + 2)
+          )
+        );
+      };
+
+      selectTableCell(1);
+      expect(runShortcut(view, "ArrowUp", true)).toBe(true);
+      expect(view.state.doc.firstChild?.childCount).toBe(3);
+
+      selectTableCell(1);
+      expect(runShortcut(view, "ArrowDown", true)).toBe(true);
+      expect(view.state.doc.firstChild?.childCount).toBe(4);
+
+      selectTableCell(1);
+      expect(runShortcut(view, "Delete")).toBe(true);
+      expect(view.state.doc.firstChild?.childCount).toBe(3);
+
+      const paragraph = view.state.doc.lastChild!;
+      const paragraphPosition = view.state.doc.content.size - paragraph.nodeSize + 1;
+      view.dispatch(
+        view.state.tr.setSelection(
+          TextSelection.create(view.state.doc, paragraphPosition)
+        )
+      );
+      expect(runShortcut(view, "ArrowDown", true)).toBe(false);
     } finally {
       await editor.destroy();
     }

@@ -109,6 +109,7 @@ import {
   insertMarkdownTableHeaderRowBefore,
   setMarkdownTableColumnAlignment
 } from "../lib/markdownTable";
+import { markdownTableRowShortcuts } from "../lib/markdownTableShortcuts";
 import type { MarkdownCategory, MarkdownDocument } from "../types";
 
 type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
@@ -681,7 +682,7 @@ const markdownTableToolbar = $prose((ctx) =>
             };
 
             addButton(
-              "在上方插入行",
+              "在上方插入行（Alt+↑）",
               tableRowBeforeIcon,
               (editorView) =>
                 toolbarState.rowFrom === 0
@@ -692,9 +693,13 @@ const markdownTableToolbar = $prose((ctx) =>
                     )
                   : callCommand(ctx, addRowBeforeCommand)
             );
-            addButton("在下方插入行", tableRowAfterIcon, () => callCommand(ctx, addRowAfterCommand));
             addButton(
-              "删除当前行",
+              "在下方插入行（Alt+↓）",
+              tableRowAfterIcon,
+              () => callCommand(ctx, addRowAfterCommand)
+            );
+            addButton(
+              "删除当前行（Delete）",
               tableDeleteRowIcon,
               (editorView) =>
                 deleteMarkdownTableRow(editorView.state, editorView.dispatch, editorView),
@@ -1432,6 +1437,7 @@ function CrepeEditor({
       .use(markdownInlineLinkEditor)
       .use(markdownImageSourceEditor)
       .use(markdownTableToolbar)
+      .use(markdownTableRowShortcuts)
       .use(markdownToolbarShortcuts);
     crepe.on((listener) => {
       listener.markdownUpdated((_ctx, nextMarkdown, previousMarkdown) => {
@@ -2477,7 +2483,7 @@ export function MarkdownWorkspace({
           >
             <ChevronsUpDown size={18} />
           </button>
-          <button type="button" title="导入 Markdown / TXT / JSON 文件" onClick={() => void importDocumentFile(selectedFolderId, false)}>
+          <button type="button" title="导入文件" onClick={() => void importDocumentFile(selectedFolderId, false)}>
             <Upload size={18} />
           </button>
           <button type="button" title="新建文件夹" onClick={() => beginCreateFolder(null)}>
@@ -2680,7 +2686,7 @@ export function MarkdownWorkspace({
             <FolderPlus size={17} />新建文件夹
           </button>
           <button type="button" onClick={() => { setRootMenu(null); void importDocumentFile(null, false); }}>
-            <Upload size={17} />导入 Markdown / TXT / JSON 文件
+            <Upload size={17} />导入文件
           </button>
           <div className="markdownMenuDivider" />
           <button type="button" onClick={() => void refreshLibrary()}>
@@ -2703,7 +2709,7 @@ export function MarkdownWorkspace({
           </button>
           <div className="markdownMenuDivider" />
           <button type="button" onClick={() => { setFolderMenu(null); void importDocumentFile(folderMenu.category.id, false); }}>
-            <Upload size={17} />导入 Markdown / TXT / JSON 文件
+            <Upload size={17} />导入文件
           </button>
           <button type="button" onClick={() => { setFolderMenu(null); void exportFolder(folderMenu.category); }}>
             <FolderDown size={17} />导出文件夹

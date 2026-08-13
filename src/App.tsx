@@ -79,7 +79,6 @@ import type {
   OAuthSaveAccountInput,
   OAuthSaveAccountResult,
   OAuthTokenResult,
-  SchedulerStatus,
   Settings,
   UpdateLoginPasswordInput,
   WorkspaceKeyRecord
@@ -237,7 +236,6 @@ function App() {
   const [workspaceKeyRecords, setWorkspaceKeyRecords] = useState<WorkspaceKeyRecord[]>([]);
   const [mailShareRecords, setMailShareRecords] = useState<MailShareRecord[]>([]);
   const [localRetention, setLocalRetention] = useState<LocalRetentionSummary | null>(null);
-  const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<number | "all">("all");
   const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>();
   const [selectedMessageId, setSelectedMessageId] = useState<number | undefined>();
@@ -556,15 +554,13 @@ function App() {
   }
 
   async function loadSettingsData() {
-    const [nextSettings, nextWorkspaceKeyRecords, nextSchedulerStatus, nextLocalRetention] = await Promise.all([
+    const [nextSettings, nextWorkspaceKeyRecords, nextLocalRetention] = await Promise.all([
       api.getSettings(),
       api.listWorkspaceKeyRecords(),
-      api.schedulerStatus(),
       api.getLocalRetentionSummary()
     ]);
     setSettings(nextSettings);
     setWorkspaceKeyRecords(nextWorkspaceKeyRecords);
-    setSchedulerStatus(nextSchedulerStatus);
     setLocalRetention(nextLocalRetention);
   }
 
@@ -943,7 +939,7 @@ function App() {
             page={mailPage}
             totalCount={mailTotalCount}
             busy={busy}
-            refreshTop={settings?.scheduler_refresh_top ?? 25}
+            refreshTop={settings?.manual_refresh_top ?? 25}
             onGroupChange={(groupId) => {
               setSelectedGroupId(groupId);
               const groupAccountIds =
@@ -980,7 +976,7 @@ function App() {
               runAction(
                 async () => {
                   if (!selectedAccountId) return;
-                  const result = await api.refreshAccountFromSettings(selectedAccountId);
+                  const result = await api.refreshAccountWithDefaultLimit(selectedAccountId);
                   setNotice(formatResultMessage(result.message));
                   await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
                   await loadStatus();
@@ -999,7 +995,7 @@ function App() {
                     const account = accounts[index];
                     setBusyMessage(`正在拉取账号 ${index + 1}/${accounts.length}：${account.email}`);
                     try {
-                      const result = await api.refreshAccountFromSettings(account.id);
+                      const result = await api.refreshAccountWithDefaultLimit(account.id);
                       if (result.success) succeeded += 1;
                       else {
                         failedAccounts.push({
@@ -1293,7 +1289,6 @@ function App() {
             settings={settings}
             workspaceKeyRecords={workspaceKeyRecords}
             localRetention={localRetention}
-            schedulerStatus={schedulerStatus}
             busy={busy}
             onSave={(nextSettings) =>
               runAction(async () => {
@@ -4040,7 +4035,6 @@ function SettingsView({
   settings,
   workspaceKeyRecords,
   localRetention,
-  schedulerStatus,
   busy,
   onSave,
   onUpdateLoginPassword,
@@ -4055,7 +4049,6 @@ function SettingsView({
   settings: Settings;
   workspaceKeyRecords: WorkspaceKeyRecord[];
   localRetention: LocalRetentionSummary | null;
-  schedulerStatus: SchedulerStatus | null;
   busy: boolean;
   onSave: (settings: Settings) => void | Promise<void>;
   onUpdateLoginPassword: (input: UpdateLoginPasswordInput) => Promise<boolean>;
@@ -4222,32 +4215,19 @@ function SettingsView({
 
       <div className="panel">
         <div className="panelHeader">
-          <h2>调度器</h2>
+          <h2>邮件刷新</h2>
           <RefreshCw size={18} />
         </div>
-        <label className="checkLine toggleLine">
-          <input
-            type="checkbox"
-            checked={draft.scheduler_refresh_enabled}
-            onChange={(event) => setField("scheduler_refresh_enabled", event.target.checked)}
-          />
-          <span>定时刷新邮箱</span>
-        </label>
         <div className="formLine">
           <NumberField
-            label="刷新间隔"
-            value={draft.scheduler_refresh_interval_minutes}
-            min={1}
-            onChange={(value) => setField("scheduler_refresh_interval_minutes", value)}
-          />
-          <NumberField
-            label="默认刷新邮件数"
-            value={draft.scheduler_refresh_top}
+            label="每个文件夹拉取邮件数"
+            value={draft.manual_refresh_top}
             min={1}
             max={1000}
-            onChange={(value) => setField("scheduler_refresh_top", value)}
+            onChange={(value) => setField("manual_refresh_top", value)}
           />
         </div>
+        <p className="oauthHint">手动刷新会分别从收件箱和垃圾邮件文件夹拉取最近的指定数量。</p>
       </div>
 
       <div className="panel widePanel">
@@ -4305,9 +4285,6 @@ function SettingsView({
         <div className="storageLine">
           <span>SQLite 数据库</span>
           <code>{status.db_path}</code>
-        </div>
-        <div className="runStatusGrid">
-          <RunStatus label="刷新" value={schedulerStatus?.last_refresh_at} />
         </div>
         {localRetention && (
           <>
@@ -4435,15 +4412,6 @@ function NumberField({
         onChange={(event) => onChange(parseValue(event.target.value))}
       />
     </label>
-  );
-}
-
-function RunStatus({ label, value }: { label: string; value?: string | null }) {
-  return (
-    <div className="runStatus">
-      <span>{label}</span>
-      <strong>{value ? formatDate(value) : "从未"}</strong>
-    </div>
   );
 }
 

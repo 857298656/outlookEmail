@@ -4001,8 +4001,7 @@ button:disabled {
   margin-bottom: 18px;
 }
 
-.actionGrid,
-.runStatusGrid {
+.actionGrid {
   display: grid;
   gap: 10px;
 }
@@ -4010,11 +4009,6 @@ button:disabled {
 .actionGrid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-top: 16px;
-}
-
-.runStatusGrid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-bottom: 18px;
 }
 
 .retentionStats {
@@ -4061,26 +4055,6 @@ button:disabled {
 
 .localClearBox .input {
   flex: 1 1 190px;
-}
-
-.runStatus {
-  display: grid;
-  gap: 4px;
-  min-height: 54px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  padding: 10px 12px;
-}
-
-.runStatus span {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.runStatus strong {
-  color: #17202a;
-  font-size: 13px;
 }
 
 .tableActions {
@@ -4686,8 +4660,7 @@ code {
     grid-template-columns: 1fr;
   }
 
-  .retentionStats,
-  .runStatusGrid {
+  .retentionStats {
     grid-template-columns: 1fr;
   }
 

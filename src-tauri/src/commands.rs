@@ -987,15 +987,6 @@ pub fn clear_local_data(
 }
 
 #[tauri::command]
-pub fn scheduler_status(state: State<'_, AppState>) -> AppResult<SchedulerStatus> {
-    let db = state
-        .db
-        .lock()
-        .map_err(|err| AppError::Internal(err.to_string()))?;
-    db.scheduler_status()
-}
-
-#[tauri::command]
 pub fn list_workspace_key_records(
     state: State<'_, AppState>,
 ) -> AppResult<Vec<WorkspaceKeyRecord>> {

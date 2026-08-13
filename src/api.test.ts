@@ -10,7 +10,7 @@ describe("account refresh API", () => {
       ].join("\n")
     });
 
-    const result = await api.refreshAllAccountsFromSettings();
+    const result = await api.refreshAllAccountsWithDefaultLimit();
     const accounts = await api.listAccounts();
     const importedAccounts = imported.accounts ?? [];
     const importedIds = new Set(importedAccounts.map((account) => account.id));

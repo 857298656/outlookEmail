@@ -8,8 +8,9 @@ use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, Utc};
 use directories::ProjectDirs;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -22,6 +23,12 @@ pub struct Database {
 const CONFIG_SECRET_KEYS: &[&str] = &[];
 
 const WORKSPACE_KEY_CONFIG: &str = "workspace_key_enc";
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+struct AccountProviderSyncState {
+    #[serde(default)]
+    imap_uid_validity: HashMap<String, u32>,
+}
 
 #[derive(Debug, Clone)]
 struct MailMessageRef {
@@ -1513,16 +1520,8 @@ impl Database {
             .get_config("oauth_redirect_uri")?
             .filter(|value| !value.trim().is_empty())
             .unwrap_or(settings.oauth_redirect_uri);
-        settings.scheduler_refresh_enabled = self.get_config_bool(
-            "scheduler_refresh_enabled",
-            settings.scheduler_refresh_enabled,
-        )?;
-        settings.scheduler_refresh_interval_minutes = self.get_config_i64(
-            "scheduler_refresh_interval_minutes",
-            settings.scheduler_refresh_interval_minutes,
-        )?;
-        settings.scheduler_refresh_top =
-            self.get_config_i64("scheduler_refresh_top", settings.scheduler_refresh_top)?;
+        settings.manual_refresh_top =
+            self.get_config_i64("manual_refresh_top", settings.manual_refresh_top)?;
         Ok(settings)
     }
 
@@ -1530,18 +1529,10 @@ impl Database {
         self.require_unlocked()?;
         self.set_config("graph_client_id", &settings.graph_client_id)?;
         self.set_config("oauth_redirect_uri", &settings.oauth_redirect_uri)?;
-        self.set_config_bool(
-            "scheduler_refresh_enabled",
-            settings.scheduler_refresh_enabled,
-        )?;
         self.set_config_i64(
-            "scheduler_refresh_interval_minutes",
-            settings.scheduler_refresh_interval_minutes.max(1),
-        )?;
-        self.set_config_i64(
-            "scheduler_refresh_top",
+            "manual_refresh_top",
             settings
-                .scheduler_refresh_top
+                .manual_refresh_top
                 .clamp(1, providers::MAIL_REFRESH_MAX_TOP as i64),
         )?;
         self.audit("settings.updated", "settings", None, "")?;
@@ -1740,16 +1731,7 @@ impl Database {
     }
 
     pub fn refresh_accounts(&self, input: RefreshInput) -> AppResult<JobResult> {
-        self.refresh_accounts_with_trigger(input, "manual")
-    }
-
-    fn refresh_accounts_with_trigger(
-        &self,
-        input: RefreshInput,
-        _trigger_type: &str,
-    ) -> AppResult<JobResult> {
-        let result = self.refresh_accounts_inner(input);
-        result
+        self.refresh_accounts_inner(input)
     }
 
     fn refresh_accounts_inner(&self, input: RefreshInput) -> AppResult<JobResult> {
@@ -1811,7 +1793,7 @@ impl Database {
             Some(value) => Ok(value.clamp(1, providers::MAIL_REFRESH_MAX_TOP)),
             None => Ok(self
                 .get_settings()?
-                .scheduler_refresh_top
+                .manual_refresh_top
                 .clamp(1, providers::MAIL_REFRESH_MAX_TOP as i64) as usize),
         }
     }
@@ -2434,56 +2416,6 @@ impl Database {
             deleted_files,
             freed_bytes,
         })
-    }
-
-    pub fn scheduler_status(&self) -> AppResult<SchedulerStatus> {
-        self.require_unlocked()?;
-        Ok(SchedulerStatus {
-            last_refresh_at: self.get_config("scheduler_last_refresh_at")?,
-        })
-    }
-
-    pub fn run_due_scheduled_jobs(&self) -> AppResult<()> {
-        if !self.is_unlocked() {
-            return Ok(());
-        }
-        let settings = self.get_settings()?;
-        let now = Utc::now();
-
-        if settings.scheduler_refresh_enabled
-            && self.scheduler_due(
-                "scheduler_last_refresh_at",
-                settings.scheduler_refresh_interval_minutes,
-                now,
-            )?
-        {
-            match self.refresh_accounts_with_trigger(
-                RefreshInput {
-                    account_id: None,
-                    folder: Some("inbox_junk".to_string()),
-                    top: Some(
-                        settings
-                            .scheduler_refresh_top
-                            .clamp(1, providers::MAIL_REFRESH_MAX_TOP as i64)
-                            as usize,
-                    ),
-                },
-                "schedule",
-            ) {
-                Ok(result) => {
-                    self.audit("scheduler.refresh", "scheduler", None, &result.message)?
-                }
-                Err(err) => self.audit(
-                    "scheduler.refresh_failed",
-                    "scheduler",
-                    None,
-                    &err.to_string(),
-                )?,
-            }
-            self.set_config("scheduler_last_refresh_at", &now.to_rfc3339())?;
-        }
-
-        Ok(())
     }
 
     pub fn list_temp_emails(&self) -> AppResult<Vec<TempEmail>> {
@@ -3334,7 +3266,17 @@ impl Database {
             "accent_color",
             "scheduler_last_forwarding_at",
             "scheduler_last_backup_at",
+            "scheduler_refresh_enabled",
+            "scheduler_refresh_interval_minutes",
+            "scheduler_refresh_top",
+            "scheduler_last_refresh_at",
         ];
+
+        if self.get_config("manual_refresh_top")?.is_none() {
+            if let Some(value) = self.get_config("scheduler_refresh_top")? {
+                self.set_config("manual_refresh_top", &value)?;
+            }
+        }
 
         for index in LEGACY_INDEXES {
             let sql = format!("DROP INDEX IF EXISTS {index}");
@@ -3752,17 +3694,6 @@ impl Database {
         Ok(values)
     }
 
-    fn get_config_bool(&self, key: &str, default: bool) -> AppResult<bool> {
-        Ok(self
-            .get_config(key)?
-            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-            .unwrap_or(default))
-    }
-
-    fn set_config_bool(&self, key: &str, value: bool) -> AppResult<()> {
-        self.set_config(key, if value { "1" } else { "0" })
-    }
-
     fn get_config_i64(&self, key: &str, default: i64) -> AppResult<i64> {
         Ok(self
             .get_config(key)?
@@ -4086,6 +4017,100 @@ impl Database {
         Ok(())
     }
 
+    fn cached_provider_message_ids(
+        &self,
+        account_id: i64,
+        folder: &str,
+    ) -> AppResult<HashMap<String, HashSet<String>>> {
+        let target_folders = refresh_folder_names(folder);
+        let mut statement = self.conn.prepare(
+            "SELECT folder, provider_message_id FROM retained_mail_messages WHERE account_id = ?",
+        )?;
+        let rows = statement.query_map([account_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut ids = HashMap::<String, HashSet<String>>::new();
+        for row in rows {
+            let (message_folder, provider_message_id) = row?;
+            if target_folders.contains(&message_folder.as_str()) {
+                ids.entry(message_folder)
+                    .or_default()
+                    .insert(provider_message_id);
+            }
+        }
+        Ok(ids)
+    }
+
+    fn update_provider_message_states(
+        &self,
+        account_id: i64,
+        states: &[ProviderMessageState],
+    ) -> AppResult<()> {
+        for state in states {
+            self.conn.execute(
+                "
+                UPDATE retained_mail_messages
+                SET is_read = ?, last_synced_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE account_id = ? AND folder = ? AND provider_message_id = ?
+                ",
+                params![
+                    if state.is_read { 1 } else { 0 },
+                    account_id,
+                    state.folder,
+                    state.provider_message_id,
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn reset_provider_message_folders(
+        &self,
+        account_id: i64,
+        folders: &[String],
+    ) -> AppResult<()> {
+        for folder in folders {
+            self.conn.execute(
+                "DELETE FROM retained_mail_messages WHERE account_id = ? AND folder = ?",
+                params![account_id, folder],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn account_provider_sync_state(
+        &self,
+        account_id: i64,
+    ) -> AppResult<AccountProviderSyncState> {
+        let value = self
+            .conn
+            .query_row(
+                "SELECT provider_sync_state FROM accounts WHERE id = ?",
+                [account_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .unwrap_or_default();
+        if value.trim().is_empty() {
+            return Ok(AccountProviderSyncState::default());
+        }
+        Ok(serde_json::from_str(&value).unwrap_or_default())
+    }
+
+    fn save_account_provider_sync_state(
+        &self,
+        account_id: i64,
+        state: &AccountProviderSyncState,
+    ) -> AppResult<()> {
+        let value = serde_json::to_string(state)
+            .map_err(|err| AppError::Internal(format!("provider sync state failed: {err}")))?;
+        self.conn.execute(
+            "UPDATE accounts SET provider_sync_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            params![value, account_id],
+        )?;
+        Ok(())
+    }
+
     fn cached_imap_raw_mime(
         &self,
         account_id: i64,
@@ -4217,24 +4242,6 @@ impl Database {
         Ok(())
     }
 
-    fn scheduler_due(
-        &self,
-        key: &str,
-        interval_minutes: i64,
-        now: DateTime<Utc>,
-    ) -> AppResult<bool> {
-        if interval_minutes <= 0 {
-            return Ok(false);
-        }
-        let Some(value) = self.get_config(key)? else {
-            return Ok(true);
-        };
-        let Some(last_run) = parse_scheduler_timestamp(&value) else {
-            return Ok(true);
-        };
-        Ok(now.signed_duration_since(last_run).num_minutes() >= interval_minutes)
-    }
-
     fn mail_message_refs(&self, ids: &[i64]) -> AppResult<Vec<MailMessageRef>> {
         if ids.is_empty() {
             return Ok(Vec::new());
@@ -4347,21 +4354,38 @@ impl Database {
         top: usize,
     ) -> AppResult<usize> {
         require_provider_capability(account, "read_mail", "mail refresh")?;
+        let cached_message_ids = self.cached_provider_message_ids(account.id, folder)?;
         match mail_provider_adapter(account)? {
-            MailProviderAdapter::Graph => providers::fetch_graph_messages(account, folder, top)
-                .and_then(|(next_refresh_token, messages)| {
+            MailProviderAdapter::Graph => {
+                providers::fetch_graph_messages(account, folder, top, &cached_message_ids)
+                .and_then(|(next_refresh_token, messages, states)| {
                     if !next_refresh_token.is_empty() && next_refresh_token != account.refresh_token
                     {
                         self.save_refresh_token(account.id, &next_refresh_token)?;
                     }
                     self.upsert_provider_messages(account.id, &messages)?;
+                    self.update_provider_message_states(account.id, &states)?;
                     Ok(messages.len())
-                }),
-            MailProviderAdapter::Imap => providers::fetch_imap_messages(account, folder, top)
-                .and_then(|messages| {
-                    self.upsert_provider_messages(account.id, &messages)?;
-                    Ok(messages.len())
-                }),
+                })
+            }
+            MailProviderAdapter::Imap => {
+                let mut sync_state = self.account_provider_sync_state(account.id)?;
+                providers::fetch_imap_messages(
+                    account,
+                    folder,
+                    top,
+                    &cached_message_ids,
+                    &sync_state.imap_uid_validity,
+                )
+                .and_then(|result| {
+                    self.reset_provider_message_folders(account.id, &result.reset_folders)?;
+                    self.upsert_provider_messages(account.id, &result.messages)?;
+                    self.update_provider_message_states(account.id, &result.states)?;
+                    sync_state.imap_uid_validity = result.uid_validity;
+                    self.save_account_provider_sync_state(account.id, &sync_state)?;
+                    Ok(result.messages.len())
+                })
+            }
         }
     }
 
@@ -4478,6 +4502,15 @@ fn normalize_mail_folder(value: &str) -> String {
         "junk" | "junkemail" => "junkemail".to_string(),
         "deleted" | "deleteditems" => "deleteditems".to_string(),
         _ => "all".to_string(),
+    }
+}
+
+fn refresh_folder_names(value: &str) -> Vec<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "inbox" => vec!["inbox"],
+        "junk" | "junkemail" => vec!["junkemail"],
+        "deleted" | "deleteditems" => vec!["deleteditems"],
+        _ => vec!["inbox", "junkemail"],
     }
 }
 
@@ -4631,7 +4664,7 @@ fn share_record_status(expires_at: Option<&str>, revoked_at: Option<&str>) -> &'
         return "revoked";
     }
     if expires_at
-        .and_then(parse_scheduler_timestamp)
+        .and_then(parse_timestamp)
         .is_some_and(|value| value <= Utc::now())
     {
         return "expired";
@@ -5266,7 +5299,7 @@ fn exports_dir(db_path: &Path) -> AppResult<PathBuf> {
         .join("exports"))
 }
 
-fn parse_scheduler_timestamp(value: &str) -> Option<DateTime<Utc>> {
+fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
     if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
         return Some(parsed.with_timezone(&Utc));
     }
@@ -5642,9 +5675,10 @@ mod project_tests {
         DeleteMailMessagesInput, DownloadAllAttachmentsInput, DownloadAttachmentInput,
         ExportAccountSecretsInput, ExportAccountsInput, ExportMailMessagesInput,
         GenerateWorkspaceKeyInput, ImportTempEmailsInput, LoginInput, MailMessageQuery,
-        MarkMailMessagesInput, RefreshInput, RevealAccountSecretsInput, RevokeMailShareInput,
-        SaveCloudflareChannelInput, TempEmailMessage, UpdateAccountInput, UpdateGroupInput,
-        UpdateMarkdownCategoryInput, UpdateMarkdownDocumentInput, UpdateWorkspaceKeyRecordInput,
+        MarkMailMessagesInput, ProviderMessageState, RefreshInput, RevealAccountSecretsInput,
+        RevokeMailShareInput, SaveCloudflareChannelInput, TempEmailMessage, UpdateAccountInput,
+        UpdateGroupInput, UpdateMarkdownCategoryInput, UpdateMarkdownDocumentInput,
+        UpdateWorkspaceKeyRecordInput,
     };
     use rusqlite::{params, Connection};
     use std::path::PathBuf;
@@ -6836,6 +6870,66 @@ mod project_tests {
     }
 
     #[test]
+    fn incremental_refresh_reuses_cached_ids_and_updates_only_lightweight_state() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "INSERT INTO accounts (id, email, status, group_id, provider, account_type) VALUES (1, 'incremental@example.com', 'active', 1, 'imap_custom', 'imap')",
+                [],
+            )
+            .expect("insert account");
+        db.conn
+            .execute(
+                "INSERT INTO retained_mail_messages (account_id, folder, provider_message_id, subject, body, is_read) VALUES (1, 'inbox', '10', 'cached inbox', 'keep body', 0), (1, 'junkemail', '20', 'cached junk', 'keep junk', 0)",
+                [],
+            )
+            .expect("insert cached messages");
+
+        let ids = db
+            .cached_provider_message_ids(1, "inbox_junk")
+            .expect("cached ids");
+        assert!(ids["inbox"].contains("10"));
+        assert!(ids["junkemail"].contains("20"));
+
+        db.update_provider_message_states(
+            1,
+            &[ProviderMessageState {
+                folder: "inbox".to_string(),
+                provider_message_id: "10".to_string(),
+                is_read: true,
+            }],
+        )
+        .expect("update state");
+        let (is_read, body): (i64, String) = db
+            .conn
+            .query_row(
+                "SELECT is_read, body FROM retained_mail_messages WHERE account_id = 1 AND folder = 'inbox' AND provider_message_id = '10'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read updated message");
+        assert_eq!(is_read, 1);
+        assert_eq!(body, "keep body");
+
+        db.reset_provider_message_folders(1, &["inbox".to_string()])
+            .expect("reset inbox");
+        assert!(!db
+            .cached_provider_message_ids(1, "inbox")
+            .expect("inbox ids")
+            .contains_key("inbox"));
+        assert!(db
+            .cached_provider_message_ids(1, "junkemail")
+            .expect("junk ids")["junkemail"]
+            .contains("20"));
+    }
+
+    #[test]
     fn prunes_legacy_schema_artifacts() {
         let conn = Connection::open_in_memory().expect("open memory db");
         let mut db = Database {
@@ -6864,7 +6958,11 @@ mod project_tests {
                 "
                 INSERT INTO app_config (key, value) VALUES
                     ('webdav_url', 'https://example.com/webdav'),
-                    ('appearance_theme', 'forest')
+                    ('appearance_theme', 'forest'),
+                    ('scheduler_refresh_enabled', '1'),
+                    ('scheduler_refresh_interval_minutes', '5'),
+                    ('scheduler_refresh_top', '37'),
+                    ('scheduler_last_refresh_at', '2026-08-12T08:00:00Z')
                 ",
                 [],
             )
@@ -6886,12 +6984,17 @@ mod project_tests {
         let legacy_config_count: i64 = db
             .conn
             .query_row(
-                "SELECT COUNT(*) FROM app_config WHERE key IN ('webdav_url', 'appearance_theme')",
+                "SELECT COUNT(*) FROM app_config WHERE key IN ('webdav_url', 'appearance_theme', 'scheduler_refresh_enabled', 'scheduler_refresh_interval_minutes', 'scheduler_refresh_top', 'scheduler_last_refresh_at')",
                 [],
                 |row| row.get(0),
             )
             .expect("legacy config count");
         assert_eq!(legacy_config_count, 0);
+        assert_eq!(
+            db.get_config("manual_refresh_top")
+                .expect("manual refresh setting"),
+            Some("37".to_string())
+        );
 
         db.prune_legacy_schema()
             .expect("second prune should stay idempotent");

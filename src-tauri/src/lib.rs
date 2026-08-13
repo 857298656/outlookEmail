@@ -5,7 +5,6 @@ mod error;
 mod import;
 mod models;
 mod providers;
-mod scheduler;
 mod temp_mail;
 
 use commands::*;
@@ -29,7 +28,6 @@ pub fn run() {
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
-            scheduler::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -84,7 +82,6 @@ pub fn run() {
             update_settings,
             get_local_retention_summary,
             clear_local_data,
-            scheduler_status,
             list_workspace_key_records,
             generate_workspace_key,
             update_workspace_key_record,

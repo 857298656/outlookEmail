@@ -36,10 +36,9 @@ src/                    # React UI, api.ts, lib/*
   lib/mailPreview.ts        # List/preview snippet HTML/CSS stripping
 src-tauri/src/
   commands.rs           # Tauri command surface
-  db.rs                 # SQLite + business logic
+  db.rs                 # SQLite + business logic + manual mail refresh
   providers.rs          # Provider registry + Graph/IMAP adapters
   import.rs             # Account import
-  scheduler.rs          # Background mail refresh scheduler
 docs/
   requirements-milestones.md   # Scope, milestones, done/undone
   provider-integration-plan.md # M9 plan (Gmail/QQ/163 IMAP)

@@ -28,7 +28,7 @@
 - 依赖：`imap-proto` 通过 `vendor/imap-proto-0.10.2` 本地 patch 构建
 - 临时邮箱：GPTMail、DuckMail、Cloudflare Worker 通道
 - 临时邮箱批量操作：GPTMail/DuckMail/Cloudflare 格式化导入；Cloudflare 1–50 个地址批量生成、显式用户名及部分失败明细
-- 自动化：桌面进程内 scheduler
+- 邮件刷新：邮箱页手动刷新；设置页控制每个文件夹的最近邮件拉取数量
 - 打包：Windows exe、NSIS installer；macOS universal app、DMG installer
 
 ## 历史需求记录（包含已移出范围的旧条目）

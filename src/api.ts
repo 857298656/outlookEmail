@@ -24,7 +24,6 @@ import type {
   OAuthSaveAccountInput,
   OAuthSaveAccountResult,
   OAuthTokenResult,
-  SchedulerStatus,
   Settings,
   UpdateLoginPasswordInput,
   WorkspaceKeyRecord,
@@ -41,9 +40,7 @@ const encodeOAuthQueryValue = (value: string) => encodeURIComponent(value).repla
 const defaultSettings: Settings = {
   graph_client_id: defaultGraphClientId,
   oauth_redirect_uri: defaultOAuthRedirectUri,
-  scheduler_refresh_enabled: false,
-  scheduler_refresh_interval_minutes: 15,
-  scheduler_refresh_top: 25
+  manual_refresh_top: 25
 };
 
 let mockInitialized = false;
@@ -64,9 +61,6 @@ let mockAccounts: Account[] = [];
 let mockMessages: MailMessage[] = [];
 let mockSettings = defaultSettings;
 let mockWorkspaceKeyRecords: WorkspaceKeyRecord[] = [];
-let mockSchedulerStatus: SchedulerStatus = {
-  last_refresh_at: null
-};
 let mockMailShareRecords: MailShareRecord[] = [];
 let mockTempEmails: TempEmail[] = [];
 let mockCloudflareChannels: CloudflareChannel[] = [];
@@ -459,7 +453,6 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
       const input = args?.input as { account_id?: number | null } | undefined;
       const refreshedAt = new Date().toISOString();
       const targetAccounts = input?.account_id ? mockAccounts.filter((account) => account.id === input.account_id) : mockAccounts;
-      mockSchedulerStatus.last_refresh_at = refreshedAt;
       mockAccounts = mockAccounts.map((account) =>
         targetAccounts.some((target) => target.id === account.id)
           ? { ...account, last_refresh_status: "success", last_refresh_error: null, last_refresh_at: refreshedAt, updated_at: refreshedAt }
@@ -472,8 +465,6 @@ async function mockCall<T>(command: string, args?: Record<string, unknown>): Pro
         failed: 0
       } as T;
     }
-    case "scheduler_status":
-      return mockSchedulerStatus as T;
     case "list_workspace_key_records":
       return mockWorkspaceKeyRecords as T;
     case "generate_workspace_key": {
@@ -1032,7 +1023,6 @@ export const api = {
   updateSettings: (settings: Settings) => call<Settings>("update_settings", { settings }),
   getLocalRetentionSummary: () => call<LocalRetentionSummary>("get_local_retention_summary"),
   clearLocalData: (input: ClearLocalDataInput) => call<ClearLocalDataResult>("clear_local_data", { input }),
-  schedulerStatus: () => call<SchedulerStatus>("scheduler_status"),
   listWorkspaceKeyRecords: () => call<WorkspaceKeyRecord[]>("list_workspace_key_records"),
   generateWorkspaceKey: (input: { purpose: string }) =>
     call<GenerateWorkspaceKeyResult>("generate_workspace_key", { input }),
@@ -1057,14 +1047,14 @@ export const api = {
       input: { account_id: accountId, folder, top: 0 },
       accountId
     }),
-  /** Uses scheduler_refresh_top from settings (default 25). Syncs inbox + junk only. */
-  refreshAccountFromSettings: (accountId: number, folder = "inbox_junk") =>
+  /** Uses manual_refresh_top from settings (default 25). Syncs inbox + junk only. */
+  refreshAccountWithDefaultLimit: (accountId: number, folder = "inbox_junk") =>
     call<JobResult>("run_refresh_job", {
       input: { account_id: accountId, folder },
       accountId
     }),
-  /** Refreshes every account using scheduler_refresh_top from settings. */
-  refreshAllAccountsFromSettings: (folder = "inbox_junk") =>
+  /** Refreshes every active account using manual_refresh_top from settings. */
+  refreshAllAccountsWithDefaultLimit: (folder = "inbox_junk") =>
     call<JobResult>("run_refresh_job", {
       input: { folder }
     }),

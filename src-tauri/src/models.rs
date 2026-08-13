@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub const DEFAULT_GRAPH_CLIENT_ID: &str = "6daa9f56-5e67-4cb6-ae52-ef89ef912d36";
 pub const DEFAULT_OAUTH_REDIRECT_URI: &str = "http://localhost:8080";
@@ -145,9 +146,7 @@ pub struct AttachmentInfo {
 pub struct Settings {
     pub graph_client_id: String,
     pub oauth_redirect_uri: String,
-    pub scheduler_refresh_enabled: bool,
-    pub scheduler_refresh_interval_minutes: i64,
-    pub scheduler_refresh_top: i64,
+    pub manual_refresh_top: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -265,9 +264,7 @@ impl Default for Settings {
         Self {
             graph_client_id: DEFAULT_GRAPH_CLIENT_ID.to_string(),
             oauth_redirect_uri: DEFAULT_OAUTH_REDIRECT_URI.to_string(),
-            scheduler_refresh_enabled: false,
-            scheduler_refresh_interval_minutes: 15,
-            scheduler_refresh_top: 25,
+            manual_refresh_top: 25,
         }
     }
 }
@@ -303,11 +300,6 @@ pub struct ClearLocalDataResult {
     pub deleted_messages: i64,
     pub deleted_files: usize,
     pub freed_bytes: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SchedulerStatus {
-    pub last_refresh_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -636,4 +628,19 @@ pub struct ProviderMessage {
     pub body_type: String,
     pub attachments: Vec<AttachmentInfo>,
     pub raw_mime: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderMessageState {
+    pub folder: String,
+    pub provider_message_id: String,
+    pub is_read: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ImapProviderFetchResult {
+    pub messages: Vec<ProviderMessage>,
+    pub states: Vec<ProviderMessageState>,
+    pub reset_folders: Vec<String>,
+    pub uid_validity: HashMap<String, u32>,
 }

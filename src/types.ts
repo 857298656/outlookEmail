@@ -144,9 +144,7 @@ export type MailRawContent = {
 export type Settings = {
   graph_client_id: string;
   oauth_redirect_uri: string;
-  scheduler_refresh_enabled: boolean;
-  scheduler_refresh_interval_minutes: number;
-  scheduler_refresh_top: number;
+  manual_refresh_top: number;
 };
 
 export type ImportAccountsResult = {
@@ -250,10 +248,6 @@ export type MailShareRecord = {
   updated_at: string;
 };
 
-
-export type SchedulerStatus = {
-  last_refresh_at: string | null;
-};
 
 export type TempEmail = {
   id: number;

@@ -50,8 +50,9 @@ For warning-free public distribution, replace ad-hoc signing in CI with a Develo
 ## Publishing
 
 1. Run `pnpm build`, `pnpm test`, and `pnpm cargo:test`.
-2. Update the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
+2. Update the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, then replace `RELEASE_BODY` in `.github/workflows/release.yml` with the new release notes.
 3. Push a matching `v*` tag.
 4. Confirm that the release contains the NSIS installer, universal DMG, both updater artifacts and `.sig` files, and a `latest.json` with Windows plus macOS platform entries.
 
 The workflow validates updater signing secrets before each bundle step. The macOS job runs after Windows so `tauri-action` can merge the macOS updater entry into the existing cross-platform `latest.json` without a concurrent upload race.
+Both platform jobs must pass the same `releaseBody`. The updater dialog reads `latest.json.notes`, and the final macOS publish step can otherwise replace the release body and generated notes with an empty value.

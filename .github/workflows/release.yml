@@ -6,6 +6,24 @@ on:
     tags:
       - "v*"
 
+env:
+  RELEASE_BODY: |
+    更新内容
+    - 优化邮件手动刷新：复用本地缓存，仅获取并保存新邮件，减少重复拉取。
+    - 移除定时刷新功能，邮件改为按需手动刷新。
+    - Markdown 表格新增行操作快捷键：Alt+↑ 在上方插入、Alt+↓ 在下方插入、Delete 删除当前行。
+    - Markdown 文件导入入口文案简化为“导入文件”。
+
+    下载与安装
+    Windows 安装包（NSIS）与 macOS 通用安装包（DMG，支持 Intel 和 Apple Silicon）。
+
+    下载 `OutlookEmail Desktop_*_x64-setup.exe` 后双击安装即可。
+    macOS 用户下载 `OutlookEmail Desktop_*_universal.dmg`，打开后将应用拖入 Applications。
+    已安装旧版本的用户可在应用内检查更新，或重新下载安装包覆盖安装。
+
+    首次运行若出现 Windows SmartScreen 提示，请选择「更多信息」→「仍要运行」。
+    当前 macOS 包使用 ad-hoc 签名；首次打开时请在「系统设置 → 隐私与安全性」中确认允许运行。
+
 jobs:
   release-windows:
     permissions:
@@ -65,15 +83,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: OutlookEmail Desktop v__VERSION__
-          releaseBody: |
-            Windows 安装包（NSIS）与 macOS 通用安装包（DMG，支持 Intel 和 Apple Silicon）。
-
-            下载 `OutlookEmail Desktop_*_x64-setup.exe` 后双击安装即可。
-            macOS 用户下载 `OutlookEmail Desktop_*_universal.dmg`，打开后将应用拖入 Applications。
-            已安装旧版本的用户可在应用内检查更新，或重新下载安装包覆盖安装。
-
-            首次运行若出现 Windows SmartScreen 提示，请选择「更多信息」→「仍要运行」。
-            当前 macOS 包使用 ad-hoc 签名；首次打开时请在「系统设置 → 隐私与安全性」中确认允许运行。
+          releaseBody: ${{ env.RELEASE_BODY }}
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
@@ -135,6 +145,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: OutlookEmail Desktop v__VERSION__
+          releaseBody: ${{ env.RELEASE_BODY }}
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

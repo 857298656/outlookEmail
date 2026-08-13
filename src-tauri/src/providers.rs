@@ -20,7 +20,9 @@ const GRAPH_SCOPE: &str =
     "offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read";
 const IMAP_OAUTH_SCOPE: &str = "offline_access https://outlook.office.com/IMAP.AccessAsUser.All";
 const IMAP_MESSAGE_FETCH_QUERY: &str = "(FLAGS INTERNALDATE BODY.PEEK[])";
-pub const MAIL_REFRESH_MAX_TOP: usize = 1000;
+const IMAP_SEQUENCE_FETCH_QUERY: &str = "(UID FLAGS INTERNALDATE BODY.PEEK[])";
+pub const MAIL_REFRESH_MAX_TOP: usize = 2000;
+const GRAPH_MESSAGE_PAGE_MAX_TOP: usize = 1000;
 
 #[derive(Debug, Clone, Default)]
 struct ImapFetchMeta {
@@ -341,57 +343,67 @@ pub fn fetch_graph_messages(
             } else {
                 "id,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,hasAttachments,bodyPreview,body"
             };
-            let url = format!(
+            let target_count = top.clamp(1, MAIL_REFRESH_MAX_TOP);
+            let mut remaining = target_count;
+            let mut next_url = Some(format!(
                 "https://graph.microsoft.com/v1.0/me/mailFolders/{}/messages?$top={}&$orderby=receivedDateTime%20desc&$select={select}",
                 folder_name,
-                top.clamp(1, MAIL_REFRESH_MAX_TOP)
-            );
-            let response = client
-                .get(url)
-                .bearer_auth(&token.access_token)
-                .send()
-                .map_err(network_error)?;
-            if !response.status().is_success() {
-                return Err(AppError::Internal(format!(
-                    "Graph list messages failed: HTTP {} {}",
-                    response.status(),
-                    response.text().unwrap_or_default()
-                )));
-            }
-            let page: GraphMessagePage = response.json().map_err(network_error)?;
-            for item in page.value {
-                if cached_ids.is_some_and(|ids| ids.contains(&item.id)) {
-                    states.push(ProviderMessageState {
-                        folder: folder_name.to_string(),
-                        provider_message_id: item.id,
-                        is_read: item.is_read.unwrap_or(false),
-                    });
-                    continue;
+                graph_message_page_size(remaining)
+            ));
+            while let Some(url) = next_url.take() {
+                let response = client
+                    .get(url)
+                    .bearer_auth(&token.access_token)
+                    .send()
+                    .map_err(network_error)?;
+                if !response.status().is_success() {
+                    return Err(AppError::Internal(format!(
+                        "Graph list messages failed: HTTP {} {}",
+                        response.status(),
+                        response.text().unwrap_or_default()
+                    )));
                 }
-                let item = if has_cached_messages {
-                    fetch_graph_message(
-                        client,
-                        &token.access_token,
-                        folder_name,
-                        &item.id,
-                    )?
-                } else {
-                    item
-                };
-                let mut message = item.into_provider_message(folder_name);
-                if message.has_attachments {
-                    message.attachments = fetch_graph_attachments_metadata(
-                        client,
-                        &token.access_token,
-                        &message.provider_message_id,
-                    )?;
+                let page: GraphMessagePage = response.json().map_err(network_error)?;
+                let page_items = page.value.into_iter().take(remaining).collect::<Vec<_>>();
+                let page_count = page_items.len();
+                for item in page_items {
+                    if cached_ids.is_some_and(|ids| ids.contains(&item.id)) {
+                        states.push(ProviderMessageState {
+                            folder: folder_name.to_string(),
+                            provider_message_id: item.id,
+                            is_read: item.is_read.unwrap_or(false),
+                        });
+                        continue;
+                    }
+                    let item = if has_cached_messages {
+                        fetch_graph_message(client, &token.access_token, folder_name, &item.id)?
+                    } else {
+                        item
+                    };
+                    let mut message = item.into_provider_message(folder_name);
+                    if message.has_attachments {
+                        message.attachments = fetch_graph_attachments_metadata(
+                            client,
+                            &token.access_token,
+                            &message.provider_message_id,
+                        )?;
+                    }
+                    all.push(message);
                 }
-                all.push(message);
+                remaining = remaining.saturating_sub(page_count);
+                if remaining == 0 || page_count == 0 {
+                    break;
+                }
+                next_url = page.next_link;
             }
         }
         all.sort_by(|a, b| b.received_at_sort.total_cmp(&a.received_at_sort));
         Ok((token.refresh_token, all, states))
     })
+}
+
+fn graph_message_page_size(remaining: usize) -> usize {
+    remaining.clamp(1, GRAPH_MESSAGE_PAGE_MAX_TOP)
 }
 
 fn fetch_graph_message(
@@ -551,27 +563,62 @@ pub fn fetch_imap_messages(
             uid_validity: saved_uid_validity.clone(),
             ..ImapProviderFetchResult::default()
         };
+        let mut selected_remote_messages = 0_u32;
         for target in imap_mailbox_targets(session, folder) {
             let Some(mailbox) = select_imap_target(session, &target)? else {
                 continue;
             };
-            let has_cached_messages = cached_message_ids
-                .get(target.app_folder)
-                .is_some_and(|ids| !ids.is_empty());
-            let uid_validity_changed = imap_uid_validity_requires_reset(
+            selected_remote_messages = selected_remote_messages.saturating_add(mailbox.exists);
+            let uid_validity_changed = imap_uid_validity_changed(
                 saved_uid_validity.get(target.app_folder).copied(),
                 mailbox.uid_validity,
-                has_cached_messages,
             );
             if let Some(uid_validity) = mailbox.uid_validity {
                 result
                     .uid_validity
                     .insert(target.app_folder.to_string(), uid_validity);
             }
-            if uid_validity_changed {
-                result.reset_folders.push(target.app_folder.to_string());
-            }
-            let selected_uids = search_recent_imap_uids(session, top)?;
+            let selected_uids = match search_recent_imap_uids(session, top) {
+                Ok(uids) if !uids.is_empty() || mailbox.exists == 0 => uids,
+                Ok(_) => {
+                    let mut fetched = fetch_recent_imap_messages_by_sequence(
+                        session,
+                        &target,
+                        top,
+                        "UID SEARCH returned no UIDs for a non-empty mailbox",
+                    )?;
+                    if fetched.is_empty() {
+                        return Err(AppError::Internal(format!(
+                            "IMAP mailbox {} reports {} messages, but both UID and sequence searches returned no messages; existing local cache was preserved",
+                            target.mailbox, mailbox.exists
+                        )));
+                    }
+                    if uid_validity_changed {
+                        result.reset_folders.push(target.app_folder.to_string());
+                    }
+                    result.messages.append(&mut fetched);
+                    continue;
+                }
+                Err(uid_error) => {
+                    let mut fetched = fetch_recent_imap_messages_by_sequence(
+                        session,
+                        &target,
+                        top,
+                        &uid_error.to_string(),
+                    )?;
+                    if mailbox.exists > 0 && fetched.is_empty() {
+                        return Err(AppError::Internal(format!(
+                            "IMAP mailbox {} reports {} messages, but UID and sequence fallbacks returned no messages; existing local cache was preserved",
+                            target.mailbox, mailbox.exists
+                        )));
+                    }
+                    if uid_validity_changed && !fetched.is_empty() {
+                        result.reset_folders.push(target.app_folder.to_string());
+                    }
+                    result.messages.append(&mut fetched);
+                    continue;
+                }
+            };
             if selected_uids.is_empty() {
                 continue;
             }
@@ -582,21 +629,74 @@ pub fn fetch_imap_messages(
                     !uid_validity_changed
                         && cached_ids.is_some_and(|ids| ids.contains(&uid.to_string()))
                 });
-            match fetch_imap_uids(session, &target, &new_uids) {
-                Ok(mut fetched) => result.messages.append(&mut fetched),
-                Err(batch_error) => {
-                    let mut fetched = fetch_imap_uids_individually(
-                        account,
-                        &target,
-                        &new_uids,
-                        &batch_error,
-                    )?;
-                    result.messages.append(&mut fetched);
+            let (mut fetched, incomplete_reason) = match fetch_imap_uids(session, &target, &new_uids)
+            {
+                Ok(fetched) if fetched_imap_uids_cover(&fetched, &new_uids) => (fetched, None),
+                Ok(fetched) => {
+                    let reason = format!(
+                        "UID FETCH returned {} of {} requested message bodies",
+                        fetched.len(),
+                        new_uids.len()
+                    );
+                    (fetched, Some(reason))
                 }
+                Err(batch_error) => match fetch_imap_uids_individually(
+                    account,
+                    &target,
+                    &new_uids,
+                    &batch_error,
+                ) {
+                    Ok(fetched) if fetched_imap_uids_cover(&fetched, &new_uids) => (fetched, None),
+                    Ok(fetched) => {
+                        let reason = format!(
+                            "{batch_error}; individual UID FETCH returned {} of {} requested message bodies",
+                            fetched.len(),
+                            new_uids.len()
+                        );
+                        (fetched, Some(reason))
+                    }
+                    Err(err) => (Vec::new(), Some(err.to_string())),
+                },
+            };
+            if let Some(reason) = incomplete_reason {
+                let mut fallback = fetch_recent_imap_messages_by_sequence(
+                    session,
+                    &target,
+                    top,
+                    &reason,
+                )?;
+                if mailbox.exists > 0 && fallback.is_empty() {
+                    return Err(AppError::Internal(format!(
+                        "IMAP mailbox {} reports {} messages, but UID and sequence fetches returned no message bodies; existing local cache was preserved",
+                        target.mailbox, mailbox.exists
+                    )));
+                }
+                if uid_validity_changed {
+                    result.reset_folders.push(target.app_folder.to_string());
+                }
+                result.messages.append(&mut fallback);
+                continue;
             }
+            if uid_validity_changed && !new_uids.is_empty() {
+                result.reset_folders.push(target.app_folder.to_string());
+            }
+            result.messages.append(&mut fetched);
             let mut states = fetch_imap_message_states(session, &target, &cached_uids)
                 .map_err(AppError::Internal)?;
             result.states.append(&mut states);
+        }
+        let has_cached_target_messages = cached_message_ids.values().any(|ids| !ids.is_empty());
+        if selected_remote_messages == 0
+            && !has_cached_target_messages
+            && result.messages.is_empty()
+        {
+            let nonempty_mailboxes = list_nonempty_imap_mailboxes(session);
+            if !nonempty_mailboxes.is_empty() {
+                return Err(AppError::Internal(format!(
+                    "IMAP inbox/junk folders are empty, but the server reports messages in other folders: {}. Existing local cache was preserved",
+                    nonempty_mailboxes.join(", ")
+                )));
+            }
         }
         result
             .messages
@@ -605,14 +705,9 @@ pub fn fetch_imap_messages(
     })
 }
 
-fn imap_uid_validity_requires_reset(
-    saved: Option<u32>,
-    current: Option<u32>,
-    has_cached_messages: bool,
-) -> bool {
+fn imap_uid_validity_changed(saved: Option<u32>, current: Option<u32>) -> bool {
     match (saved, current) {
         (Some(saved), Some(current)) => saved != current,
-        (None, Some(_)) => has_cached_messages,
         _ => false,
     }
 }
@@ -645,11 +740,11 @@ fn build_imap_select_variants(folder_name: &str) -> Vec<String> {
 fn try_select_imap_mailbox(
     session: &mut imap::Session<native_tls::TlsStream<TcpStream>>,
     folder_name: &str,
-) -> Result<(), imap::Error> {
+) -> Result<imap::types::Mailbox, imap::Error> {
     let mut last_error = None;
     for candidate in build_imap_select_variants(folder_name) {
         match session.select(&candidate) {
-            Ok(_) => return Ok(()),
+            Ok(mailbox) => return Ok(mailbox),
             Err(err) => last_error = Some(err),
         }
     }
@@ -702,6 +797,61 @@ fn search_recent_imap_uids(
     Ok(selected_uids)
 }
 
+fn fetch_recent_imap_messages_by_sequence(
+    session: &mut imap::Session<native_tls::TlsStream<TcpStream>>,
+    target: &ImapMailboxTarget,
+    top: usize,
+    uid_error: &str,
+) -> AppResult<Vec<ProviderMessage>> {
+    let sequences = session.search("ALL").map_err(|err| {
+        AppError::Internal(format!(
+            "IMAP UID search failed ({uid_error}); sequence search fallback failed: {err}"
+        ))
+    })?;
+    let mut selected_sequences = sequences.into_iter().collect::<Vec<_>>();
+    selected_sequences.sort_unstable();
+    selected_sequences.reverse();
+    selected_sequences.truncate(top.clamp(1, MAIL_REFRESH_MAX_TOP));
+    if selected_sequences.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let sequence_set = selected_sequences
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let fetches = session
+        .fetch(sequence_set, IMAP_SEQUENCE_FETCH_QUERY)
+        .map_err(|err| {
+            AppError::Internal(format!(
+                "IMAP UID search failed ({uid_error}); sequence fetch fallback failed: {err}"
+            ))
+        })?;
+    let mut messages = Vec::new();
+    for fetch in fetches.iter() {
+        let (Some(uid), Some(body)) = (fetch.uid, fetch.body()) else {
+            continue;
+        };
+        messages.push(parse_imap_message(
+            target.app_folder,
+            uid,
+            body,
+            extract_imap_fetch_meta(fetch),
+        ));
+    }
+    if messages.len() != selected_sequences.len() {
+        return Err(AppError::Internal(format!(
+            "IMAP sequence fallback returned {} of {} messages for {}; existing local cache was preserved",
+            messages.len(),
+            selected_sequences.len(),
+            target.mailbox
+        )));
+    }
+    messages.sort_by(|a, b| b.received_at_sort.total_cmp(&a.received_at_sort));
+    Ok(messages)
+}
+
 fn fetch_imap_uids(
     session: &mut imap::Session<native_tls::TlsStream<TcpStream>>,
     target: &ImapMailboxTarget,
@@ -731,6 +881,15 @@ fn fetch_imap_uids(
         }
     }
     Ok(messages)
+}
+
+fn fetched_imap_uids_cover(messages: &[ProviderMessage], requested_uids: &[u32]) -> bool {
+    requested_uids.iter().all(|uid| {
+        let uid = uid.to_string();
+        messages
+            .iter()
+            .any(|message| message.provider_message_id == uid)
+    })
 }
 
 fn fetch_imap_message_states(
@@ -1070,6 +1229,9 @@ fn imap_attribute_name(attribute: &NameAttribute<'_>) -> String {
 }
 
 fn classify_imap_mailbox(attributes: &[String], mailbox_name: &str) -> Option<&'static str> {
+    if attributes.iter().any(|value| value == "inbox") {
+        return Some("inbox");
+    }
     if attributes
         .iter()
         .any(|value| value == "junk" || value == "spam")
@@ -1083,11 +1245,12 @@ fn classify_imap_mailbox(attributes: &[String], mailbox_name: &str) -> Option<&'
         return Some("deleteditems");
     }
     let normalized = normalize_imap_mailbox_name(mailbox_name);
-    if normalized == "inbox" {
+    if normalized == "inbox" || normalized == "收件箱" || normalized == "收件匣" {
         return Some("inbox");
     }
     let leaf = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
     match leaf {
+        "inbox" | "收件箱" | "收件匣" => Some("inbox"),
         "junk" | "junkemail" | "spam" | "bulkmail" | "垃圾邮件" | "垃圾郵件" | "垃圾信" => {
             Some("junkemail")
         }
@@ -1862,6 +2025,41 @@ struct GraphTokenWire {
 #[derive(Debug, Deserialize)]
 struct GraphMessagePage {
     value: Vec<GraphMessage>,
+    #[serde(rename = "@odata.nextLink")]
+    next_link: Option<String>,
+}
+
+fn list_nonempty_imap_mailboxes(
+    session: &mut imap::Session<native_tls::TlsStream<TcpStream>>,
+) -> Vec<String> {
+    let Ok(names) = session.list(Some(""), Some("*")) else {
+        return Vec::new();
+    };
+    let candidates = names
+        .iter()
+        .filter_map(|name| {
+            let attributes = name
+                .attributes()
+                .iter()
+                .map(imap_attribute_name)
+                .collect::<Vec<_>>();
+            if attributes.iter().any(|attribute| attribute == "noselect") {
+                None
+            } else {
+                Some(name.name().to_string())
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut nonempty = Vec::new();
+    for mailbox_name in candidates {
+        let Ok(mailbox) = try_select_imap_mailbox(session, &mailbox_name) else {
+            continue;
+        };
+        if mailbox.exists > 0 {
+            nonempty.push(format!("{mailbox_name} ({})", mailbox.exists));
+        }
+    }
+    nonempty
 }
 
 #[derive(Debug, Deserialize)]
@@ -1996,12 +2194,58 @@ mod tests {
     }
 
     #[test]
-    fn imap_uid_validity_resets_cache_when_namespace_is_unknown_or_changes() {
-        assert!(!imap_uid_validity_requires_reset(None, Some(7), false));
-        assert!(imap_uid_validity_requires_reset(None, Some(7), true));
-        assert!(!imap_uid_validity_requires_reset(Some(7), Some(7), true));
-        assert!(imap_uid_validity_requires_reset(Some(7), Some(8), true));
-        assert!(!imap_uid_validity_requires_reset(Some(7), None, true));
+    fn graph_message_pages_respect_the_api_limit_while_allowing_two_thousand_total() {
+        assert_eq!(MAIL_REFRESH_MAX_TOP, 2000);
+        assert_eq!(graph_message_page_size(2000), 1000);
+        assert_eq!(graph_message_page_size(1000), 1000);
+        assert_eq!(graph_message_page_size(725), 725);
+    }
+
+    #[test]
+    fn graph_message_page_reads_the_next_link() {
+        let page: GraphMessagePage = serde_json::from_value(json!({
+            "value": [],
+            "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/messages?$skip=1000"
+        }))
+        .expect("Graph message page should deserialize");
+
+        assert_eq!(
+            page.next_link.as_deref(),
+            Some("https://graph.microsoft.com/v1.0/me/messages?$skip=1000")
+        );
+    }
+
+    #[test]
+    fn imap_uid_validity_initialization_preserves_cache_and_known_changes_rebuild() {
+        assert!(!imap_uid_validity_changed(None, Some(7)));
+        assert!(!imap_uid_validity_changed(Some(7), Some(7)));
+        assert!(imap_uid_validity_changed(Some(7), Some(8)));
+        assert!(!imap_uid_validity_changed(Some(7), None));
+    }
+
+    #[test]
+    fn imap_uid_fetch_must_return_every_requested_message_body() {
+        let message = ProviderMessage {
+            folder: "inbox".to_string(),
+            provider_message_id: "5".to_string(),
+            subject: String::new(),
+            sender: String::new(),
+            recipients: String::new(),
+            cc: String::new(),
+            received_at: String::new(),
+            received_at_sort: 0.0,
+            is_read: false,
+            has_attachments: false,
+            body_preview: String::new(),
+            body: Some(String::new()),
+            body_type: "text".to_string(),
+            attachments: Vec::new(),
+            raw_mime: Some(Vec::new()),
+        };
+
+        assert!(fetched_imap_uids_cover(&[message.clone()], &[5]));
+        assert!(!fetched_imap_uids_cover(&[message], &[5, 6]));
+        assert!(!fetched_imap_uids_cover(&[], &[5]));
     }
 
     #[test]
@@ -2015,6 +2259,14 @@ mod tests {
             Some("deleteditems")
         );
         assert_eq!(classify_imap_mailbox(&[], "INBOX"), Some("inbox"));
+        assert_eq!(
+            classify_imap_mailbox(&["inbox".to_string()], "Mailbox"),
+            Some("inbox")
+        );
+        assert_eq!(
+            classify_imap_mailbox(&[], "其他文件夹/收件箱"),
+            Some("inbox")
+        );
         assert_eq!(
             classify_imap_mailbox(&[], "[Gmail]/Spam"),
             Some("junkemail")

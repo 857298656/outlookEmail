@@ -4078,6 +4078,58 @@ impl Database {
         Ok(())
     }
 
+    fn apply_imap_refresh_result(
+        &self,
+        account_id: i64,
+        sync_state: &mut AccountProviderSyncState,
+        result: ImapProviderFetchResult,
+    ) -> AppResult<usize> {
+        const SAVEPOINT: &str = "imap_refresh_apply";
+        self.conn
+            .execute_batch(&format!("SAVEPOINT {SAVEPOINT}"))?;
+        let message_count = result.messages.len();
+        let replacement_folders = result
+            .reset_folders
+            .iter()
+            .filter(|folder| {
+                result
+                    .messages
+                    .iter()
+                    .any(|message| message.folder == folder.as_str())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let applied = (|| {
+            self.reset_provider_message_folders(account_id, &replacement_folders)?;
+            self.upsert_provider_messages(account_id, &result.messages)?;
+            self.update_provider_message_states(account_id, &result.states)?;
+            sync_state.imap_uid_validity = result.uid_validity;
+            self.save_account_provider_sync_state(account_id, sync_state)?;
+            Ok(message_count)
+        })();
+
+        match applied {
+            Ok(message_count) => {
+                if let Err(err) = self
+                    .conn
+                    .execute_batch(&format!("RELEASE SAVEPOINT {SAVEPOINT}"))
+                {
+                    let _ = self.conn.execute_batch(&format!(
+                        "ROLLBACK TO SAVEPOINT {SAVEPOINT}; RELEASE SAVEPOINT {SAVEPOINT}"
+                    ));
+                    return Err(err.into());
+                }
+                Ok(message_count)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch(&format!(
+                    "ROLLBACK TO SAVEPOINT {SAVEPOINT}; RELEASE SAVEPOINT {SAVEPOINT}"
+                ));
+                Err(err)
+            }
+        }
+    }
+
     fn account_provider_sync_state(
         &self,
         account_id: i64,
@@ -4378,12 +4430,7 @@ impl Database {
                     &sync_state.imap_uid_validity,
                 )
                 .and_then(|result| {
-                    self.reset_provider_message_folders(account.id, &result.reset_folders)?;
-                    self.upsert_provider_messages(account.id, &result.messages)?;
-                    self.update_provider_message_states(account.id, &result.states)?;
-                    sync_state.imap_uid_validity = result.uid_validity;
-                    self.save_account_provider_sync_state(account.id, &sync_state)?;
-                    Ok(result.messages.len())
+                    self.apply_imap_refresh_result(account.id, &mut sync_state, result)
                 })
             }
         }
@@ -5664,7 +5711,8 @@ fn normalize_markdown_source_path(value: Option<String>) -> Option<String> {
 mod project_tests {
     use super::{
         attachment_dir, classify_error_category, cloudflare_import_header, exports_dir,
-        normalize_batch_usernames, normalize_oauth_provider, table_columns, table_exists, Database,
+        normalize_batch_usernames, normalize_oauth_provider, table_columns, table_exists,
+        AccountProviderSyncState, Database,
     };
     use crate::crypto;
     use crate::error::AppError;
@@ -5675,10 +5723,10 @@ mod project_tests {
         DeleteMailMessagesInput, DownloadAllAttachmentsInput, DownloadAttachmentInput,
         ExportAccountSecretsInput, ExportAccountsInput, ExportMailMessagesInput,
         GenerateWorkspaceKeyInput, ImportTempEmailsInput, LoginInput, MailMessageQuery,
-        MarkMailMessagesInput, ProviderMessageState, RefreshInput, RevealAccountSecretsInput,
-        RevokeMailShareInput, SaveCloudflareChannelInput, TempEmailMessage, UpdateAccountInput,
-        UpdateGroupInput, UpdateMarkdownCategoryInput, UpdateMarkdownDocumentInput,
-        UpdateWorkspaceKeyRecordInput,
+        ImapProviderFetchResult, MarkMailMessagesInput, ProviderMessage, ProviderMessageState,
+        RefreshInput, RevealAccountSecretsInput, RevokeMailShareInput, SaveCloudflareChannelInput,
+        TempEmailMessage, UpdateAccountInput, UpdateGroupInput, UpdateMarkdownCategoryInput,
+        UpdateMarkdownDocumentInput, UpdateWorkspaceKeyRecordInput,
     };
     use rusqlite::{params, Connection};
     use std::path::PathBuf;
@@ -6927,6 +6975,135 @@ mod project_tests {
             .cached_provider_message_ids(1, "junkemail")
             .expect("junk ids")["junkemail"]
             .contains("20"));
+    }
+
+    #[test]
+    fn empty_imap_replacement_never_clears_existing_cache() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "INSERT INTO accounts (id, email, provider, account_type) VALUES (1, 'safe@example.com', 'imap_custom', 'imap')",
+                [],
+            )
+            .expect("insert account");
+        db.conn
+            .execute(
+                "INSERT INTO retained_mail_messages (account_id, folder, provider_message_id, subject) VALUES (1, 'inbox', '10', 'keep me')",
+                [],
+            )
+            .expect("insert cached message");
+
+        let mut sync_state = AccountProviderSyncState::default();
+        let cached = db
+            .apply_imap_refresh_result(
+                1,
+                &mut sync_state,
+                ImapProviderFetchResult {
+                    reset_folders: vec!["inbox".to_string()],
+                    uid_validity: std::collections::HashMap::from([("inbox".to_string(), 7)]),
+                    ..ImapProviderFetchResult::default()
+                },
+            )
+            .expect("apply empty refresh");
+
+        assert_eq!(cached, 0);
+        assert_eq!(
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM retained_mail_messages WHERE account_id = 1 AND folder = 'inbox'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("cached count"),
+            1
+        );
+    }
+
+    #[test]
+    fn failed_imap_replacement_rolls_back_the_previous_cache() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        let mut db = Database {
+            conn,
+            db_path: PathBuf::from("memory.sqlite"),
+            crypto_key: Some([7; 32]),
+        };
+        db.initialize_schema().expect("schema");
+        db.conn
+            .execute(
+                "INSERT INTO accounts (id, email, provider, account_type) VALUES (1, 'rollback@example.com', 'imap_custom', 'imap')",
+                [],
+            )
+            .expect("insert account");
+        db.conn
+            .execute(
+                "INSERT INTO retained_mail_messages (account_id, folder, provider_message_id, subject) VALUES (1, 'inbox', '10', 'previous cache')",
+                [],
+            )
+            .expect("insert cached message");
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_test_message BEFORE INSERT ON retained_mail_messages
+                 WHEN NEW.provider_message_id = '99'
+                 BEGIN SELECT RAISE(ABORT, 'forced write failure'); END;",
+            )
+            .expect("create failure trigger");
+
+        let replacement = ProviderMessage {
+            folder: "inbox".to_string(),
+            provider_message_id: "99".to_string(),
+            subject: "replacement".to_string(),
+            sender: String::new(),
+            recipients: String::new(),
+            cc: String::new(),
+            received_at: "2026-08-13T00:00:00Z".to_string(),
+            received_at_sort: 1.0,
+            is_read: false,
+            has_attachments: false,
+            body_preview: String::new(),
+            body: Some(String::new()),
+            body_type: "text".to_string(),
+            attachments: Vec::new(),
+            raw_mime: Some(Vec::new()),
+        };
+        let mut sync_state = AccountProviderSyncState::default();
+        let result = db.apply_imap_refresh_result(
+            1,
+            &mut sync_state,
+            ImapProviderFetchResult {
+                messages: vec![replacement],
+                reset_folders: vec!["inbox".to_string()],
+                uid_validity: std::collections::HashMap::from([("inbox".to_string(), 8)]),
+                ..ImapProviderFetchResult::default()
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            db.conn
+                .query_row(
+                    "SELECT subject FROM retained_mail_messages WHERE account_id = 1 AND folder = 'inbox'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("preserved subject"),
+            "previous cache"
+        );
+        assert_eq!(
+            db.conn
+                .query_row(
+                    "SELECT provider_sync_state FROM accounts WHERE id = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("sync state"),
+            ""
+        );
     }
 
     #[test]

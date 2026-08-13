@@ -14,6 +14,7 @@ export type AccountProviderDefinition = {
   credentialLabel: string;
   credentialPlaceholder: string;
   setupHint: string;
+  emptyMailboxHint?: string;
   accountType: string;
   defaultImapHost: string;
   defaultImapPort: number;
@@ -95,6 +96,7 @@ export const accountProviderRegistry: AccountProviderDefinition[] = [
   },
   {
     id: "netease_163",
+    emptyMailboxHint: "网易 IMAP 当前返回 0 封。若网页版仍有邮件，请在网页版“设置 > POP3/SMTP/IMAP”中把客户端收取范围改为“收取全部邮件”，保存后再刷新。",
     label: "163 邮箱",
     credentialLabel: "IMAP 授权密码",
     credentialPlaceholder: "163 客户端授权密码",

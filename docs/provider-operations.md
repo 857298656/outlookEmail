@@ -9,7 +9,7 @@
 | Outlook / Microsoft | `graph` | Microsoft OAuth refresh token | Graph API | 需要 Microsoft Client ID 和 OAuth callback URL。OAuth 仅支持 `graph` 与 Outlook `imap` provider。 |
 | Gmail | `gmail` | Google 账号应用专用密码 | `imap.gmail.com:993` | 必须先在 Gmail 设置中开启 IMAP；不要填写 Google 网页登录密码。**不支持 Google OAuth / Gmail API。** |
 | QQ 邮箱 | `qq` | IMAP/SMTP 授权码 | `imap.qq.com:993` | 必须先在网页端开启 IMAP/SMTP；不要填写 QQ 登录密码。 |
-| 163 邮箱 | `netease_163` | 客户端授权密码或应用密码 | `imap.163.com:993` | 必须先在网页端开启客户端授权；不要填写网页登录密码。连接后会发送 IMAP `ID` 客户端标识。 |
+| 163 邮箱 | `netease_163` | 客户端授权密码或应用密码 | `imap.163.com:993` | 必须先在网页端开启客户端授权并将客户端收取范围设为“收取全部邮件”；不要填写网页登录密码。连接后会发送 IMAP `ID` 客户端标识。 |
 | Custom IMAP | `imap_custom` | IMAP 密码或应用密码 | 手动 host/port | 需要确认服务商支持 TLS IMAP 和远端 UID 操作。 |
 
 注册表能力元数据当前覆盖：读取邮件、附件下载、已读/未读、远端删除或移入垃圾箱、IMAP 文件夹发现。Gmail、QQ、163 和 Custom IMAP 使用 `remote_delete` 和 `imap_folders`。
@@ -30,6 +30,7 @@ person@gmail.com----gmail-app-password
 | 账号显示“缺少配置” | OAuth Client ID、refresh token、IMAP host/port、授权码或授权密码是否完整 | 先在账号设置补齐本地配置，再执行真实账号刷新验证。 |
 | Gmail 登录失败 | Gmail 是否已开启 IMAP、是否使用应用专用密码 | 在 Google 账号中生成新的应用专用密码，保存到账号的 IMAP 密码字段后重试。不要尝试 OAuth 授权——后端会拒绝 Gmail OAuth。 |
 | QQ/163 登录失败 | IMAP 是否开启、授权码是否填入 IMAP 密码字段、是否填错网页登录密码 | 在网页端重新生成授权码/授权密码，确认账号未触发服务商安全限制后重试。 |
+| 163 网页版有邮件但客户端刷新为 0 | 网页端“设置 > POP3/SMTP/IMAP”中的客户端收取范围 | 改为“收取全部邮件”并保存，再回到桌面版刷新；清理本地缓存无效。 |
 | IMAP 文件夹不进入垃圾箱/已删除 | special-use flags 或中文文件夹名与预设不一致 | 记录服务商实际文件夹名，补充 `classify_imap_mailbox` 映射后回归测试。 |
 | 附件下载失败 | 消息是否已刷新并缓存 raw MIME | 先刷新该账号；Gmail 当前走 IMAP，也依赖本地已缓存 MIME。 |
 | 远端标记/删除失败 | 邮件详情里的远端同步失败面板、刷新管理/重试队列 | 使用“立即重试”；如果是永久凭据错误，先修复凭据再重试。 |
@@ -74,7 +75,7 @@ Gmail IMAP 登录失败、QQ 授权码错误，以及 163 客户端授权密码/
 
 ## 163 邮箱验收
 
-1. 在 163 邮箱网页端开启 IMAP/SMTP 或客户端授权，生成授权密码。
+1. 在 163 邮箱网页端开启 IMAP/SMTP 或客户端授权，生成授权密码，并将客户端收取范围设为“收取全部邮件”。
 2. 导入或创建账号，provider 选择 163 邮箱，IMAP host 应为 `imap.163.com`，端口 993。
 3. 使用授权密码作为 IMAP 密码刷新 Inbox。
 4. 确认中文文件夹名可以按常见映射进入垃圾邮件或已删除类文件夹。
@@ -136,9 +137,9 @@ node scripts/cargo-with-rust-env.mjs test
 - IMAP 删除语义因服务商不同可能表现为 `\Deleted` + expunge、移动到 Trash 或服务商拒绝 UID 操作。
 - QQ/163 授权码流程可能随服务商策略变化，需要以真实账号网页端说明为准。
 
-## IMAP 兼容增强（暂缓，按需实施）
+## IMAP 兼容增强（按需实施）
 
-以下两项借鉴自 Python 旧版 Web 项目，**当前未实现**；仅在真实账号验收踩坑时再开发。编号 PR4/PR5 仅作备忘，**不代表必须按顺序全部交付**。
+以下增强借鉴自 Python 旧版 Web 项目。PR4 已根据真实刷新异常完成，PR5 仍只在文件夹验收踩坑时再开发。编号仅作备忘，**不代表必须按顺序全部交付**。
 
 ### 已完成的相关增强（2026-07-08）
 
@@ -147,27 +148,29 @@ node scripts/cargo-with-rust-env.mjs test
 | PR1 | FETCH 解析 `FLAGS` / `INTERNALDATE`，保留 `BODY.PEEK[]` | 已完成 |
 | PR2 | SELECT 文件夹引号/去引号多策略重试 | 已完成 |
 | PR3 | QQ/Gmail/163/Custom 登录后发送 IMAP `ID` | 已完成 |
+| PR4 | UID 搜索或拉取 payload 异常时回退 `SEARCH/FETCH` 序号路径，并继续存储 UID | 已完成（2026-08-13） |
 
-### PR4：UID 失败回退序号（暂缓）
+### PR4：UID 搜索/拉取异常回退序号（已完成）
 
-**含义：** IMAP 命令层先走 UID，失败或拿不到有效 payload 时再改用序号（sequence number）。
+**含义：** IMAP 搜索和拉取先走 UID；搜索失败、非空文件夹拿不到 UID，或 FETCH 返回的正文数量不完整时，再改用序号（sequence number）拉取。
 
 | 步骤 | 优先 | 回退 |
 |------|------|------|
 | 搜索 | `UID SEARCH ALL` | `SEARCH ALL` → 1, 2, 3… |
 | 拉取 | `UID FETCH <uid> …` | `FETCH <序号> …` |
 
-**触发条件（验收时再考虑）：**
+**触发条件：**
 
-- `uid_search` / `uid_fetch` 报错，但网页邮箱里邮件存在
+- `uid_search` / `uid_fetch` 报错或返回不完整 payload，但网页邮箱里邮件存在
 - 刷新结果为空，而 SELECT 显示文件夹有信
 - 日志明确指向 UID 相关失败
 
-**实现注意：**
+**当前实现：**
 
 - 本地 `provider_message_id` 仍优先存 **UID**；序号仅作拉取容错
-- 若需与 Python 旧版对齐，可能要记录实际使用的 `id_mode`（`uid` / `sequence`）
-- 详情、标记已读、删除等远端操作需与回退策略一致
+- `UID SEARCH` 报错，或非空文件夹返回空 UID 集合时，自动使用 `SEARCH ALL` + `FETCH`，并从 FETCH 响应提取 UID
+- `UID FETCH` 批量及逐 UID 拉取仍缺少正文时，同样回退完整的 `SEARCH ALL` + `FETCH` 窗口
+- 回退结果不完整时刷新失败并保留原缓存；不会以“成功、0 封”清空已有邮件
 
 **参考：** Python 旧版 `fetch_imap_message()`、`search_imap_message_ids()`（`outlook_web/segments/03_mail_helpers.py`）。
 
@@ -200,10 +203,10 @@ node scripts/cargo-with-rust-env.mjs test
 
 **参考：** Python 旧版 `decode_imap_utf7()`、`rank_imap_listed_mailboxes()`、`resolve_imap_folder()`。
 
-### 建议实施顺序（若两项都需要）
+### 后续实施建议
 
-对 QQ/163 真实账号验收为主时，**可优先 PR5，再 PR4**——文件夹选不中比 UID 全链路不可用更常见；PR 编号不代表业务优先级。
+PR4 已完成。继续对 QQ/163 真实账号验收时：
 
 1. 先完成 M9 真实账号手工验收
 2. 若文件夹问题 → 实施 PR5
-3. 若 UID SEARCH/FETCH 全挂 → 实施 PR4
+3. 若 UID 与序号两条路径均失败 → 记录服务商原始响应后补充针对性兼容

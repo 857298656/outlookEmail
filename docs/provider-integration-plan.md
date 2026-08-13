@@ -392,11 +392,10 @@ QQ/163 导入行里的 password 字段应解释为客户端授权码或应用密
 
 ## IMAP 兼容增强 backlog（暂缓）
 
-PR1–PR3 已于 2026-07-08 落地（FLAGS/INTERNALDATE、SELECT 重试、通用 IMAP `ID`）。以下两项保留为按需 backlog，详见 [`docs/provider-operations.md`](provider-operations.md) 中 **「IMAP 兼容增强（暂缓）」**：
+PR1–PR3 已于 2026-07-08 落地（FLAGS/INTERNALDATE、SELECT 重试、通用 IMAP `ID`）。PR4 已于 2026-08-13 根据真实刷新异常落地：`UID SEARCH` 失败、在非空文件夹返回空集合，或 `UID FETCH` 返回的正文不完整时，自动回退 `SEARCH/FETCH` 序号路径并从响应保存 UID；回退不完整会保留原缓存。当前仅 PR5 保留为按需 backlog，详见 [`docs/provider-operations.md`](provider-operations.md)：
 
 | 编号 | 内容 | 何时做 |
 |------|------|--------|
-| PR4 | UID 失败回退序号（`UID SEARCH/FETCH` → `SEARCH/FETCH`） | `uid_search`/`uid_fetch` 全挂但邮箱有信时 |
 | PR5 | UTF-7 解码 + LIST 模糊排名 fallback | 垃圾邮件/已删除等文件夹选不中、LIST 名为编码或非常规路径时 |
 
-验收阶段若文件夹问题多于 UID 问题，**可优先 PR5 再 PR4**。
+后续验收若仍出现文件夹识别问题，再按需实施 PR5。

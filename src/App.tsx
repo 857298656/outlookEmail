@@ -977,7 +977,17 @@ function App() {
                 async () => {
                   if (!selectedAccountId) return;
                   const result = await api.refreshAccountWithDefaultLimit(selectedAccountId);
-                  setNotice(formatResultMessage(result.message));
+                  const account = accounts.find((item) => item.id === selectedAccountId);
+                  const provider = accountProviderDefinition(account?.provider ?? account?.account_type);
+                  const emptyMailboxHint =
+                    result.success && /cached 0 message\(s\)/.test(result.message)
+                      ? provider.emptyMailboxHint
+                      : undefined;
+                  setNotice(
+                    emptyMailboxHint
+                      ? `${formatResultMessage(result.message)}。${emptyMailboxHint}`
+                      : formatResultMessage(result.message)
+                  );
                   await loadWorkspace(selectedAccountId, folder, mailFilters, mailPage, { preservePreview: true });
                   await loadStatus();
                 },
@@ -4223,7 +4233,7 @@ function SettingsView({
             label="每个文件夹拉取邮件数"
             value={draft.manual_refresh_top}
             min={1}
-            max={1000}
+            max={2000}
             onChange={(value) => setField("manual_refresh_top", value)}
           />
         </div>

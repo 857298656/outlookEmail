@@ -24,6 +24,7 @@ describe("providerRegistry capabilities", () => {
     expect(accountProviderDefinition("163").capabilities).toEqual(
       expect.arrayContaining(["read_mail", "download_attachments", "mark_read", "remote_delete", "imap_folders"])
     );
+    expect(accountProviderDefinition("163").emptyMailboxHint).toContain("收取全部邮件");
     expect(providerSupportsCapability("qq", "history_sync")).toBe(false);
   });
 

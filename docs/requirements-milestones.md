@@ -343,6 +343,6 @@ Outlook/Graph 接入已基本可用，下一批服务商接入记录在 [`docs/p
 M9 代码与文档已对齐当前实现；**剩余工作主要是验收，不是功能 backlog**。下一步：
 
 1. 在具备真实 Gmail/QQ/163 测试账号时，按 [`docs/provider-operations.md`](provider-operations.md) 执行手工验收清单。
-2. 根据验收结果补充 IMAP 文件夹映射或错误提示；若仍不够，按该文档 **「IMAP 兼容增强（暂缓）」** 中的 PR5（UTF-7/LIST）或 PR4（UID 回退）按需实施。
+2. 继续根据验收结果补充 IMAP 文件夹映射或错误提示；PR4（UID 回退）已完成，若仍有文件夹识别问题，再按该文档 **「IMAP 兼容增强（暂缓）」** 中的 PR5（UTF-7/LIST）按需实施。
 3. 使用真实 GPTMail、DuckMail 和 Cloudflare Worker 验收分块导入进度与 SQLite 消息缓存。
 4. Web 服务、浏览器扩展、Gmail OAuth/Gmail API 暂不处理。
